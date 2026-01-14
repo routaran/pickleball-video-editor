@@ -67,7 +67,7 @@ class Toast(QFrame):
 
     # Toast configuration
     TOAST_WIDTH = 320
-    TOAST_HEIGHT = 48
+    TOAST_MIN_HEIGHT = 48
     ACCENT_BORDER_WIDTH = 4
     ANIMATION_DURATION_IN = 200  # milliseconds
     ANIMATION_DURATION_OUT = 150  # milliseconds
@@ -125,14 +125,16 @@ class Toast(QFrame):
         """Set up the toast widget layout and child widgets."""
         # Configure frame properties
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setFixedSize(self.TOAST_WIDTH, self.TOAST_HEIGHT)
+        # Use fixed width but allow height to expand for multi-line text
+        self.setFixedWidth(self.TOAST_WIDTH)
+        self.setMinimumHeight(self.TOAST_MIN_HEIGHT)
 
         # Main horizontal layout
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 12, 12, 12)
         layout.setSpacing(12)
 
-        # Icon label
+        # Icon label - align to top for multi-line messages
         self.icon_label = QLabel(self._ICONS[self.toast_type])
         self.icon_label.setObjectName("toastIcon")
         icon_font = QFont()
@@ -141,7 +143,7 @@ class Toast(QFrame):
         self.icon_label.setFont(icon_font)
         self.icon_label.setFixedSize(20, 20)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.icon_label)
+        layout.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignTop)
 
         # Message label
         self.message_label = QLabel(self.message)
@@ -149,9 +151,9 @@ class Toast(QFrame):
         self.message_label.setWordWrap(True)
         message_font = QFont("IBM Plex Sans", 11)
         self.message_label.setFont(message_font)
-        layout.addWidget(self.message_label, 1)
+        layout.addWidget(self.message_label, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        # Dismiss button
+        # Dismiss button - align to top for multi-line messages
         self.dismiss_button = QPushButton("×")
         self.dismiss_button.setObjectName("toastDismiss")
         dismiss_font = QFont()
@@ -161,7 +163,7 @@ class Toast(QFrame):
         self.dismiss_button.setFixedSize(24, 24)
         self.dismiss_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.dismiss_button.clicked.connect(self.dismiss)
-        layout.addWidget(self.dismiss_button)
+        layout.addWidget(self.dismiss_button, 0, Qt.AlignmentFlag.AlignTop)
 
         # Set object name for styling
         self.setObjectName(f"toast_{self.toast_type.value}")
@@ -217,13 +219,17 @@ class Toast(QFrame):
             self.show()
             return
 
+        # Calculate actual height based on content (allow for multi-line text)
+        self.adjustSize()
+        toast_height = self.sizeHint().height()
+
         parent_width = parent_widget.width()
         x = (parent_width - self.TOAST_WIDTH) // 2
-        y_start = -self.TOAST_HEIGHT  # Start above visible area
+        y_start = -toast_height  # Start above visible area
         y_end = 16  # Final position (16px from top)
 
         # Set starting position
-        self.setGeometry(x, y_start, self.TOAST_WIDTH, self.TOAST_HEIGHT)
+        self.setGeometry(x, y_start, self.TOAST_WIDTH, toast_height)
         self.show()
 
         # Fade in animation
@@ -236,10 +242,10 @@ class Toast(QFrame):
         self._slide_animation = QPropertyAnimation(self, b"geometry")
         self._slide_animation.setDuration(self.ANIMATION_DURATION_IN)
         self._slide_animation.setStartValue(
-            QRect(x, y_start, self.TOAST_WIDTH, self.TOAST_HEIGHT)
+            QRect(x, y_start, self.TOAST_WIDTH, toast_height)
         )
         self._slide_animation.setEndValue(
-            QRect(x, y_end, self.TOAST_WIDTH, self.TOAST_HEIGHT)
+            QRect(x, y_end, self.TOAST_WIDTH, toast_height)
         )
 
         # Start animations
@@ -271,11 +277,12 @@ class Toast(QFrame):
             self.deleteLater()
             return
 
-        # Get current position
+        # Get current position and size
         current_rect = self.geometry()
         x = current_rect.x()
         y_start = current_rect.y()
-        y_end = -self.TOAST_HEIGHT  # Slide up out of view
+        toast_height = current_rect.height()
+        y_end = -toast_height  # Slide up out of view
 
         # Fade out animation
         self._fade_animation = QPropertyAnimation(self, b"windowOpacity")
@@ -288,7 +295,7 @@ class Toast(QFrame):
         self._slide_animation.setDuration(self.ANIMATION_DURATION_OUT)
         self._slide_animation.setStartValue(current_rect)
         self._slide_animation.setEndValue(
-            QRect(x, y_end, self.TOAST_WIDTH, self.TOAST_HEIGHT)
+            QRect(x, y_end, self.TOAST_WIDTH, toast_height)
         )
 
         # Clean up and emit signal when animation finishes

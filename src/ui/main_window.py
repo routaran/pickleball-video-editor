@@ -42,6 +42,16 @@ from PyQt6.QtWidgets import (
 from src.core.models import ScoreSnapshot
 from src.core.rally_manager import RallyManager
 from src.core.score_state import ScoreState
+from src.ui.dialogs import (
+    AddCommentDialog,
+    AddCommentResult,
+    EditScoreDialog,
+    EditScoreResult,
+    ForceSideOutDialog,
+    ForceSideOutResult,
+    GameOverDialog,
+    GameOverResult,
+)
 from src.ui.setup_dialog import GameConfig
 from src.ui.styles import (
     BG_BORDER,
@@ -662,25 +672,26 @@ class MainWindow(QMainWindow):
         self.btn_undo.setEnabled(can_undo)
 
     def _check_game_over(self) -> None:
-        """Check if game is over and show notification if needed.
+        """Check if game is over and show dialog if needed.
 
-        For standard games (11 or 9), checks win conditions.
+        For standard games (11 or 9), checks win conditions and shows GameOverDialog.
         For timed games, the user must manually trigger via Time Expired button.
         """
         is_over, winner_team = self.score_state.is_game_over()
 
         if is_over:
-            # Game has ended
-            winner_name = f"Team {winner_team + 1}"
             final_score = self.score_state.get_score_string()
+            rally_count = self.rally_manager.get_rally_count()
+            is_timed = self.config.victory_rule == "timed"
 
-            ToastManager.show_success(
-                self,
-                f"Game Over! {winner_name} wins: {final_score}",
-                duration_ms=6000
-            )
+            dialog = GameOverDialog(winner_team, final_score, rally_count, is_timed, self)
+            dialog.exec()
+            result = dialog.get_result()
 
-            self.video_widget.show_osd(f"Game Over! {winner_name} wins", duration=5.0)
+            if result == GameOverResult.FINISH_GAME:
+                # Transition to review mode
+                self.review_requested.emit()
+            # else CONTINUE_EDITING - just close dialog and continue
 
     # Video player handlers
 
@@ -710,40 +721,82 @@ class MainWindow(QMainWindow):
     def _on_edit_score(self) -> None:
         """Handle Edit Score button click.
 
-        TODO: Implement EditScoreDialog to manually correct score errors.
+        Opens the EditScoreDialog to manually correct score errors.
         """
-        ToastManager.show_info(self, "Edit Score - Coming soon", duration_ms=2000)
+        current_score = self.score_state.get_score_string()
+        is_doubles = self.config.game_type == "doubles"
+
+        dialog = EditScoreDialog(current_score, is_doubles, self)
+        if dialog.exec():
+            result = dialog.get_result()
+            if result is not None:
+                # Parse and apply the new score
+                self.score_state.set_score(result.new_score)
+                self._update_display()
+                ToastManager.show_success(
+                    self,
+                    f"Score updated: {result.new_score}",
+                    duration_ms=3000
+                )
 
     @pyqtSlot()
     def _on_force_sideout(self) -> None:
         """Handle Force Side-Out button click.
 
-        Forces a side-out without scoring (for error correction).
+        Opens the ForceSideOutDialog to force a side-out (for error correction).
         """
-        # Get current score before side-out
-        score_before = self.score_state.get_score_string()
+        # Get current server info
+        server_info = self.score_state.get_server_info()
+        current_server = f"Team {server_info.serving_team + 1} ({server_info.player_name})"
+        if server_info.server_number is not None:
+            current_server += f" - Server {server_info.server_number}"
 
-        # Force side-out
-        self.score_state.force_side_out()
+        # Compute what "after" will look like
+        next_team = 1 - server_info.serving_team
+        next_player_names = self.config.team1_players if next_team == 0 else self.config.team2_players
+        next_player = next_player_names[0] if next_player_names else "Unknown"
+        next_server = f"Team {next_team + 1} ({next_player})"
+        if self.config.game_type == "doubles":
+            next_server += " - Server 1"
 
-        # Update display
-        self._update_display()
+        current_score = self.score_state.get_score_string()
+        is_doubles = self.config.game_type == "doubles"
 
-        # Show feedback
-        score_after = self.score_state.get_score_string()
-        ToastManager.show_warning(
-            self,
-            f"Side-out forced: {score_before} → {score_after}",
-            duration_ms=3000
-        )
+        dialog = ForceSideOutDialog(current_server, next_server, current_score, is_doubles, self)
+        if dialog.exec():
+            result = dialog.get_result()
+            if result is not None:
+                # Apply new score if provided
+                if result.new_score:
+                    self.score_state.set_score(result.new_score)
+                # Force side-out
+                self.score_state.force_side_out()
+                self._update_display()
+                ToastManager.show_warning(
+                    self,
+                    "Side-out forced",
+                    duration_ms=3000
+                )
 
     @pyqtSlot()
     def _on_add_comment(self) -> None:
         """Handle Add Comment button click.
 
-        TODO: Implement comment dialog to add notes at current timestamp.
+        Opens the AddCommentDialog to add notes at current timestamp.
         """
-        ToastManager.show_info(self, "Add Comment - Coming soon", duration_ms=2000)
+        timestamp = self.video_widget.get_position()
+
+        dialog = AddCommentDialog(timestamp, self)
+        if dialog.exec():
+            result = dialog.get_result()
+            if result is not None:
+                # Store the comment (for now, just show feedback)
+                # TODO: Store in session/rally manager when persistence is implemented
+                ToastManager.show_success(
+                    self,
+                    f"Comment added at {result.timestamp:.2f}s",
+                    duration_ms=3000
+                )
 
     @pyqtSlot()
     def _on_time_expired(self) -> None:
