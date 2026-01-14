@@ -103,23 +103,23 @@
 - [x] **GIT CHECKPOINT**: Commit "Add video probe utility"
 
 ### 3.2 MPV Player Widget
-- [ ] Create src/video/player.py
-- [ ] Create VideoWidget class extending QWidget
-- [ ] Configure MPV embedding with wid parameter
-- [ ] Implement load() method
-- [ ] Implement play() / pause() / toggle_pause()
-- [ ] Implement seek() by seconds
-- [ ] Implement seek_frame() by frame number
-- [ ] Implement frame_step() / frame_back_step()
-- [ ] Implement set_speed()
-- [ ] Implement get_position() / get_position_frame()
-- [ ] Implement get_duration()
-- [ ] Implement show_osd() for messages
-- [ ] Create position_changed signal
-- [ ] Create duration_changed signal
-- [ ] Test MPV embedding in standalone PyQt6 window
-- [ ] Verify arrow key navigation works (5-second skip)
-- [ ] **GIT CHECKPOINT**: Commit "Implement MPV player widget with embedding"
+- [x] Create src/video/player.py
+- [x] Create VideoWidget class extending QWidget
+- [x] Configure MPV embedding with wid parameter
+- [x] Implement load() method
+- [x] Implement play() / pause() / toggle_pause()
+- [x] Implement seek() by seconds
+- [x] Implement seek_frame() by frame number
+- [x] Implement frame_step() / frame_back_step()
+- [x] Implement set_speed()
+- [x] Implement get_position() / get_position_frame()
+- [x] Implement get_duration()
+- [x] Implement show_osd() for messages
+- [x] Create position_changed signal
+- [x] Create duration_changed signal
+- [x] Test MPV embedding in standalone PyQt6 window
+- [x] Verify arrow key navigation works (5-second skip)
+- [x] **GIT CHECKPOINT**: Commit "Implement MPV player widget with embedding"
 
 ---
 
@@ -452,7 +452,7 @@
 | 0 | Project Planning & Documentation | 1 | Complete |
 | 1 | Project Setup & Infrastructure | 1 | Complete |
 | 2 | Core Domain Classes | 3 | Complete |
-| 3 | Video Integration | 2 | Not Started |
+| 3 | Video Integration | 2 | Complete |
 | 4 | UI Foundation | 4 | Not Started |
 | 5 | Main Window - Editing Mode | 2 | Not Started |
 | 6 | Modal Dialogs | 2 | Not Started |
@@ -483,4 +483,4 @@
 ---
 
 *Total Tasks: ~215 (including checkpoints)*
-*Completed: ~48 (Phase 0 + Phase 1 + Phase 2)*
+*Completed: ~75 (Phase 0-3)*
