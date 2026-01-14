@@ -187,39 +187,39 @@
 > Primary editing interface with rally marking
 
 ### 5.1 Main Window Structure
-- [ ] Create src/ui/main_window.py
-- [ ] Set up QMainWindow with central widget
-- [ ] Create layout: video, playback, state bar, rally controls, interventions, session
-- [ ] Integrate VideoWidget
-- [ ] Integrate PlaybackControls
-- [ ] Integrate StateBar
-- [ ] Add rally control buttons (Rally Start, Server Wins, Receiver Wins, Undo)
-- [ ] Add intervention buttons (Edit Score, Force Side-Out, Add Comment, Time Expired)
-- [ ] Add session buttons (Save Session, Final Review, Save & Quit)
-- [ ] Implement window title with filename
-- [ ] **GIT CHECKPOINT**: Commit "Create main window structure and layout"
+- [x] Create src/ui/main_window.py
+- [x] Set up QMainWindow with central widget
+- [x] Create layout: video, playback, state bar, rally controls, interventions, session
+- [x] Integrate VideoWidget
+- [x] Integrate PlaybackControls
+- [x] Integrate StatusOverlay (StateBar equivalent)
+- [x] Add rally control buttons (Rally Start, Server Wins, Receiver Wins, Undo)
+- [x] Add intervention buttons (Edit Score, Force Side-Out, Add Comment, Time Expired)
+- [x] Add session buttons (Save Session, Final Review, Save & Quit)
+- [x] Implement window title with filename
+- [x] **GIT CHECKPOINT**: Commit "Create main window structure and layout"
 
 ### 5.2 Rally Marking Logic
-- [ ] Connect Rally Start button to on_rally_start()
-- [ ] Implement on_rally_start() - capture timestamp, update state
-- [ ] Connect Server Wins button to on_server_wins()
-- [ ] Implement on_server_wins() - end rally, update score
-- [ ] Connect Receiver Wins button to on_receiver_wins()
-- [ ] Implement on_receiver_wins() - end rally, update score
-- [ ] Connect Undo button to on_undo()
-- [ ] Implement on_undo() - revert action, seek video
-- [ ] Implement button state management (highlight/dim based on rally state)
-- [ ] Implement OSD feedback for rally events
-- [ ] Implement state bar updates after each action
+- [x] Connect Rally Start button to on_rally_start()
+- [x] Implement on_rally_start() - capture timestamp, update state
+- [x] Connect Server Wins button to on_server_wins()
+- [x] Implement on_server_wins() - end rally, update score
+- [x] Connect Receiver Wins button to on_receiver_wins()
+- [x] Implement on_receiver_wins() - end rally, update score
+- [x] Connect Undo button to on_undo()
+- [x] Implement on_undo() - revert action, seek video
+- [x] Implement button state management (highlight/dim based on rally state)
+- [x] Implement OSD feedback for rally events
+- [x] Implement state bar updates after each action
 
 ### 5.3 Playback Integration
-- [ ] Connect playback controls to VideoWidget
-- [ ] Implement play/pause toggle
-- [ ] Implement frame step forward/backward
-- [ ] Implement speed selection (0.5x, 1x, 2x)
-- [ ] Implement time display updates
-- [ ] Verify MPV arrow keys still work for 5-second skip
-- [ ] **GIT CHECKPOINT**: Commit "Implement rally marking and playback controls"
+- [x] Connect playback controls to VideoWidget
+- [x] Implement play/pause toggle
+- [x] Implement frame step forward/backward
+- [x] Implement speed selection (0.5x, 1x, 2x)
+- [x] Implement time display updates
+- [x] Verify MPV arrow keys still work for 5-second skip
+- [x] **GIT CHECKPOINT**: Commit "Implement rally marking and playback controls"
 
 ---
 
@@ -454,7 +454,7 @@
 | 2 | Core Domain Classes | 3 | Complete |
 | 3 | Video Integration | 2 | Complete |
 | 4 | UI Foundation | 4 | Complete |
-| 5 | Main Window - Editing Mode | 2 | Not Started |
+| 5 | Main Window - Editing Mode | 2 | Complete |
 | 6 | Modal Dialogs | 2 | Not Started |
 | 7 | Session Management | 2 | Not Started |
 | 8 | Final Review Mode | 2 | Not Started |
@@ -483,4 +483,4 @@
 ---
 
 *Total Tasks: ~215 (including checkpoints)*
-*Completed: ~120 (Phase 0-4)*
+*Completed: ~150 (Phase 0-5)*
