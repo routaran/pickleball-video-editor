@@ -1,3 +1,4 @@
 PyQt6>=6.6.0
 python-mpv>=1.0.0
 lxml>=5.0.0
+pytest>=7.4.0

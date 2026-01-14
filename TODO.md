@@ -94,13 +94,13 @@
 > MPV embedding and video probe utilities
 
 ### 3.1 Video Probe
-- [ ] Create src/video/probe.py
-- [ ] Implement probe_video() using ffprobe
-- [ ] Extract fps, duration, resolution
-- [ ] Extract codec info
-- [ ] Handle probe errors gracefully
-- [ ] Write unit tests for video probe
-- [ ] **GIT CHECKPOINT**: Commit "Add video probe utility"
+- [x] Create src/video/probe.py
+- [x] Implement probe_video() using ffprobe
+- [x] Extract fps, duration, resolution
+- [x] Extract codec info
+- [x] Handle probe errors gracefully
+- [x] Write unit tests for video probe
+- [x] **GIT CHECKPOINT**: Commit "Add video probe utility"
 
 ### 3.2 MPV Player Widget
 - [ ] Create src/video/player.py
