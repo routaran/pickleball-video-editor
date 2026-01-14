@@ -17,6 +17,7 @@ from .models import (
     Intervention,
     SessionState,
 )
+from .score_state import ScoreState
 
 __all__ = [
     "ActionType",
@@ -27,4 +28,5 @@ __all__ = [
     "Comment",
     "Intervention",
     "SessionState",
+    "ScoreState",
 ]
