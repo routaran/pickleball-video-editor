@@ -8,8 +8,6 @@ This module provides centralized application-level configuration including:
 - Resource initialization
 """
 
-from typing import Optional
-
 from PyQt6.QtWidgets import QApplication
 
 
