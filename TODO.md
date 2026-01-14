@@ -127,59 +127,59 @@
 > Basic window structure, styling, common widgets
 
 ### 4.1 Application Shell
-- [ ] Create src/app.py with QApplication setup
-- [ ] Create src/ui/__init__.py
+- [x] Create src/app.py with QApplication setup
+- [x] Create src/ui/__init__.py
 - [ ] Create application icon (optional)
-- [ ] **GIT CHECKPOINT**: Commit "Set up application shell"
+- [x] **GIT CHECKPOINT**: Commit "Set up application shell"
 
 ### 4.2 Design System & Stylesheet
 > Implement "Court Green" theme per UI_SPEC.md Section 2
 
-- [ ] Create src/ui/styles/__init__.py
-- [ ] Create src/ui/styles/colors.py with color constants from UI_SPEC.md Section 2.2
-- [ ] Create src/ui/styles/fonts.py with typography constants from UI_SPEC.md Section 2.3
-- [ ] Create src/ui/styles/theme.qss master stylesheet
-- [ ] Implement background color classes (--bg-primary, --bg-secondary, --bg-tertiary)
-- [ ] Implement action color classes (rally-start, server-wins, receiver-wins, undo)
-- [ ] Implement button state styles (active with glow, normal, disabled with opacity)
-- [ ] Implement text color classes (primary, secondary, accent, warning, disabled)
-- [ ] Implement spacing utilities per UI_SPEC.md Section 2.4
-- [ ] Implement border radius styles per UI_SPEC.md Section 2.5
-- [ ] Implement dialog styling per UI_SPEC.md Section 6.1
-- [ ] Implement toast notification styling per UI_SPEC.md Section 6.8
-- [ ] Test stylesheet loads correctly in QApplication
-- [ ] Verify font rendering (JetBrains Mono / IBM Plex Sans fallbacks)
-- [ ] **GIT CHECKPOINT**: Commit "Implement Court Green design system and stylesheet"
+- [x] Create src/ui/styles/__init__.py
+- [x] Create src/ui/styles/colors.py with color constants from UI_SPEC.md Section 2.2
+- [x] Create src/ui/styles/fonts.py with typography constants from UI_SPEC.md Section 2.3
+- [x] Create src/ui/styles/theme.qss master stylesheet
+- [x] Implement background color classes (--bg-primary, --bg-secondary, --bg-tertiary)
+- [x] Implement action color classes (rally-start, server-wins, receiver-wins, undo)
+- [x] Implement button state styles (active with glow, normal, disabled with opacity)
+- [x] Implement text color classes (primary, secondary, accent, warning, disabled)
+- [x] Implement spacing utilities per UI_SPEC.md Section 2.4
+- [x] Implement border radius styles per UI_SPEC.md Section 2.5
+- [x] Implement dialog styling per UI_SPEC.md Section 6.1
+- [x] Implement toast notification styling per UI_SPEC.md Section 6.8
+- [x] Test stylesheet loads correctly in QApplication
+- [x] Verify font rendering (JetBrains Mono / IBM Plex Sans fallbacks)
+- [x] **GIT CHECKPOINT**: Commit "Implement Court Green design system and stylesheet"
 
 ### 4.3 Custom Widgets
-- [ ] Create src/ui/widgets/__init__.py
-- [ ] Create src/ui/widgets/video_widget.py (wraps VideoWidget)
-- [ ] Create src/ui/widgets/rally_button.py
-- [ ] Implement RallyButton with color states (active, normal, disabled) per UI_SPEC.md Section 2.2.4
-- [ ] Implement pulse animation for active state per UI_SPEC.md Section 7.1.1
-- [ ] Implement set_active() / set_disabled() methods
-- [ ] Create src/ui/widgets/status_overlay.py
-- [ ] Implement StatusOverlay with status dot, score, server info per UI_SPEC.md Section 4.2.2
-- [ ] Create src/ui/widgets/playback_controls.py
-- [ ] Implement playback buttons (frame step, play/pause, speed toggle group)
-- [ ] Implement time display label with monospace font
-- [ ] Create src/ui/widgets/toast.py
-- [ ] Implement Toast notification widget per UI_SPEC.md Section 6.8
-- [ ] Implement auto-dismiss timer (4 seconds)
-- [ ] **GIT CHECKPOINT**: Commit "Create custom UI widgets"
+- [x] Create src/ui/widgets/__init__.py
+- [ ] Create src/ui/widgets/video_widget.py (wraps VideoWidget) - Using existing player.py
+- [x] Create src/ui/widgets/rally_button.py
+- [x] Implement RallyButton with color states (active, normal, disabled) per UI_SPEC.md Section 2.2.4
+- [x] Implement pulse animation for active state per UI_SPEC.md Section 7.1.1
+- [x] Implement set_active() / set_disabled() methods
+- [x] Create src/ui/widgets/status_overlay.py
+- [x] Implement StatusOverlay with status dot, score, server info per UI_SPEC.md Section 4.2.2
+- [x] Create src/ui/widgets/playback_controls.py
+- [x] Implement playback buttons (frame step, play/pause, speed toggle group)
+- [x] Implement time display label with monospace font
+- [x] Create src/ui/widgets/toast.py
+- [x] Implement Toast notification widget per UI_SPEC.md Section 6.8
+- [x] Implement auto-dismiss timer (4 seconds)
+- [x] **GIT CHECKPOINT**: Commit "Create custom UI widgets"
 
 ### 4.4 Setup Dialog
-- [ ] Create src/ui/setup_dialog.py
-- [ ] Implement file browser for video selection
-- [ ] Implement game type dropdown (Singles/Doubles)
-- [ ] Implement victory rules dropdown (11/9/Timed)
-- [ ] Implement player name fields (dynamic for singles/doubles)
-- [ ] Implement Team 1 accent border container (first server indicator) per UI_SPEC.md Section 3.1
-- [ ] Implement required field indicators (*) per UI_SPEC.md Section 3.1
-- [ ] Implement inline validation with error messages per UI_SPEC.md Section 3.3
-- [ ] Implement get_config() to return setup data
-- [ ] Style dialog per UI_SPEC.md Section 3
-- [ ] **GIT CHECKPOINT**: Commit "Implement setup dialog"
+- [x] Create src/ui/setup_dialog.py
+- [x] Implement file browser for video selection
+- [x] Implement game type dropdown (Singles/Doubles)
+- [x] Implement victory rules dropdown (11/9/Timed)
+- [x] Implement player name fields (dynamic for singles/doubles)
+- [x] Implement Team 1 accent border container (first server indicator) per UI_SPEC.md Section 3.1
+- [x] Implement required field indicators (*) per UI_SPEC.md Section 3.1
+- [x] Implement inline validation with error messages per UI_SPEC.md Section 3.3
+- [x] Implement get_config() to return setup data
+- [x] Style dialog per UI_SPEC.md Section 3
+- [x] **GIT CHECKPOINT**: Commit "Implement setup dialog"
 
 ---
 
@@ -453,7 +453,7 @@
 | 1 | Project Setup & Infrastructure | 1 | Complete |
 | 2 | Core Domain Classes | 3 | Complete |
 | 3 | Video Integration | 2 | Complete |
-| 4 | UI Foundation | 4 | Not Started |
+| 4 | UI Foundation | 4 | Complete |
 | 5 | Main Window - Editing Mode | 2 | Not Started |
 | 6 | Modal Dialogs | 2 | Not Started |
 | 7 | Session Management | 2 | Not Started |
@@ -483,4 +483,4 @@
 ---
 
 *Total Tasks: ~215 (including checkpoints)*
-*Completed: ~75 (Phase 0-3)*
+*Completed: ~120 (Phase 0-4)*

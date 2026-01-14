@@ -10,4 +10,9 @@ This package contains:
 - styles/: QSS stylesheets and theme constants
 """
 
-__all__ = []
+from src.ui.setup_dialog import GameConfig, SetupDialog
+
+__all__ = [
+    "GameConfig",
+    "SetupDialog",
+]
