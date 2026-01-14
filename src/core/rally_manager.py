@@ -51,7 +51,12 @@ class RallyManager:
 
         Args:
             fps: Video frames per second for frame/time conversion
+
+        Raises:
+            ValueError: If fps is not positive
         """
+        if fps <= 0:
+            raise ValueError(f"fps must be positive, got {fps}")
         self.fps = fps
         self.rallies: list[Rally] = []
         self.action_stack: list[Action] = []

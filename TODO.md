@@ -27,16 +27,16 @@
 ## Phase 1: Project Setup & Infrastructure
 > Basic project structure, dependencies, and configuration
 
-- [ ] Create project directory structure per TECH_STACK.md Section 6
-- [ ] Create pyproject.toml with project metadata
-- [ ] Create requirements.txt with pinned versions
-- [ ] Create src/__init__.py and package structure
-- [ ] Create README.md with setup instructions
-- [ ] Set up virtual environment documentation
-- [ ] Verify system dependencies installed (mpv, ffmpeg, qt6-base)
-- [ ] Verify Python packages install correctly (PyQt6, python-mpv)
-- [ ] Create basic application entry point (src/main.py)
-- [ ] **GIT CHECKPOINT**: Commit "Set up project infrastructure and dependencies"
+- [x] Create project directory structure per TECH_STACK.md Section 6
+- [x] Create pyproject.toml with project metadata
+- [x] Create requirements.txt with pinned versions
+- [x] Create src/__init__.py and package structure
+- [x] Create README.md with setup instructions
+- [x] Set up virtual environment documentation
+- [x] Verify system dependencies installed (mpv, ffmpeg, qt6-base)
+- [x] Verify Python packages install correctly (PyQt6, python-mpv)
+- [x] Create basic application entry point (src/main.py)
+- [x] **GIT CHECKPOINT**: Commit "Set up project infrastructure and dependencies" (7542f31)
 
 ---
 
@@ -44,49 +44,49 @@
 > Score state machine, rally management, data models
 
 ### 2.1 Data Models
-- [ ] Create src/core/models.py
-- [ ] Implement Rally dataclass
-- [ ] Implement ScoreSnapshot dataclass
-- [ ] Implement ServerInfo dataclass
-- [ ] Implement Action dataclass
-- [ ] Implement ActionType enum
-- [ ] Implement SessionState dataclass
-- [ ] **GIT CHECKPOINT**: Commit "Add core data models"
+- [x] Create src/core/models.py
+- [x] Implement Rally dataclass
+- [x] Implement ScoreSnapshot dataclass
+- [x] Implement ServerInfo dataclass
+- [x] Implement Action dataclass
+- [x] Implement ActionType enum
+- [x] Implement SessionState dataclass
+- [x] **GIT CHECKPOINT**: Commit "Add core data models" (6e80163)
 
 ### 2.2 Score State Machine
-- [ ] Create src/core/score_state.py
-- [ ] Implement ScoreState.__init__() for singles/doubles
-- [ ] Implement server_wins() for singles
-- [ ] Implement receiver_wins() for singles
-- [ ] Implement server_wins() for doubles (server rotation)
-- [ ] Implement receiver_wins() for doubles (side-out logic)
-- [ ] Implement is_game_over() for standard games (win by 2)
-- [ ] Implement is_game_over() for timed games
-- [ ] Implement get_score_string() formatting
-- [ ] Implement get_server_info()
-- [ ] Implement set_score() for manual editing
-- [ ] Implement force_side_out()
-- [ ] Implement save_snapshot() / restore_snapshot() for undo
-- [ ] Implement to_dict() / from_dict() serialization
-- [ ] Write unit tests for ScoreState
-- [ ] **GIT CHECKPOINT**: Commit "Implement score state machine with tests"
+- [x] Create src/core/score_state.py
+- [x] Implement ScoreState.__init__() for singles/doubles
+- [x] Implement server_wins() for singles
+- [x] Implement receiver_wins() for singles
+- [x] Implement server_wins() for doubles (server rotation)
+- [x] Implement receiver_wins() for doubles (side-out logic)
+- [x] Implement is_game_over() for standard games (win by 2)
+- [x] Implement is_game_over() for timed games
+- [x] Implement get_score_string() formatting
+- [x] Implement get_server_info()
+- [x] Implement set_score() for manual editing
+- [x] Implement force_side_out()
+- [x] Implement save_snapshot() / restore_snapshot() for undo
+- [x] Implement to_dict() / from_dict() serialization
+- [x] Write unit tests for ScoreState
+- [x] **GIT CHECKPOINT**: Commit "Implement score state machine with tests" (d4f591c)
 
 ### 2.3 Rally Manager
-- [ ] Create src/core/rally_manager.py
-- [ ] Implement RallyManager.__init__()
-- [ ] Implement start_rally() with padding
-- [ ] Implement end_rally() with padding
-- [ ] Implement is_rally_in_progress()
-- [ ] Implement get_rally_count()
-- [ ] Implement get_rallies()
-- [ ] Implement update_rally_timing()
-- [ ] Implement update_rally_score()
-- [ ] Implement undo() with action stack
-- [ ] Implement can_undo()
-- [ ] Implement to_segments() for Kdenlive export
-- [ ] Implement to_dict() / from_dict() serialization
-- [ ] Write unit tests for RallyManager
-- [ ] **GIT CHECKPOINT**: Commit "Implement rally manager with tests"
+- [x] Create src/core/rally_manager.py
+- [x] Implement RallyManager.__init__()
+- [x] Implement start_rally() with padding
+- [x] Implement end_rally() with padding
+- [x] Implement is_rally_in_progress()
+- [x] Implement get_rally_count()
+- [x] Implement get_rallies()
+- [x] Implement update_rally_timing()
+- [x] Implement update_rally_score()
+- [x] Implement undo() with action stack
+- [x] Implement can_undo()
+- [x] Implement to_segments() for Kdenlive export
+- [x] Implement to_dict() / from_dict() serialization
+- [x] Write unit tests for RallyManager
+- [x] **GIT CHECKPOINT**: Commit "Implement rally manager with tests" (ce78229)
 
 ---
 
@@ -450,8 +450,8 @@
 | Phase | Description | Checkpoints | Status |
 |-------|-------------|-------------|--------|
 | 0 | Project Planning & Documentation | 1 | Complete |
-| 1 | Project Setup & Infrastructure | 1 | Not Started |
-| 2 | Core Domain Classes | 3 | Not Started |
+| 1 | Project Setup & Infrastructure | 1 | Complete |
+| 2 | Core Domain Classes | 3 | Complete |
 | 3 | Video Integration | 2 | Not Started |
 | 4 | UI Foundation | 4 | Not Started |
 | 5 | Main Window - Editing Mode | 2 | Not Started |
@@ -483,4 +483,4 @@
 ---
 
 *Total Tasks: ~215 (including checkpoints)*
-*Completed: ~8 (Phase 0)*
+*Completed: ~48 (Phase 0 + Phase 1 + Phase 2)*
