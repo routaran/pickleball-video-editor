@@ -19,6 +19,7 @@ from .models import (
 )
 from .score_state import ScoreState
 from .rally_manager import RallyManager
+from .session_manager import SessionManager
 
 __all__ = [
     "ActionType",
@@ -31,4 +32,5 @@ __all__ = [
     "SessionState",
     "ScoreState",
     "RallyManager",
+    "SessionManager",
 ]
