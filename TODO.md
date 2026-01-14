@@ -227,37 +227,37 @@
 > Intervention and system dialogs
 
 ### 6.1 Intervention Dialogs
-- [ ] Create src/ui/dialogs/__init__.py
-- [ ] Create src/ui/dialogs/edit_score.py
-- [ ] Implement Edit Score dialog per UI_PROTOTYPES.md Section 4.1
-- [ ] Implement score format validation
-- [ ] Create src/ui/dialogs/force_sideout.py
-- [ ] Implement Force Side-Out dialog with optional score field
-- [ ] Create src/ui/dialogs/add_comment.py
-- [ ] Implement Add Comment dialog with duration field
+- [x] Create src/ui/dialogs/__init__.py
+- [x] Create src/ui/dialogs/edit_score.py
+- [x] Implement Edit Score dialog per UI_PROTOTYPES.md Section 4.1
+- [x] Implement score format validation
+- [x] Create src/ui/dialogs/force_sideout.py
+- [x] Implement Force Side-Out dialog with optional score field
+- [x] Create src/ui/dialogs/add_comment.py
+- [x] Implement Add Comment dialog with duration field
 
 ### 6.2 System Dialogs
-- [ ] Create src/ui/dialogs/game_over.py
-- [ ] Implement Game Over dialog (standard and timed variants)
-- [ ] Implement Continue Editing vs Finish Game options
-- [ ] Create src/ui/dialogs/resume_session.py
-- [ ] Implement Resume Session dialog with session details
-- [ ] Implement Start Fresh vs Resume options
-- [ ] Create src/ui/dialogs/unsaved_warning.py
-- [ ] Implement Unsaved Changes warning dialog
-- [ ] **GIT CHECKPOINT**: Commit "Create all modal dialog UIs"
+- [x] Create src/ui/dialogs/game_over.py
+- [x] Implement Game Over dialog (standard and timed variants)
+- [x] Implement Continue Editing vs Finish Game options
+- [x] Create src/ui/dialogs/resume_session.py
+- [x] Implement Resume Session dialog with session details
+- [x] Implement Start Fresh vs Resume options
+- [x] Create src/ui/dialogs/unsaved_warning.py
+- [x] Implement Unsaved Changes warning dialog
+- [x] **GIT CHECKPOINT**: Commit "Create all modal dialog UIs" (00bd07a)
 
 ### 6.3 Dialog Integration
-- [ ] Connect Edit Score button to dialog
-- [ ] Apply score changes from dialog
-- [ ] Connect Force Side-Out button to dialog
-- [ ] Apply side-out changes from dialog
-- [ ] Connect Add Comment button to dialog
-- [ ] Store comments with timestamp
-- [ ] Connect Time Expired button (timed games only)
-- [ ] Trigger Game Over on winning condition
-- [ ] Show Unsaved Warning on close if dirty
-- [ ] **GIT CHECKPOINT**: Commit "Integrate modal dialogs with main window"
+- [x] Connect Edit Score button to dialog
+- [x] Apply score changes from dialog
+- [x] Connect Force Side-Out button to dialog
+- [x] Apply side-out changes from dialog
+- [x] Connect Add Comment button to dialog
+- [ ] Store comments with timestamp (pending session persistence)
+- [x] Connect Time Expired button (timed games only)
+- [x] Trigger Game Over on winning condition
+- [ ] Show Unsaved Warning on close if dirty (pending session persistence)
+- [x] **GIT CHECKPOINT**: Commit "Integrate modal dialogs with main window" (e884f29)
 
 ---
 
@@ -455,7 +455,7 @@
 | 3 | Video Integration | 2 | Complete |
 | 4 | UI Foundation | 4 | Complete |
 | 5 | Main Window - Editing Mode | 2 | Complete |
-| 6 | Modal Dialogs | 2 | Not Started |
+| 6 | Modal Dialogs | 2 | Complete |
 | 7 | Session Management | 2 | Not Started |
 | 8 | Final Review Mode | 2 | Not Started |
 | 9 | Output Generation | 2 | Not Started |
@@ -483,4 +483,4 @@
 ---
 
 *Total Tasks: ~215 (including checkpoints)*
-*Completed: ~150 (Phase 0-5)*
+*Completed: ~170 (Phase 0-6)*
