@@ -1,0 +1,22 @@
+# Claude Code user settings
+.claude/settings.json
+.claude/settings.local.json
+.claude/statusline.sh
+
+# Generated/temporary files
+*.pyc
+__pycache__/
+
+# Kdenlive cache and proxy files
+proxy/
+**/proxy/
+
+# Large video files
+*.mp4
+*.mkv
+*.avi
+*.mov
+
+# OS files
+.DS_Store
+Thumbs.db
