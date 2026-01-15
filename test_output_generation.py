@@ -5,7 +5,7 @@ This test verifies that the _on_review_generate() method correctly:
 1. Gets segments from rally manager
 2. Probes video for resolution
 3. Creates KdenliveGenerator
-4. Generates Kdenlive and SRT files
+4. Generates Kdenlive and ASS files
 5. Shows appropriate feedback to the user
 
 This is a unit-style test that doesn't require the full GUI.
@@ -71,7 +71,7 @@ def test_generate_with_rallies():
 
                 # Mock the generator
                 mock_kdenlive_path = Path("/home/user/Videos/pickleball/match_rallies.kdenlive")
-                mock_srt_path = Path("/home/user/Videos/pickleball/match_scores.srt")
+                mock_srt_path = Path("/home/user/Videos/pickleball/match_rallies.kdenlive.ass")
 
                 with patch("src.ui.main_window.KdenliveGenerator") as MockGenerator:
                     mock_gen_instance = MockGenerator.return_value
@@ -187,7 +187,7 @@ def test_generate_probe_fails():
                 ])
 
                 mock_kdenlive_path = Path("/home/user/Videos/pickleball/match_rallies.kdenlive")
-                mock_srt_path = Path("/home/user/Videos/pickleball/match_scores.srt")
+                mock_srt_path = Path("/home/user/Videos/pickleball/match_rallies.kdenlive.ass")
 
                 with patch("src.ui.main_window.KdenliveGenerator") as MockGenerator:
                     mock_gen_instance = MockGenerator.return_value

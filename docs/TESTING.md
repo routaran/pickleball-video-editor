@@ -16,7 +16,7 @@ The test suite is located in the `tests/` directory and covers the core business
    - Score string formatting from serving team's perspective
 
 2. **tests/test_rally_manager.py** (18 tests)
-   - Rally start/end with padding (-0.5s start, +1.0s end)
+   - Rally start/end with padding (-1.0s start, +1.0s end)
    - Undo functionality (RALLY_START and RALLY_END actions)
    - Multiple rally sequences
    - Segment export format for Kdenlive

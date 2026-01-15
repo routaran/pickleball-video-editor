@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the integration of the output generation module (`src.output`) with the MainWindow's Final Review mode. The integration enables users to generate Kdenlive project files and SRT subtitle files from marked rallies.
+This document describes the integration of the output generation module (`src.output`) with the MainWindow's Final Review mode. The integration enables users to generate Kdenlive project files and ASS subtitle files from marked rallies.
 
 ## Changes Made
 
@@ -14,7 +14,7 @@ Added import for `KdenliveGenerator`:
 from src.output import KdenliveGenerator
 ```
 
-This imports the generator class that creates Kdenlive MLT XML project files and companion SRT subtitle files.
+This imports the generator class that creates Kdenlive MLT XML project files and companion ASS subtitle files.
 
 ### 2. Method Implementation (Lines 1281-1343)
 
@@ -25,7 +25,7 @@ Replaced the placeholder `_on_review_generate()` method with full implementation
 def _on_review_generate(self) -> None:
     """Handle generate Kdenlive project request.
 
-    Generates Kdenlive project and SRT subtitle files from current rallies.
+    Generates Kdenlive project and ASS subtitle files from current rallies.
     """
     # Get segments from rally manager
     segments = self.rally_manager.to_segments()
@@ -123,7 +123,7 @@ The method re-probes the video to get resolution information. This is necessary 
 The `KdenliveGenerator.generate()` method creates two files in `~/Videos/pickleball/`:
 
 1. **`{video_name}_rallies.kdenlive`** - Kdenlive MLT XML project file
-2. **`{video_name}_scores.srt`** - SRT subtitle file with scores
+2. **`{video_name}_rallies.kdenlive.ass`** - ASS subtitle file with scores
 
 Both files are automatically saved to the default output directory (`~/Videos/pickleball/`).
 
@@ -204,7 +204,7 @@ python test_output_generation.py
 
 ### Modules Used
 
-- `src.output.KdenliveGenerator` - Generates Kdenlive project and SRT files
+- `src.output.KdenliveGenerator` - Generates Kdenlive project and ASS files
 - `src.video.probe.probe_video` - Extracts video metadata (resolution, fps, duration)
 - `src.ui.widgets.ToastManager` - Shows toast notifications
 - `src.video.player.VideoWidget` - Shows OSD overlay
@@ -246,7 +246,7 @@ The output generation integration is complete and tested. Users can now:
 
 1. Mark rallies in editing mode
 2. Enter Final Review mode to adjust timings
-3. Click "Generate" to create Kdenlive project and SRT files
+3. Click "Generate" to create Kdenlive project and ASS files
 4. Receive clear feedback on success or failure
 
 The implementation follows all project coding standards:

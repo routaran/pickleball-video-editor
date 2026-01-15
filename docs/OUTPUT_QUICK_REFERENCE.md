@@ -46,10 +46,10 @@ generator = KdenliveGenerator(
     output_dir=Path("~/Videos/pickleball")  # Optional
 )
 
-kdenlive_path, srt_path = generator.generate()
+kdenlive_path, ass_path = generator.generate()
 # Creates:
 #   ~/Videos/pickleball/video_rallies.kdenlive
-#   ~/Videos/pickleball/video_scores.srt
+#   ~/Videos/pickleball/video_rallies.kdenlive.ass
 ```
 
 ### Convert frame to MLT timecode
@@ -86,7 +86,7 @@ generator = KdenliveGenerator(
     fps=60.0
 )
 
-kdenlive_path, srt_path = generator.generate()
+kdenlive_path, ass_path = generator.generate()
 print(f"Generated: {kdenlive_path}")
 ```
 
@@ -110,7 +110,7 @@ except OSError as e:
 ## File Naming
 
 - Kdenlive: `{video_basename}_rallies.kdenlive`
-- SRT: `{video_basename}_scores.srt`
+- ASS: `{video_basename}_rallies.kdenlive.ass`
 
 Example: `tournament_final.mp4` → `tournament_final_rallies.kdenlive`
 

@@ -459,7 +459,7 @@ Add ability to:
 ### 5. Export Options
 Add multiple export formats:
 - Kdenlive project (primary)
-- SRT subtitle file
+- ASS subtitle file
 - CSV rally list
 - JSON segments for other tools
 

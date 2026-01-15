@@ -50,7 +50,7 @@ Common pytest fixtures:
 ### 4. tests/test_rally_manager.py (18 tests)
 
 **TestRallyManager (16 tests)**
-- Rally start with -0.5s padding
+- Rally start with -1.0s padding
 - Rally start at video beginning (padding clamp)
 - Rally end with +1.0s padding
 - Error when ending without start
@@ -190,7 +190,7 @@ All dependencies are in `requirements.txt`:
    - Timed games: no auto game-over
 
 ### Rally Timing
-- Start padding: -0.5 seconds
+- Start padding: -1.0 seconds
 - End padding: +1.0 seconds
 - Frame calculations respect FPS
 - Clamp to 0 if padding goes negative

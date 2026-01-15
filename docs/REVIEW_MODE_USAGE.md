@@ -81,7 +81,7 @@ Review Mode is the final step before generating your Kdenlive project. It allows
 5. Duration updates automatically
 
 **Tips:**
-- Start should capture the serve preparation (added -0.5s padding)
+- Start should capture the serve preparation (added -1.0s padding)
 - End should include ball settling (added +1.0s padding)
 - Use Play Rally to verify timing feels right
 
