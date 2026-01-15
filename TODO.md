@@ -383,34 +383,34 @@
 > Error handling, validation, user experience improvements
 
 ### 10.1 Error Handling
-- [ ] Handle video file not found
-- [ ] Handle video load failure
-- [ ] Handle invalid score format input
-- [ ] Handle session save/load failures
-- [ ] Handle Kdenlive generation failures
-- [ ] Display appropriate error dialogs
+- [x] Handle video file not found (MainWindow._load_video shows toast error)
+- [x] Handle video load failure (MainWindow._load_video shows toast error)
+- [x] Handle invalid score format input (ScoreState.set_score raises ValueError)
+- [x] Handle session save/load failures (SessionManager returns None, MainWindow shows toast)
+- [x] Handle Kdenlive generation failures (_on_review_generate catches exceptions)
+- [x] Display appropriate error dialogs (ToastManager used throughout)
 
 ### 10.2 Validation & Warnings
-- [ ] Prevent Rally End without Rally Start
-- [ ] Prevent Rally Start while rally in progress
-- [ ] Validate score format in Edit Score dialog
-- [ ] Warn on close with unsaved changes
-- [ ] Confirm before Start Fresh (deleting session)
+- [x] Prevent Rally End without Rally Start (LBYL in on_server_wins/on_receiver_wins)
+- [x] Prevent Rally Start while rally in progress (LBYL in on_rally_start)
+- [x] Validate score format in Edit Score dialog (ScoreState.set_score validates)
+- [x] Warn on close with unsaved changes (closeEvent shows UnsavedWarningDialog)
+- [x] Confirm before Start Fresh (ResumeSessionDialog handles this)
 
 ### 10.3 User Experience
-- [ ] Show OSD message on rally start ("Rally started...")
-- [ ] Show OSD message on rally end with result
-- [ ] Display current score persistently on video
-- [ ] Ensure button colors match UI_SPEC.md
+- [x] Show OSD message on rally start ("Rally started...")
+- [x] Show OSD message on rally end with result (score shown)
+- [x] Display current score persistently on video (StatusOverlay)
+- [x] Ensure button colors match UI_SPEC.md (RallyButton with color states)
 - [ ] Test window resizing and video aspect ratio
-- [ ] Set minimum window size (1024x768)
+- [x] Set minimum window size (1024x768 in MainWindow._setup_ui)
 
 ### 10.4 Edge Cases
-- [ ] Handle very short rallies
-- [ ] Handle overlapping rally timestamps (validation)
-- [ ] Handle game already over (Continue Editing flow)
-- [ ] Handle empty rally list in Final Review
-- [ ] Handle timed game with tied score
+- [ ] Handle very short rallies (validation TBD)
+- [ ] Handle overlapping rally timestamps (validation TBD)
+- [x] Handle game already over (GameOverDialog with Continue Editing)
+- [x] Handle empty rally list in Final Review (warning shown)
+- [x] Handle timed game with tied score (warning shown in _on_time_expired)
 - [ ] **GIT CHECKPOINT**: Commit "Add error handling, validation, and polish"
 
 ---
