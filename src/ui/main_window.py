@@ -43,6 +43,7 @@ from src.core.models import ScoreSnapshot, SessionState
 from src.core.rally_manager import RallyManager
 from src.core.score_state import ScoreState
 from src.core.session_manager import SessionManager
+from src.output import KdenliveGenerator
 from src.ui.dialogs import (
     AddCommentDialog,
     AddCommentResult,
@@ -1281,20 +1282,65 @@ class MainWindow(QMainWindow):
     def _on_review_generate(self) -> None:
         """Handle generate Kdenlive project request.
 
-        Placeholder for future Kdenlive generation integration.
+        Generates Kdenlive project and SRT subtitle files from current rallies.
         """
-        # TODO: Implement Kdenlive project generation
-        # This will:
-        # 1. Call KdenliveGenerator with rally segments
-        # 2. Save the .kdenlive XML file
-        # 3. Show success dialog with file path
-        # 4. Optionally open in Kdenlive
+        # Get segments from rally manager
+        segments = self.rally_manager.to_segments()
 
-        ToastManager.show_info(
-            self,
-            "Kdenlive generation not yet implemented",
-            duration_ms=3000
+        # Check if there are segments to export
+        if not segments:
+            ToastManager.show_warning(
+                self,
+                "No rallies to export",
+                duration_ms=3000
+            )
+            return
+
+        # Get video resolution from probe
+        # We need to re-probe because we only stored fps/duration, not resolution
+        try:
+            video_info = probe_video(self.config.video_path)
+            resolution = (video_info.width, video_info.height)
+        except ProbeError:
+            # Fall back to default HD resolution if probe fails
+            resolution = (1920, 1080)
+            ToastManager.show_warning(
+                self,
+                "Could not detect video resolution, using 1920x1080",
+                duration_ms=3000
+            )
+
+        # Create generator
+        generator = KdenliveGenerator(
+            video_path=str(self.config.video_path),
+            segments=segments,
+            fps=self.video_fps,
+            resolution=resolution
         )
+
+        # Generate files
+        try:
+            kdenlive_path, srt_path = generator.generate()
+
+            # Show success message
+            ToastManager.show_success(
+                self,
+                f"Generated: {kdenlive_path.name}",
+                duration_ms=5000
+            )
+
+            # Also show in OSD
+            self.video_widget.show_osd(
+                f"Project saved to {kdenlive_path.parent}",
+                duration=4.0
+            )
+
+        except Exception as e:
+            ToastManager.show_error(
+                self,
+                f"Generation failed: {e}",
+                duration_ms=5000
+            )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event.

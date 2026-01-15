@@ -1,10 +1,12 @@
-"""
-Export and file generation.
+"""Output generation module for Pickleball Video Editor.
 
-This package contains generators for:
-- kdenlive_generator: XML project file generation with rally clips
-- subtitle_generator: SRT/ASS subtitle export with scores
-- debug_export: JSON export for debugging rally data
+This module provides:
+- SRT subtitle generation from rally segments
+- Kdenlive MLT project file generation
+- File output to standardized directory structure
 """
 
-__all__ = []
+from src.output.subtitle_generator import SubtitleGenerator
+from src.output.kdenlive_generator import KdenliveGenerator
+
+__all__ = ["SubtitleGenerator", "KdenliveGenerator"]

@@ -347,21 +347,21 @@
 > Kdenlive project and subtitle file creation
 
 ### 9.1 Subtitle Generator
-- [ ] Create src/output/__init__.py
-- [ ] Create src/output/subtitle_generator.py
-- [ ] Implement frames_to_srt_time()
-- [ ] Implement generate_srt() from segments
-- [ ] Handle output timeline (cumulative timing)
+- [x] Create src/output/__init__.py
+- [x] Create src/output/subtitle_generator.py
+- [x] Implement frames_to_srt_time()
+- [x] Implement generate_srt() from segments
+- [x] Handle output timeline (cumulative timing)
 
 ### 9.2 Kdenlive Generator
-- [ ] Create src/output/kdenlive_generator.py
-- [ ] Port/adapt existing generate_project.py code
-- [ ] Implement frames_to_timecode()
-- [ ] Implement generate_kdenlive_xml()
-- [ ] Include subtitle filter in XML
-- [ ] Implement generate() main function
-- [ ] Write files to ~/Videos/pickleball/
-- [ ] **GIT CHECKPOINT**: Commit "Implement Kdenlive and subtitle generators"
+- [x] Create src/output/kdenlive_generator.py
+- [x] Port/adapt existing generate_project.py code
+- [x] Implement frames_to_timecode()
+- [x] Implement generate_kdenlive_xml()
+- [x] Include subtitle filter in XML
+- [x] Implement generate() main function
+- [x] Write files to ~/Videos/pickleball/
+- [x] **GIT CHECKPOINT**: Commit "Implement Kdenlive and subtitle generators"
 
 ### 9.3 Debug Exporter
 - [ ] Create src/output/debug_export.py
@@ -370,12 +370,12 @@
 - [ ] Write to ~/Videos/debug/
 
 ### 9.4 Output Integration
-- [ ] Connect Generate Kdenlive button to generator
-- [ ] Convert rally list to segments format
-- [ ] Call generator with video path, segments, profile
-- [ ] Show success message with file paths
-- [ ] Auto-export debug JSON after generation
-- [ ] **GIT CHECKPOINT**: Commit "Integrate output generation with application"
+- [x] Connect Generate Kdenlive button to generator
+- [x] Convert rally list to segments format
+- [x] Call generator with video path, segments, profile
+- [x] Show success message with file paths
+- [ ] Auto-export debug JSON after generation (deferred)
+- [x] **GIT CHECKPOINT**: Commit "Integrate output generation with application"
 
 ---
 
@@ -475,8 +475,8 @@
 | 5 | Main Window - Editing Mode | 2 | Complete |
 | 6 | Modal Dialogs | 2 | Complete |
 | 7 | Session Management | 2 | Complete |
-| 8 | Final Review Mode | 2 | Not Started |
-| 9 | Output Generation | 2 | Not Started |
+| 8 | Final Review Mode | 2 | Complete |
+| 9 | Output Generation | 2 | Complete |
 | 10 | Polish & Edge Cases | 1 | Not Started |
 | 11 | Testing | 1 | Not Started |
 | 12 | Documentation & Release | 1 | Not Started |
@@ -501,4 +501,4 @@
 ---
 
 *Total Tasks: ~215 (including checkpoints)*
-*Completed: ~170 (Phase 0-6)*
+*Completed: ~200 (Phase 0-9)*
