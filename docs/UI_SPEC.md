@@ -1,9 +1,9 @@
 # UI/UX Specification Document
 ## Pickleball Video Editor Tool
 
-**Version:** 2.0
+**Version:** 2.1
 **Date:** 2026-01-14
-**Status:** Revised - Design Review Complete
+**Status:** Revised - Keyboard Shortcuts Added
 
 ---
 
@@ -959,20 +959,39 @@ When status changes (WAITING ↔ IN RALLY):
 
 ## 9. Keyboard and Mouse Interaction
 
-### 9.1 Mouse-Only Application Controls
+### 9.1 Global Keyboard Shortcuts (Editing Mode)
 
-All application functions are mouse-only to avoid conflicts with MPV hotkeys:
-- All buttons are clicked
+The application implements global keyboard shortcuts that work throughout the editing mode, regardless of button focus state. All rally buttons have `NoFocus` policy to ensure shortcuts always work.
+
+**Playback Control:**
+
+| Key | Action | Notes |
+|-----|--------|-------|
+| Space | Pause/Unpause video | Toggle playback state |
+| ← (Left Arrow) | Seek back 5 seconds | Same as MPV default |
+| → (Right Arrow) | Seek forward 5 seconds | Same as MPV default |
+
+**Rally Actions:**
+
+| Key | Action | When Available |
+|-----|--------|----------------|
+| C | Rally Start | When status is WAITING |
+| S | Server Wins | When status is IN RALLY |
+| R | Receiver Wins | When status is IN RALLY |
+| U | Undo | When there is action to undo (also pauses video) |
+
+**Important Notes:**
+- Shortcuts only work in editing mode, NOT in review mode
+- All rally buttons have `setFocusPolicy(Qt.FocusPolicy.NoFocus)` to prevent visual focus indication that would confuse users
+- Keyboard shortcuts work even if a button appears focused from mouse interaction
+- Undo (U) automatically pauses video playback for review
+
+### 9.2 Mouse Controls
+
+All application functions are fully accessible via mouse:
+- All buttons are clickable
 - Text inputs accept keyboard input when focused
-- No application keyboard shortcuts
-
-### 9.2 MPV Keyboard Controls (Preserved)
-
-| Key | Action |
-|-----|--------|
-| ← | Skip back 5 seconds |
-| → | Skip forward 5 seconds |
-| Space | Toggle play/pause (MPV default) |
+- Rally buttons show hover states despite NoFocus policy
 
 ### 9.3 Dialog Keyboard Behavior
 
@@ -1115,6 +1134,6 @@ All states have non-color redundancy:
 
 ---
 
-*Document Version: 2.0*
+*Document Version: 2.1*
 *Created: 2026-01-14*
-*Revised: 2026-01-14 (Design Review)*
+*Revised: 2026-01-14 (Keyboard Shortcuts Added)*

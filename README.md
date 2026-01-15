@@ -49,6 +49,8 @@ sudo apt install libmpv-dev ffmpeg libqt6-dev python3.13
 - Qt6 libraries
 - Python 3.13+
 
+**Note:** The application forces X11/XCB mode for video playback compatibility. Wayland users will run through XWayland automatically.
+
 ## Installation
 
 1. **Clone the repository:**
@@ -117,7 +119,7 @@ pickleball-editor
 
 5. **Export**
    - Generates `{video}_rallies.kdenlive` project file
-   - Generates `{video}_scores.srt` subtitle file
+   - Generates `{video}_rallies.kdenlive.ass` subtitle file (ASS format)
    - Files saved to `~/Videos/pickleball/`
 
 ### Playback Controls
@@ -130,7 +132,18 @@ pickleball-editor
 | ▶ | Skip forward 1 second |
 | ▶▶ | Skip forward 5 seconds |
 | Speed | 0.5x / 1x / 2x playback |
-| Arrow Keys | ±5 second skip (MPV native) |
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| Space | Pause/unpause video |
+| Left Arrow | Seek back 5 seconds |
+| Right Arrow | Seek forward 5 seconds |
+| C | Rally Start |
+| S | Server Wins |
+| R | Receiver Wins |
+| U | Undo (also pauses video) |
 
 ### Session Management
 
@@ -145,20 +158,25 @@ Sessions are automatically saved to `~/.local/share/pickleball-editor/sessions/`
 
 The generated project file includes:
 - Rally clips extracted from the original video
-- Score overlay subtitles
+- Score overlay subtitles (ASS format)
 - Proper timeline structure for Kdenlive 25.x
 
-### SRT Subtitles (.srt)
+**Rally Timing:** Rally clips include padding for smooth transitions:
+- Cuts placed **1 second BEFORE** the marked rally start
+- Cuts placed **1 second AFTER** the marked rally end
 
-Standard SRT format subtitles showing the score at each rally:
+### ASS Subtitles (.ass)
+
+Advanced SubStation Alpha (ASS) format subtitles showing the score at each rally with styling:
 ```
-1
-00:00:00,000 --> 00:00:05,500
-0-0-2
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, ...
+Style: Default,IBM Plex Sans,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,5,10,10,10,1
 
-2
-00:00:05,500 --> 00:00:12,300
-1-0-2
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:05.50,Default,,0,0,0,,0-0-2
+Dialogue: 0,0:00:05.50,0:00:12.30,Default,,0,0,0,,1-0-2
 ```
 
 ## Project Structure
@@ -185,7 +203,7 @@ pickleball_editing/
 │   │   └── styles/          # Court Green theme
 │   └── output/              # Export generators
 │       ├── kdenlive_generator.py  # Kdenlive XML
-│       └── subtitle_generator.py  # SRT subtitles
+│       └── subtitle_generator.py  # ASS subtitles
 ├── tests/                   # Test suite (54+ tests)
 ├── docs/                    # Design documents
 ├── requirements.txt         # Python dependencies

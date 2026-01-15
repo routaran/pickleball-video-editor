@@ -18,6 +18,41 @@
 
 ## 1. Use Cases
 
+### 1.0 Timing Constants and Padding
+
+#### Rally Timestamp Padding
+
+When users mark rally start and end timestamps, the system applies automatic padding to capture the complete rally action:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| **START_PADDING** | -1.0 seconds | Rally cut begins **1 second before** the marked start point |
+| **END_PADDING** | +1.0 seconds | Rally cut ends **1 second after** the marked end point |
+
+**Rationale:**
+- **Pre-rally padding (1.0s):** Captures the server's preparation, stance, and serve motion before the ball is struck
+- **Post-rally padding (1.0s):** Captures the follow-through, ball landing, and immediate reaction after the point ends
+
+**Example Timeline:**
+```
+User marks:           Rally Start                    Rally End
+                           ↓                             ↓
+                    [00:12.500]                    [00:18.200]
+
+Actual cut:    ←1.0s→      |                             |      ←1.0s→
+               [00:11.500] ──────────────────────────── [00:19.200]
+                    ↑                                        ↑
+               Cut starts                               Cut ends
+               (applied padding)                    (applied padding)
+```
+
+**Implementation Location:**
+- Defined as constants in `src/core/rally_manager.py`
+- Applied automatically by `RallyManager._apply_start_padding()` and `RallyManager._apply_end_padding()`
+- Not user-configurable (ensures consistency across all edits)
+
+---
+
 ### 1.1 Use Case Diagram Overview
 
 ```
@@ -164,7 +199,7 @@
 1. User watches video, sees server ready to serve
 2. User clicks "Rally Start" button
 3. System captures current video timestamp
-4. System applies -0.5s padding to start time
+4. System applies -1.0s padding to start time (rally cut begins 1 second before marked point)
 5. System records rally start frame
 6. System updates status to "IN RALLY"
 7. System highlights Server Wins/Receiver Wins buttons
@@ -190,7 +225,7 @@
 1. User watches rally conclude, server wins point
 2. User clicks "Server Wins" button
 3. System captures current video timestamp
-4. System applies +1.0s padding to end time
+4. System applies +1.0s padding to end time (rally cut ends 1 second after marked point)
 5. System records rally end frame
 6. System calls ScoreState.server_wins()
 7. System creates Rally object with score
@@ -848,8 +883,8 @@
 │ - current_rally_start: Optional[int]  # Frame number          │
 │ - action_stack: List[Action]          # For undo              │
 │ - fps: float                          # Video frame rate      │
-│ - start_padding: float = 0.5          # Seconds               │
-│ - end_padding: float = 1.0            # Seconds               │
+│ - start_padding: float = 1.0          # Seconds (pre-rally)   │
+│ - end_padding: float = 1.0            # Seconds (post-rally)  │
 ├───────────────────────────────────────────────────────────────┤
 │ + __init__(fps: float)                                        │
 │ + start_rally(frame: int) -> bool                             │
@@ -957,22 +992,137 @@
 
 ---
 
-### 3.5 UI Widget Classes
+### 3.5 Main Window Architecture
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                       MainWindow                              │
+│                    (extends QMainWindow)                      │
+├───────────────────────────────────────────────────────────────┤
+│ - video_container: _VideoContainer                            │
+│ - rally_manager: RallyManager                                 │
+│ - score_state: ScoreState                                     │
+│ - session_manager: SessionManager                             │
+│ - playback_controls: PlaybackControls                         │
+│ - status_overlay: StatusOverlay                               │
+├───────────────────────────────────────────────────────────────┤
+│ # Lifecycle Methods                                           │
+│ + __init__()                                                  │
+│ + showEvent(event: QShowEvent) -> None                        │
+│   • Deferred video loading after widget is fully shown       │
+│   • Ensures valid native window ID for MPV embedding         │
+│                                                               │
+│ + keyPressEvent(event: QKeyEvent) -> None                     │
+│   • Global keyboard shortcut handling (Space, Left, Right)   │
+│   • Called for all keyboard input regardless of focus        │
+│                                                               │
+│ + closeEvent(event: QCloseEvent) -> None                      │
+│   • Check for unsaved changes                                │
+│   • Prompt user to save session                              │
+│   • Clean shutdown of MPV player                             │
+├───────────────────────────────────────────────────────────────┤
+│ # Rally Management                                            │
+│ + on_rally_start() -> None                                    │
+│ + on_server_wins() -> None                                    │
+│ + on_receiver_wins() -> None                                  │
+│ + on_undo() -> None                                           │
+├───────────────────────────────────────────────────────────────┤
+│ # UI Update Methods                                           │
+│ + update_ui() -> None                                         │
+│ + update_button_states() -> None                              │
+│ + update_score_display() -> None                              │
+└───────────────────────────────────────────────────────────────┘
+                              │
+                              │ contains
+                              ▼
+┌───────────────────────────────────────────────────────────────┐
+│                    _VideoContainer                            │
+│                    (extends QWidget)                          │
+├───────────────────────────────────────────────────────────────┤
+│ - video_widget: VideoWidget                                   │
+├───────────────────────────────────────────────────────────────┤
+│ # Purpose:                                                    │
+│ • Provides proper resize handling for embedded MPV           │
+│ • Maintains aspect ratio on window resize                    │
+│ • Isolated container for video widget lifecycle              │
+│                                                               │
+│ + resizeEvent(event: QResizeEvent) -> None                    │
+│   • Triggers MPV window resize on container resize           │
+│   • Ensures video stays properly embedded                    │
+└───────────────────────────────────────────────────────────────┘
+
+Architecture Notes:
+─────────────────────────────────────────────────────────────────
+1. DEFERRED VIDEO LOADING:
+   - VideoWidget does NOT load video in __init__()
+   - Loading deferred to MainWindow.showEvent()
+   - Ensures widget has valid WinId before MPV embedding
+   - Prevents race condition with X11/XCB window handles
+
+2. GLOBAL KEYBOARD SHORTCUTS:
+   - MainWindow.keyPressEvent() handles Space, Left, Right
+   - All rally buttons have Qt.FocusPolicy.NoFocus
+   - Prevents buttons from stealing keyboard input
+   - Ensures consistent playback control behavior
+
+3. VIDEO CONTAINER PATTERN:
+   - _VideoContainer wraps VideoWidget
+   - resizeEvent() properly triggers MPV resize
+   - Isolates video widget from main window layout changes
+   - Maintains proper embedding on window resize
+
+4. MPV KEYBOARD HANDLING:
+   - MPV keyboard bindings disabled (input-default-bindings=no)
+   - All input handled by Qt event system
+   - Prevents MPV from intercepting Qt keyboard events
+   - Ensures predictable keyboard behavior
+```
+
+---
+
+### 3.6 UI Widget Classes
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │                       VideoWidget                             │
 │                    (extends QWidget)                          │
 ├───────────────────────────────────────────────────────────────┤
-│ - player: mpv.MPV                                             │
+│ - player: mpv.MPV | None                                      │
 │ - fps: float                                                  │
+│ - video_path: str | None                                      │
+│ - _player_ready: bool                                         │
 ├───────────────────────────────────────────────────────────────┤
 │ # Signals                                                     │
 │ + position_changed: pyqtSignal(float)                         │
 │ + duration_changed: pyqtSignal(float)                         │
 │ + eof_reached: pyqtSignal()                                   │
 ├───────────────────────────────────────────────────────────────┤
+│ # Lifecycle Methods                                           │
+│ + __init__() -> None                                          │
+│   • Sets up widget, does NOT create MPV player               │
+│   • Defers player creation to showEvent()                    │
+│                                                               │
+│ + showEvent(event: QShowEvent) -> None                        │
+│   • Creates MPV player when widget is first shown            │
+│   • Ensures valid WinId exists before embedding              │
+│   • Forces X11/XCB mode for reliable embedding               │
+│   • Loads video if path was set before show                  │
+│                                                               │
+│ + _initialize_player() -> None                                │
+│   • Creates mpv.MPV instance with embedding config           │
+│   • Sets wid to widget's native window ID                    │
+│   • Disables MPV keyboard bindings                           │
+│   • Registers property observers                             │
+│                                                               │
+│ + _on_property_change(name: str, value: Any) -> None          │
+│   • MPV property observer callback                           │
+│   • Emits Qt signals for position/duration changes           │
+├───────────────────────────────────────────────────────────────┤
+│ # Playback Control                                            │
 │ + load(path: str) -> None                                     │
+│   • If player ready: Load immediately                        │
+│   • If not ready: Store path, load in showEvent()            │
+│                                                               │
 │ + play() -> None                                              │
 │ + pause() -> None                                             │
 │ + toggle_pause() -> None                                      │
@@ -986,6 +1136,31 @@
 │ + get_duration() -> float                                     │
 │ + show_osd(message: str, duration: float) -> None             │
 └───────────────────────────────────────────────────────────────┘
+
+VideoWidget Implementation Notes:
+─────────────────────────────────────────────────────────────────
+1. DEFERRED MPV INITIALIZATION:
+   - MPV player is None until widget is shown
+   - showEvent() calls _initialize_player()
+   - Ensures valid WinId before MPV embedding
+   - Prevents "invalid WinId" errors
+
+2. X11/XCB FORCED MODE:
+   - Sets vo='gpu' and gpu-context='x11'
+   - Ensures X11 embedding on Wayland
+   - Provides reliable embedding behavior
+   - Required for proper video display
+
+3. MPV KEYBOARD BINDINGS DISABLED:
+   - input-default-bindings=no
+   - input-vo-keyboard=no
+   - Prevents MPV from handling keyboard input
+   - Qt handles all keyboard events instead
+
+4. PROPERTY OBSERVERS:
+   - observe_property() for time-pos, duration
+   - Callbacks emit Qt signals
+   - Enables UI updates from MPV state changes
 
 ┌───────────────────────────────────────────────────────────────┐
 │                      RallyButton                              │
@@ -1366,6 +1541,193 @@
            │
            └──────────────▶ VideoWidget.seek(last_position)
 ```
+
+---
+
+## 6. Architecture Patterns and Implementation Details
+
+### 6.1 Widget Lifecycle Pattern
+
+#### Problem
+MPV requires a valid native window ID (WinId) for video embedding. Creating the MPV player in `__init__()` fails because the widget hasn't been shown yet and doesn't have a valid WinId.
+
+#### Solution: Deferred Initialization Pattern
+
+```python
+class VideoWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.player = None  # Don't create MPV yet
+        self.video_path = None
+        self._player_ready = False
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Called when widget is first shown - NOW we have a valid WinId."""
+        super().showEvent(event)
+        if not self._player_ready:
+            self._initialize_player()
+            if self.video_path:  # Load deferred video
+                self.player.loadfile(self.video_path)
+
+    def _initialize_player(self) -> None:
+        """Create MPV player with valid WinId."""
+        wid = int(self.winId())  # Now this is valid!
+        self.player = mpv.MPV(wid=wid, ...)
+        self._player_ready = True
+```
+
+**MainWindow Integration:**
+```python
+class MainWindow(QMainWindow):
+    def __init__(self, video_path: str, ...):
+        super().__init__()
+        self.video_container = _VideoContainer()
+        self.video_widget = self.video_container.video_widget
+        # DON'T load video here!
+        self.pending_video_path = video_path
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """After window is shown, video widget has valid WinId."""
+        super().showEvent(event)
+        if self.pending_video_path:
+            self.video_widget.load(self.pending_video_path)
+            self.pending_video_path = None
+```
+
+---
+
+### 6.2 Keyboard Input Handling Pattern
+
+#### Problem
+Rally buttons and other controls receive focus, stealing keyboard input. User expects Space/Left/Right to always control playback, but when a button has focus, Qt routes the event to that button instead.
+
+#### Solution: Global KeyPressEvent + NoFocus Policy
+
+```python
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        # Set all buttons to NoFocus
+        self.rally_start_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.server_wins_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.receiver_wins_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # ...
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Handle keyboard shortcuts globally (not intercepted by focused widgets)."""
+        key = event.key()
+        if key == Qt.Key.Key_Space:
+            self.video_widget.toggle_pause()
+            event.accept()
+        elif key == Qt.Key.Key_Left:
+            self.video_widget.frame_back_step()
+            event.accept()
+        elif key == Qt.Key.Key_Right:
+            self.video_widget.frame_step()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+```
+
+**MPV Keyboard Bindings Disabled:**
+```python
+self.player = mpv.MPV(
+    wid=wid,
+    input_default_bindings='no',  # Disable MPV's default key bindings
+    input_vo_keyboard='no',        # Disable video output keyboard input
+    # ...
+)
+```
+
+**Why This Works:**
+1. NoFocus policy prevents buttons from receiving keyboard focus
+2. MainWindow.keyPressEvent() receives ALL keyboard events
+3. MPV doesn't intercept keys (bindings disabled)
+4. Provides consistent, predictable keyboard behavior
+
+---
+
+### 6.3 Video Container Resize Pattern
+
+#### Problem
+When main window is resized, the embedded MPV video doesn't resize properly. MPV needs explicit notification of size changes to update the embedded window.
+
+#### Solution: Container Widget with resizeEvent()
+
+```python
+class _VideoContainer(QWidget):
+    """Container that properly handles resize events for embedded MPV."""
+
+    def __init__(self):
+        super().__init__()
+        self.video_widget = VideoWidget()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.video_widget)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Propagate resize to video widget."""
+        super().resizeEvent(event)
+        # VideoWidget's resizeEvent will handle MPV update
+        # This ensures proper resize chain
+```
+
+```python
+class VideoWidget(QWidget):
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """MPV automatically resizes based on widget size."""
+        super().resizeEvent(event)
+        # MPV observes widget size via X11/XCB
+        # No explicit resize command needed
+```
+
+**Why This Works:**
+- Container widget isolates video widget from layout changes
+- resizeEvent() properly propagates through widget hierarchy
+- MPV observes window size changes via X11/XCB
+- Maintains proper video aspect ratio on resize
+
+---
+
+### 6.4 MPV Embedding Configuration
+
+#### X11/XCB Forced Mode (Required on Manjaro/Arch)
+
+```python
+self.player = mpv.MPV(
+    wid=wid,
+    vo='gpu',                    # Use GPU-accelerated video output
+    gpu_context='x11',           # Force X11 context (even on Wayland)
+    input_default_bindings='no', # Disable MPV key bindings
+    input_vo_keyboard='no',      # Disable video output keyboard
+    osd_level=0,                 # Disable MPV's built-in OSD
+)
+```
+
+**Why X11 Mode is Required:**
+- Wayland doesn't support foreign window embedding
+- MPV needs X11/XCB for WinId-based embedding
+- `gpu-context='x11'` forces XWayland compatibility
+- Works reliably on both X11 and Wayland sessions
+
+**Property Observers:**
+```python
+self.player.observe_property('time-pos', self._on_time_pos_change)
+self.player.observe_property('duration', self._on_duration_change)
+self.player.observe_property('eof-reached', self._on_eof_reached)
+```
+
+---
+
+### 6.5 Summary: Key Architectural Decisions
+
+| Pattern | Problem Solved | Implementation |
+|---------|----------------|----------------|
+| **Deferred Initialization** | Invalid WinId at widget creation | showEvent() creates MPV player |
+| **Global KeyPressEvent** | Focus stealing by buttons | NoFocus policy + mainwindow handler |
+| **Container Widget** | Improper resize handling | _VideoContainer with resizeEvent() |
+| **X11/XCB Forced Mode** | Wayland embedding issues | gpu-context='x11' forces XWayland |
+| **Disabled MPV Bindings** | Keyboard event conflicts | input-default-bindings='no' |
 
 ---
 

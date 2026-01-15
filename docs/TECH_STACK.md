@@ -18,6 +18,7 @@
 | Data Format | JSON | - |
 | Video Probing | ffprobe (FFmpeg) | Latest |
 | Platform | Manjaro Linux (Arch-based) | - |
+| Qt Platform Plugin | XCB (X11) | Forced |
 
 ---
 
@@ -34,6 +35,9 @@ sudo pacman -S qt6-base
 
 # For python-mpv
 sudo pacman -S mpv libmpv
+
+# X11/XCB dependencies (required for MPV embedding)
+sudo pacman -S libxcb qt6-wayland
 ```
 
 ### 2.2 Python Packages (pip)
@@ -134,6 +138,7 @@ QMainWindow
 **MPV Embedding in PyQt6:**
 ```python
 import mpv
+import locale
 
 class VideoWidget(QWidget):
     def __init__(self, parent=None):
@@ -141,15 +146,33 @@ class VideoWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
 
-        self.player = mpv.MPV(
-            wid=str(int(self.winId())),
-            vo='gpu',
-            hwdec='auto',
-            input_default_bindings=True,
-            input_vo_keyboard=True,  # Allow arrow keys
-            osd_level=1
-        )
+        # MPV player created in showEvent after widget is displayed
+        # to ensure valid window ID
+        self.player = None
+
+    def showEvent(self, event):
+        """Initialize MPV player after widget is shown."""
+        super().showEvent(event)
+        if self.player is None:
+            # Enforce C locale for MPV numeric parsing
+            locale.setlocale(locale.LC_NUMERIC, "C")
+
+            self.player = mpv.MPV(
+                wid=str(int(self.winId())),
+                vo='gpu',
+                hwdec='auto',
+                # Disable MPV keyboard input - Qt handles all input
+                input_default_bindings=False,
+                input_vo_keyboard=False,
+                osd_level=1
+            )
 ```
+
+**CRITICAL Platform Requirements:**
+- **X11/XCB Platform**: Application enforces `QT_QPA_PLATFORM=xcb` before Qt imports (especially important on Wayland systems)
+- **Locale**: `LC_NUMERIC=C` must be set before MPV initialization to prevent numeric parsing issues with locales using comma as decimal separator
+- **Deferred Creation**: MPV player must be created in `showEvent()` after widget is visible to ensure valid window ID
+- **Keyboard Input**: MPV's default keyboard bindings are disabled; all keyboard input is handled by Qt
 
 **Key MPV Features Used:**
 - `wid` parameter for embedding in Qt widget
@@ -190,12 +213,12 @@ Located at `.claude/skills/kdenlive-generator/scripts/generate_project.py`
 
 **Output Files:**
 - `.kdenlive` - MLT XML project file
-- `.srt` - Subtitle file with scores
+- `.ass` - ASS subtitle file with scores (Advanced SubStation Alpha format for better styling support in Kdenlive)
 
 **Key Functions to Reuse:**
 - `probe_video()` - Extract video metadata via ffprobe
 - `frames_to_timecode()` - Convert frames to `HH:MM:SS.mmm`
-- `generate_srt()` - Create subtitle content
+- `generate_ass()` - Create ASS subtitle content with styling
 - `generate_kdenlive_xml()` - Create MLT XML
 
 ### 4.4 Application Core
@@ -411,7 +434,7 @@ pickleball-editor/
 │   └── output/
 │       ├── __init__.py
 │       ├── kdenlive_generator.py   # Kdenlive XML generation
-│       ├── subtitle_generator.py   # SRT generation
+│       ├── subtitle_generator.py   # ASS subtitle generation
 │       └── debug_export.py         # Debug JSON export
 │
 ├── resources/
@@ -436,9 +459,81 @@ pickleball-editor/
 
 ---
 
-## 7. MPV Integration Details
+## 7. Platform-Specific Requirements
 
-### 7.1 Embedding MPV in PyQt6
+### 7.1 X11/XCB Platform Forcing
+
+**Problem**: On Wayland systems, MPV embedding via window ID (`wid`) requires X11 compatibility mode.
+
+**Solution**: Force Qt to use XCB platform before any Qt imports:
+
+```python
+# main.py - BEFORE importing PyQt6
+import os
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+
+# Now safe to import Qt
+from PyQt6.QtWidgets import QApplication
+```
+
+**Alternative**: Enforce at multiple layers:
+```python
+# app.py - Enforce again at QApplication creation
+def create_application():
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    return QApplication(sys.argv)
+```
+
+### 7.2 Locale Configuration for MPV
+
+**Problem**: MPV's numeric parsing breaks when `LC_NUMERIC` uses comma as decimal separator (e.g., German locale: "1,5" instead of "1.5").
+
+**Solution**: Set `LC_NUMERIC=C` before MPV initialization:
+
+```python
+import locale
+
+# Option 1: Set globally in main.py (before any MPV usage)
+locale.setlocale(locale.LC_NUMERIC, "C")
+
+# Option 2: Set in app.py (application-level)
+def create_application():
+    locale.setlocale(locale.LC_NUMERIC, "C")
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    return QApplication(sys.argv)
+
+# Option 3: Set in player.py (just before MPV creation)
+class VideoWidget(QWidget):
+    def showEvent(self, event):
+        locale.setlocale(locale.LC_NUMERIC, "C")
+        self.player = mpv.MPV(...)
+```
+
+**Recommended**: Set at all three levels for maximum robustness.
+
+### 7.3 MPV Keyboard Input Handling
+
+**Problem**: MPV's default keyboard bindings conflict with Qt's keyboard handling.
+
+**Solution**: Disable MPV keyboard input, let Qt handle everything:
+
+```python
+self.player = mpv.MPV(
+    # Disable MPV's default keyboard bindings (space for pause, arrow keys, etc.)
+    input_default_bindings=False,
+    # Disable MPV's video output keyboard events
+    input_vo_keyboard=False,
+    # ... other options
+)
+```
+
+All keyboard shortcuts (Space, Left/Right arrows, etc.) are now handled by Qt's `keyPressEvent()`.
+
+---
+
+## 8. MPV Integration Details
+
+### 8.1 Embedding MPV in PyQt6
 
 ```python
 class VideoWidget(QWidget):
@@ -454,21 +549,33 @@ class VideoWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
 
-        # Create MPV player
-        self.player = mpv.MPV(
-            wid=str(int(self.winId())),
-            vo='gpu',
-            hwdec='auto-safe',
-            input_default_bindings=True,
-            input_vo_keyboard=True,
-            osd_level=1,
-            keep_open=True,
-            idle=True
-        )
+        # MPV player created in showEvent - deferred until widget is shown
+        self.player = None
 
-        # Observe properties
-        self.player.observe_property('time-pos', self._on_position)
-        self.player.observe_property('duration', self._on_duration)
+    def showEvent(self, event):
+        """Initialize MPV player after widget is shown."""
+        super().showEvent(event)
+        if self.player is None:
+            # CRITICAL: Enforce C locale for MPV numeric parsing
+            import locale
+            locale.setlocale(locale.LC_NUMERIC, "C")
+
+            # Create MPV player with embedded window
+            self.player = mpv.MPV(
+                wid=str(int(self.winId())),
+                vo='gpu',
+                hwdec='auto-safe',
+                # CRITICAL: Disable MPV keyboard input - Qt handles all input
+                input_default_bindings=False,
+                input_vo_keyboard=False,
+                osd_level=1,
+                keep_open=True,
+                idle=True
+            )
+
+            # Observe properties
+            self.player.observe_property('time-pos', self._on_position)
+            self.player.observe_property('duration', self._on_duration)
 
     def load(self, path: str):
         self.player.play(path)
@@ -506,7 +613,7 @@ class VideoWidget(QWidget):
         return self.player.duration or 0.0
 ```
 
-### 7.2 Frame-Accurate Timestamps
+### 8.2 Frame-Accurate Timestamps
 
 ```python
 def seconds_to_frame(seconds: float, fps: float) -> int:
@@ -528,11 +635,11 @@ def frame_to_timecode(frame: int, fps: float) -> str:
 
 ---
 
-## 8. Build and Distribution
+## 9. Build and Distribution
 
 > **Note:** Development setup instructions (virtual environment, installation, running the app) are in `README.md`.
 
-### 8.1 PyInstaller (Optional)
+### 9.1 PyInstaller (Optional)
 
 For standalone executable distribution:
 
@@ -547,21 +654,21 @@ pyinstaller --onefile \
 
 ---
 
-## 9. Testing Strategy
+## 10. Testing Strategy
 
-### 9.1 Unit Tests
+### 10.1 Unit Tests
 
 - **Score State Machine**: Test all scoring rules for singles/doubles
 - **Rally Manager**: Test rally start/end, undo functionality
 - **Kdenlive Generator**: Test XML output validity
 
-### 9.2 Integration Tests
+### 10.2 Integration Tests
 
 - **MPV Integration**: Test video loading, seeking, frame stepping
 - **Session Persistence**: Test save/load cycle
 - **End-to-End**: Mark rallies, generate Kdenlive, verify output
 
-### 9.3 Manual Testing
+### 10.3 Manual Testing
 
 - Test with real pickleball footage
 - Verify Kdenlive opens generated projects without errors
@@ -569,11 +676,15 @@ pyinstaller --onefile \
 
 ---
 
-## 10. Risk Mitigation
+## 11. Risk Mitigation
 
 | Risk | Mitigation |
 |------|------------|
 | MPV embedding issues | Fall back to IPC socket if embedding fails |
+| Wayland MPV embedding failure | Force XCB platform via `QT_QPA_PLATFORM=xcb` |
+| MPV numeric parsing issues | Enforce `LC_NUMERIC=C` at multiple levels (main.py, app.py, player.py) |
+| Invalid window ID on embed | Defer MPV creation until widget's `showEvent()` |
+| MPV/Qt keyboard conflicts | Disable MPV keyboard bindings, use Qt exclusively |
 | PyQt6 version conflicts | Pin specific version in requirements.txt |
 | Kdenlive XML format changes | Template-based generation, easy to update |
 | Large video file handling | Use memory-mapped file access, lazy loading |
@@ -585,7 +696,8 @@ pyinstaller --onefile \
 ### Kdenlive Generator
 - **Location:** `.claude/skills/kdenlive-generator/scripts/generate_project.py`
 - **Status:** Fully functional, can be imported directly
-- **Capabilities:** Generates valid .kdenlive files with cuts and SRT subtitles
+- **Capabilities:** Generates valid .kdenlive files with cuts and ASS subtitles
+- **Note:** Updated from SRT to ASS subtitle format for better styling support in Kdenlive
 
 ### Template
 - **Location:** `.claude/skills/kdenlive-generator/templates/base_template.kdenlive`
@@ -594,5 +706,6 @@ pyinstaller --onefile \
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 1.1*
 *Created: 2026-01-14*
+*Updated: 2026-01-14 - Added platform-specific requirements (X11/XCB forcing, locale handling, keyboard input), deferred MPV creation, ASS subtitle format*
