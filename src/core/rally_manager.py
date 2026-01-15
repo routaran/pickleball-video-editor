@@ -8,8 +8,8 @@ This module manages rally marking during video editing with:
 - JSON serialization for session persistence
 
 Rally Padding:
-- Start: -0.5 seconds (to capture serve preparation)
-- End: +1.0 seconds (to capture ball settling)
+- Start: -1.0 seconds (cut 1 second before marked start)
+- End: +1.0 seconds (cut 1 second after marked end)
 
 Undo Support:
 - RALLY_START: Clears current rally-in-progress state
@@ -29,7 +29,7 @@ class RallyManager:
     """Manages rally tracking with undo support for the video editor.
 
     This class handles:
-    - Starting rallies (with -0.5s padding)
+    - Starting rallies (with -1.0s padding)
     - Ending rallies (with +1.0s padding)
     - Undo/redo with action stack
     - Rally timing adjustments
@@ -43,8 +43,8 @@ class RallyManager:
     """
 
     # Timing padding constants (in seconds)
-    START_PADDING = -0.5  # Add padding before rally start
-    END_PADDING = 1.0     # Add padding after rally end
+    START_PADDING = -1.0  # Cut 1 second before marked rally start
+    END_PADDING = 1.0     # Cut 1 second after marked rally end
 
     def __init__(self, fps: float = 60.0) -> None:
         """Initialize the rally manager.

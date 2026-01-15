@@ -8,6 +8,29 @@ The application flow is:
 3. MainWindow handles session management and review mode
 """
 
+# CRITICAL: Force X11/XCB backend BEFORE any Qt imports.
+# MPV embedding is most reliable with X11. On Wayland, the window IDs
+# are not directly usable by MPV's video output drivers.
+import os
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+
+# CRITICAL: Set LC_NUMERIC BEFORE any imports.
+# MPV requires LC_NUMERIC to be "C" or it will crash with segfault.
+# Use ctypes to call C library setlocale directly.
+import ctypes
+import locale
+from pathlib import Path
+
+os.environ["LC_NUMERIC"] = "C"
+locale.setlocale(locale.LC_NUMERIC, "C")
+_libc = ctypes.CDLL("libc.so.6")
+_libc.setlocale.restype = ctypes.c_char_p
+_result = _libc.setlocale(1, b"C")  # LC_NUMERIC = 1 on Linux
+
+# Write to file in the project directory to prove this code runs
+_debug_file = Path(__file__).parent.parent / "DEBUG_LOCALE.txt"
+_debug_file.write_text(f"main.py executed at {Path(__file__)}\nsetlocale returned: {_result}\n")
+
 import sys
 
 from src import __version__
@@ -26,6 +49,7 @@ def main() -> int:
     # Create and configure the application
     app, config = create_application()
 
+    print(">>> CODE VERSION: 2026-01-14-FIX <<<")
     print(f"Pickleball Video Editor v{__version__}")
     print("Starting application...")
 

@@ -28,7 +28,7 @@ All actions trigger score state updates and rally manager tracking.
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtGui import QCloseEvent, QKeyEvent, QResizeEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -85,6 +85,57 @@ from src.video.probe import probe_video, ProbeError
 
 
 __all__ = ["MainWindow"]
+
+
+class _VideoContainer(QWidget):
+    """Container widget that manages VideoWidget and StatusOverlay layout.
+
+    This container uses absolute positioning with proper resize handling
+    to ensure the video widget fills the container while the status overlay
+    remains positioned at the top-left corner.
+    """
+
+    def __init__(
+        self,
+        video_widget: "VideoWidget",
+        status_overlay: "StatusOverlay",
+        parent: QWidget | None = None
+    ) -> None:
+        """Initialize the video container.
+
+        Args:
+            video_widget: The VideoWidget to embed
+            status_overlay: The StatusOverlay to position on top
+            parent: Parent widget (optional)
+        """
+        super().__init__(parent)
+        self.setObjectName("video_container")
+
+        # Store references and reparent widgets
+        self._video_widget = video_widget
+        self._status_overlay = status_overlay
+        video_widget.setParent(self)
+        status_overlay.setParent(self)
+
+        # Ensure overlay is on top
+        status_overlay.raise_()
+
+        # Set minimum size
+        self.setMinimumSize(640, 480)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Handle resize events to keep video widget filling the container.
+
+        Args:
+            event: Resize event from Qt
+        """
+        super().resizeEvent(event)
+
+        # Video widget fills the entire container
+        self._video_widget.setGeometry(0, 0, self.width(), self.height())
+
+        # Status overlay stays at top-left with padding
+        self._status_overlay.move(SPACE_MD, SPACE_MD)
 
 
 class MainWindow(QMainWindow):
@@ -149,6 +200,9 @@ class MainWindow(QMainWindow):
         self._in_review_mode = False
         self._rally_playback_timer: QTimer | None = None
 
+        # Flag to track if video has been loaded (deferred until showEvent)
+        self._video_loaded = False
+
         # Initialize core components (may restore from session)
         self._init_core_components()
 
@@ -158,8 +212,8 @@ class MainWindow(QMainWindow):
         # Connect signals
         self._connect_signals()
 
-        # Load video
-        self._load_video()
+        # NOTE: Video loading is deferred to showEvent() to ensure
+        # the widget has a valid native window ID for MPV embedding.
 
         # Initial state update
         self._update_display()
@@ -276,21 +330,12 @@ class MainWindow(QMainWindow):
         Returns:
             Container widget with video player and overlay
         """
-        container = QWidget()
-        container.setObjectName("video_container")
+        # Create video widget and status overlay
+        self.video_widget = VideoWidget()
+        self.status_overlay = StatusOverlay()
 
-        # Use absolute positioning for overlay on top of video
-        # VideoWidget will be the background, StatusOverlay floats on top
-        self.video_widget = VideoWidget(container)
-        self.video_widget.setGeometry(0, 0, 800, 600)  # Will resize with container
-
-        # Status overlay positioned at top of video
-        self.status_overlay = StatusOverlay(container)
-        self.status_overlay.move(SPACE_MD, SPACE_MD)
-        self.status_overlay.raise_()  # Ensure overlay is on top
-
-        # Set minimum size for video container
-        container.setMinimumSize(640, 480)
+        # Use custom container that handles resize events
+        container = _VideoContainer(self.video_widget, self.status_overlay)
 
         return container
 
@@ -318,11 +363,16 @@ class MainWindow(QMainWindow):
         button_layout = QHBoxLayout()
         button_layout.setSpacing(SPACE_MD)
 
-        # Create rally buttons
+        # Create rally buttons (NoFocus so they don't steal keyboard shortcuts)
         self.btn_rally_start = RallyButton("RALLY START", BUTTON_TYPE_RALLY_START)
         self.btn_server_wins = RallyButton("SERVER WINS", BUTTON_TYPE_SERVER_WINS)
         self.btn_receiver_wins = RallyButton("RECEIVER WINS", BUTTON_TYPE_RECEIVER_WINS)
         self.btn_undo = RallyButton("UNDO", BUTTON_TYPE_UNDO)
+
+        # Prevent buttons from taking focus (keyboard shortcuts handled by MainWindow)
+        for btn in [self.btn_rally_start, self.btn_server_wins,
+                    self.btn_receiver_wins, self.btn_undo]:
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         button_layout.addWidget(self.btn_rally_start)
         button_layout.addWidget(self.btn_server_wins)
@@ -360,11 +410,12 @@ class MainWindow(QMainWindow):
         self.btn_add_comment = QPushButton("Add Comment")
         self.btn_time_expired = QPushButton("Time Expired*")
 
-        # Set object names for styling
+        # Set object names for styling and prevent focus stealing
         for btn in [self.btn_edit_score, self.btn_force_sideout,
                     self.btn_add_comment, self.btn_time_expired]:
             btn.setObjectName("toolbar_button")
             btn.setFont(Fonts.button_other())
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         # Time Expired only for timed games
         if self.config.victory_rule != "timed":
@@ -384,6 +435,7 @@ class MainWindow(QMainWindow):
         for btn in [self.btn_save_session, self.btn_final_review]:
             btn.setObjectName("toolbar_button")
             btn.setFont(Fonts.button_other())
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         layout.addWidget(self.btn_save_session)
         layout.addWidget(self.btn_final_review)
@@ -506,6 +558,9 @@ class MainWindow(QMainWindow):
         self.video_fps = video_info.fps
         self.video_duration = video_info.duration
 
+        # Debug: show actual video properties
+        print(f">>> VIDEO LOADED: fps={video_info.fps}, duration={video_info.duration:.2f}s, frames={video_info.frame_count}")
+
         # Update rally manager with correct fps
         self.rally_manager.fps = self.video_fps
 
@@ -544,6 +599,11 @@ class MainWindow(QMainWindow):
         # Get current video position
         timestamp = self.video_widget.get_position()
 
+        # Debug: Show timing info
+        padded_time = timestamp + self.rally_manager.START_PADDING
+        padded_frame = int(padded_time * self.rally_manager.fps)
+        print(f">>> RALLY START: click_time={timestamp:.2f}s, padded_time={padded_time:.2f}s, frame={padded_frame}, fps={self.rally_manager.fps}")
+
         # Save score snapshot for undo
         score_snapshot = self.score_state.save_snapshot()
 
@@ -553,14 +613,11 @@ class MainWindow(QMainWindow):
         # Mark session as dirty
         self._dirty = True
 
-        # Pause video for precise marking
-        self.video_widget.pause()
-
         # Update UI state
         self._update_display()
 
         # Show feedback
-        self.video_widget.show_osd("Rally started", duration=1.5)
+        self.video_widget.show_osd(f"Rally started at {timestamp:.1f}s", duration=2.0)
 
     @pyqtSlot()
     def on_server_wins(self) -> None:
@@ -576,6 +633,11 @@ class MainWindow(QMainWindow):
 
         # Get current video position
         timestamp = self.video_widget.get_position()
+
+        # Debug: Show timing info
+        padded_time = timestamp + self.rally_manager.END_PADDING
+        padded_frame = int(padded_time * self.rally_manager.fps)
+        print(f">>> SERVER WINS: click_time={timestamp:.2f}s, padded_time={padded_time:.2f}s, frame={padded_frame}, fps={self.rally_manager.fps}")
 
         # Get score before rally ends
         score_at_start = self.score_state.get_score_string()
@@ -596,9 +658,6 @@ class MainWindow(QMainWindow):
 
         # Mark session as dirty
         self._dirty = True
-
-        # Pause video
-        self.video_widget.pause()
 
         # Update UI state
         self._update_display()
@@ -644,9 +703,6 @@ class MainWindow(QMainWindow):
 
         # Mark session as dirty
         self._dirty = True
-
-        # Pause video
-        self.video_widget.pause()
 
         # Update UI state
         self._update_display()
@@ -1287,6 +1343,13 @@ class MainWindow(QMainWindow):
         # Get segments from rally manager
         segments = self.rally_manager.to_segments()
 
+        # Debug: show segments being exported
+        print(f">>> EXPORT: fps={self.video_fps}, num_segments={len(segments)}")
+        for i, seg in enumerate(segments):
+            in_sec = seg['in'] / self.video_fps
+            out_sec = seg['out'] / self.video_fps
+            print(f">>>   Segment {i+1}: in_frame={seg['in']} ({in_sec:.2f}s), out_frame={seg['out']} ({out_sec:.2f}s), score={seg['score']}")
+
         # Check if there are segments to export
         if not segments:
             ToastManager.show_warning(
@@ -1341,6 +1404,89 @@ class MainWindow(QMainWindow):
                 f"Generation failed: {e}",
                 duration_ms=5000
             )
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Handle window show event.
+
+        Loads the video after the window is shown to ensure the VideoWidget
+        has a valid native window ID for MPV embedding.
+
+        Args:
+            event: Show event from Qt
+        """
+        super().showEvent(event)
+
+        # Only load video once, on first show
+        if not self._video_loaded:
+            self._video_loaded = True
+            # Use a timer to ensure the window is fully realized
+            # 100ms gives Qt time to create native windows and process events
+            QTimer.singleShot(100, self._load_video)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Handle global keyboard shortcuts.
+
+        Shortcuts:
+            Space: Pause/unpause video
+            Left: Seek back 5 seconds
+            Right: Seek forward 5 seconds
+            C: Rally Start
+            S: Server wins point
+            R: Receiver wins point
+            U: Undo (also pauses video)
+
+        Args:
+            event: Key event from Qt
+        """
+        # Don't handle shortcuts when in review mode
+        if self._in_review_mode:
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+
+        if key == Qt.Key.Key_Space:
+            # Space: Toggle pause
+            self.video_widget.toggle_pause()
+            event.accept()
+
+        elif key == Qt.Key.Key_Left:
+            # Left arrow: Seek back 5 seconds
+            self.video_widget.seek(-5.0, absolute=False)
+            event.accept()
+
+        elif key == Qt.Key.Key_Right:
+            # Right arrow: Seek forward 5 seconds
+            self.video_widget.seek(5.0, absolute=False)
+            event.accept()
+
+        elif key == Qt.Key.Key_C:
+            # C: Rally Start (if enabled)
+            if self.btn_rally_start.isEnabled():
+                self.on_rally_start()
+            event.accept()
+
+        elif key == Qt.Key.Key_S:
+            # S: Server wins (if enabled)
+            if self.btn_server_wins.isEnabled():
+                self.on_server_wins()
+            event.accept()
+
+        elif key == Qt.Key.Key_R:
+            # R: Receiver wins (if enabled)
+            if self.btn_receiver_wins.isEnabled():
+                self.on_receiver_wins()
+            event.accept()
+
+        elif key == Qt.Key.Key_U:
+            # U: Undo (if enabled)
+            if self.btn_undo.isEnabled():
+                self.on_undo()
+            event.accept()
+
+        else:
+            # Let other keys propagate normally
+            super().keyPressEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event.

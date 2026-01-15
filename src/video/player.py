@@ -17,15 +17,28 @@ Critical MPV/Qt Integration:
 - Use wid=str(int(self.winId())) for embedding
 """
 
+import ctypes
 import locale
+import os
 from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QWidget
 
-# CRITICAL: Set locale BEFORE importing mpv to prevent numeric parsing issues
+# CRITICAL: Set locale BEFORE importing mpv to prevent numeric parsing issues.
+# Use ctypes to call C library setlocale directly.
+import sys as _sys
+os.environ["LC_NUMERIC"] = "C"
 locale.setlocale(locale.LC_NUMERIC, "C")
+_libc = ctypes.CDLL("libc.so.6")
+_libc.setlocale.restype = ctypes.c_char_p
+_result = _libc.setlocale(1, b"C")  # LC_NUMERIC = 1 on Linux
+_current = _libc.setlocale(1, None)
+print(f"\n{'='*60}")
+print(f"LOCALE FIX APPLIED: setlocale={_result}, current={_current}")
+print(f"{'='*60}\n")
+_sys.stdout.flush()
 
 import mpv  # noqa: E402 - must import after locale setup
 
@@ -81,12 +94,52 @@ class VideoWidget(QWidget):
         if self._player is not None:
             return
 
+        # CRITICAL: Re-enforce LC_NUMERIC immediately before MPV creation.
+        import ctypes
+        import sys
+        from pathlib import Path
+        libc = ctypes.CDLL("libc.so.6")
+        libc.setlocale.restype = ctypes.c_char_p
+        LC_NUMERIC = 1
+
+        # Force set and verify locale
+        libc.setlocale(LC_NUMERIC, b"C")
+        current = libc.setlocale(LC_NUMERIC, None)
+
+        # Write to stdout, stderr AND file to guarantee visibility
+        msg = f">>> LOCALE CHECK: LC_NUMERIC = {current} <<<"
+        print(msg)
+        print(msg, file=sys.stderr)
+        Path("/tmp/mpv_locale_check.txt").write_text(msg + "\n")
+
+        if current != b"C":
+            raise RuntimeError(f"LOCALE NOT SET! Got {current}, expected b'C'")
+
+        # Ensure the widget has a valid native window ID
+        # Force creation of native window if not already done
+        from PyQt6.QtWidgets import QApplication
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        self.winId()  # Force window ID creation
+        QApplication.processEvents()  # Process pending events
+
+        wid = int(self.winId())
+
+        # Detect display server
+        display_server = os.environ.get("XDG_SESSION_TYPE", "unknown")
+        wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
+        print(f">>> MPV EMBEDDING: winId = {wid}, display = {display_server}, wayland = {wayland_display} <<<")
+
+        if wid == 0:
+            raise RuntimeError("VideoWidget has invalid winId (0). Widget must be shown first.")
+
+        # Use x11 video output for reliable embedding
+        # gpu/libmpv can have issues with window embedding on some systems
         self._player = mpv.MPV(
-            wid=str(int(self.winId())),
-            vo="gpu",
+            wid=str(wid),
+            vo="x11",  # x11 is most reliable for embedding
             hwdec="auto-safe",
-            input_default_bindings=True,
-            input_vo_keyboard=True,  # Allow arrow keys for seeking
+            input_default_bindings=False,  # Disable MPV keyboard shortcuts
+            input_vo_keyboard=False,  # Let Qt handle all keyboard input
             osd_level=1,
             keep_open=True,  # Don't close when video ends
             idle=True,
@@ -97,9 +150,11 @@ class VideoWidget(QWidget):
 
         # Handle end of file
         @self._player.event_callback("end-file")
-        def on_end_file(event: dict[str, Any]) -> None:
-            if event.get("reason") == "eof":
-                self.playback_finished.emit()
+        def on_end_file(event: Any) -> None:
+            # MpvEvent.data returns MpvEventEndFile with reason as int
+            # EOF = 0, RESTARTED = 1, ABORTED = 2
+            if event.data is not None and event.data.reason == 0:  # EOF
+                QTimer.singleShot(0, self.playback_finished.emit)
 
     def _on_duration_change(self, name: str, value: float | None) -> None:
         """Handle duration property changes from MPV.
