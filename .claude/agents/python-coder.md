@@ -4,7 +4,7 @@ description: Python development specialist for the Pickleball Video Editor proje
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: sonnet
 skills:
-  - python313
+  - python313, frontend-design
 ---
 
 # Python Coder - Pickleball Video Editor

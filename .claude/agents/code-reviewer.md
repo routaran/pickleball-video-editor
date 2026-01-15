@@ -4,7 +4,7 @@ description: Expert code reviewer for the Pickleball Video Editor project. Use p
 tools: Read, Glob, Grep, Bash
 model: sonnet
 skills:
-  - python313
+  - python313, frontend-design
 ---
 
 # Code Reviewer - Pickleball Video Editor
