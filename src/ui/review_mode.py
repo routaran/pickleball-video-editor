@@ -789,6 +789,7 @@ class ReviewModeWidget(QWidget):
         super().__init__(parent)
         self._rallies: list[Rally] = []
         self._current_index = 0
+        self._fps = 60.0  # Default fps, should be set by parent
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -950,13 +951,15 @@ class ReviewModeWidget(QWidget):
         """Handle play rally button click."""
         self.play_rally_requested.emit(self._current_index)
 
-    def set_rallies(self, rallies: list[Rally]) -> None:
+    def set_rallies(self, rallies: list[Rally], fps: float = 60.0) -> None:
         """Populate the review mode with rallies.
 
         Args:
             rallies: List of Rally objects
+            fps: Video frames per second for time calculations
         """
         self._rallies = rallies
+        self._fps = fps
         self._rally_list.set_rallies(rallies)
         if rallies:
             self.set_current_rally(0)
@@ -976,10 +979,9 @@ class ReviewModeWidget(QWidget):
         # Update header
         self._header.set_rally(index, len(self._rallies))
 
-        # Update timing controls (convert frames to seconds assuming 30fps)
-        fps = 30.0  # TODO: Get from video metadata
-        start_seconds = rally.start_frame / fps
-        end_seconds = rally.end_frame / fps
+        # Update timing controls (convert frames to seconds using actual fps)
+        start_seconds = rally.start_frame / self._fps
+        end_seconds = rally.end_frame / self._fps
         self._timing_widget.set_times(start_seconds, end_seconds)
 
         # Update score widget

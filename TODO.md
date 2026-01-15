@@ -275,6 +275,8 @@
 - [x] Create session directory if not exists (~/.local/share/pickleball-editor/sessions/)
 - [x] **GIT CHECKPOINT**: Commit "Implement session manager" (34ea808)
 
+**Note:** Phase 7.2 was committed with hash 9e4d6bf
+
 ### 7.2 Session Integration
 - [x] Add session_state field to GameConfig
 - [x] Check for existing session on video selection in Setup
@@ -313,21 +315,31 @@
 - [x] Implement Generate Kdenlive button
 
 ### 8.2 Review Mode Logic
-- [ ] Implement navigate_to_rally() - seek video, update display
-- [ ] Implement click-to-navigate on rally list
-- [ ] Implement adjust_start_timing()
-- [ ] Implement adjust_end_timing()
-- [ ] Implement edit_score() with cascade logic
-- [ ] Implement Play Rally - play from start to end
-- [ ] Implement score cascade recalculation
-- [ ] **GIT CHECKPOINT**: Commit "Implement final review mode UI and logic"
+- [x] Implement navigate_to_rally() - seek video, update display
+- [x] Implement click-to-navigate on rally list
+- [x] Implement adjust_start_timing()
+- [x] Implement adjust_end_timing()
+- [x] Implement edit_score() with cascade logic
+- [x] Implement Play Rally - play from start to end
+- [x] Implement score cascade recalculation
+- [x] **GIT CHECKPOINT**: Commit "Implement final review mode UI and logic"
 
 ### 8.3 Mode Switching
-- [ ] Implement enter_review_mode() - swap UI panels
-- [ ] Implement exit_review_mode() - restore editing UI
-- [ ] Connect Final Review button to enter_review_mode()
-- [ ] Connect Exit Review button to exit_review_mode()
-- [ ] **GIT CHECKPOINT**: Commit "Add mode switching between editing and review"
+- [x] Implement enter_review_mode() - swap UI panels
+- [x] Implement exit_review_mode() - restore editing UI
+- [x] Connect Final Review button to enter_review_mode()
+- [x] Connect Exit Review button to exit_review_mode()
+- [x] Integrate ReviewModeWidget with MainWindow
+- [x] Add video fps support to ReviewModeWidget
+- [x] Implement _on_review_rally_changed() handler
+- [x] Implement _on_review_timing_adjusted() handler
+- [x] Implement _on_review_score_changed() handler with cascade
+- [x] Implement _on_review_play_rally() handler with QTimer
+- [x] Add _on_review_generate() placeholder
+- [x] Create test_review_integration.py test script
+- [x] Create REVIEW_MODE_INTEGRATION.md documentation
+- [x] Create REVIEW_MODE_USAGE.md user guide
+- [x] **GIT CHECKPOINT**: Commit "Integrate review mode with main window"
 
 ---
 

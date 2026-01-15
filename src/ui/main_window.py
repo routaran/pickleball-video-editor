@@ -27,7 +27,7 @@ All actions trigger score state updates and rally manager tracking.
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QFrame,
@@ -55,6 +55,7 @@ from src.ui.dialogs import (
     UnsavedWarningDialog,
     UnsavedWarningResult,
 )
+from src.ui.review_mode import ReviewModeWidget
 from src.ui.setup_dialog import GameConfig
 from src.ui.styles import (
     BG_BORDER,
@@ -141,6 +142,11 @@ class MainWindow(QMainWindow):
 
         # Position to restore after video loads (for session resumption)
         self._restore_position: float | None = None
+
+        # Review mode state
+        self._review_widget: ReviewModeWidget | None = None
+        self._in_review_mode = False
+        self._rally_playback_timer: QTimer | None = None
 
         # Initialize core components (may restore from session)
         self._init_core_components()
@@ -253,12 +259,12 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.playback_controls)
 
         # Rally controls panel
-        rally_controls = self._create_rally_controls()
-        main_layout.addWidget(rally_controls)
+        self.rally_controls_panel = self._create_rally_controls()
+        main_layout.addWidget(self.rally_controls_panel)
 
         # Toolbar (intervention + session buttons)
-        toolbar = self._create_toolbar()
-        main_layout.addWidget(toolbar)
+        self.toolbar_panel = self._create_toolbar()
+        main_layout.addWidget(self.toolbar_panel)
 
         # Apply global stylesheet
         self._apply_styles()
@@ -1004,8 +1010,291 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Emit signal to switch to review mode
-        self.review_requested.emit()
+        # Enter review mode
+        self.enter_review_mode()
+
+    # Review mode methods
+
+    def enter_review_mode(self) -> None:
+        """Switch to review mode.
+
+        Hides rally controls and toolbar, creates ReviewModeWidget if needed,
+        populates it with rallies, and connects signals.
+        """
+        if self._in_review_mode:
+            return
+
+        # Hide editing mode panels
+        self.rally_controls_panel.hide()
+        self.toolbar_panel.hide()
+
+        # Create review widget if it doesn't exist
+        if self._review_widget is None:
+            self._review_widget = ReviewModeWidget(self)
+            # Insert after playback controls
+            central_widget = self.centralWidget()
+            if central_widget is not None:
+                layout = central_widget.layout()
+                if layout is not None:
+                    layout.insertWidget(2, self._review_widget)
+
+            # Connect review widget signals
+            self._review_widget.rally_changed.connect(self._on_review_rally_changed)
+            self._review_widget.timing_adjusted.connect(self._on_review_timing_adjusted)
+            self._review_widget.score_changed.connect(self._on_review_score_changed)
+            self._review_widget.play_rally_requested.connect(self._on_review_play_rally)
+            self._review_widget.exit_requested.connect(self.exit_review_mode)
+            self._review_widget.generate_requested.connect(self._on_review_generate)
+
+        # Populate with current rallies
+        rallies = self.rally_manager.get_rallies()
+        self._review_widget.set_rallies(rallies, fps=self.video_fps)
+
+        # Show review widget
+        self._review_widget.show()
+
+        # Update state
+        self._in_review_mode = True
+
+        # Show feedback
+        ToastManager.show_success(
+            self,
+            "Entered review mode - adjust timings and scores as needed",
+            duration_ms=3000
+        )
+
+    def exit_review_mode(self) -> None:
+        """Exit review mode and return to editing mode.
+
+        Hides review widget and restores rally controls and toolbar.
+        """
+        if not self._in_review_mode:
+            return
+
+        # Hide review widget
+        if self._review_widget is not None:
+            self._review_widget.hide()
+
+        # Show editing mode panels
+        self.rally_controls_panel.show()
+        self.toolbar_panel.show()
+
+        # Update state
+        self._in_review_mode = False
+
+        # Show feedback
+        ToastManager.show_info(
+            self,
+            "Returned to editing mode",
+            duration_ms=2000
+        )
+
+    @pyqtSlot(int)
+    def _on_review_rally_changed(self, index: int) -> None:
+        """Handle rally selection change in review mode.
+
+        Seeks video to the start of the selected rally.
+
+        Args:
+            index: Rally index (0-based)
+        """
+        # Check if index is valid
+        if not (0 <= index < self.rally_manager.get_rally_count()):
+            return
+
+        # Get rally
+        rally = self.rally_manager.get_rally(index)
+
+        # Convert start frame to seconds
+        start_seconds = rally.start_frame / self.video_fps
+
+        # Seek to rally start
+        self.video_widget.seek(start_seconds, absolute=True)
+        self.video_widget.pause()
+
+        # Show feedback
+        self.video_widget.show_osd(
+            f"Rally {index + 1}: {rally.score_at_start}",
+            duration=2.0
+        )
+
+    @pyqtSlot(int, str, float)
+    def _on_review_timing_adjusted(self, index: int, which: str, delta: float) -> None:
+        """Handle timing adjustment in review mode.
+
+        Updates rally timing based on the adjustment made in the review widget.
+
+        Args:
+            index: Rally index (0-based)
+            which: "start" or "end"
+            delta: Time change in seconds (can be negative)
+        """
+        # Check if index is valid
+        if not (0 <= index < self.rally_manager.get_rally_count()):
+            return
+
+        # Update rally timing
+        if which == "start":
+            rally = self.rally_manager.update_rally_timing(
+                index=index,
+                start_delta=delta,
+                end_delta=0.0
+            )
+        elif which == "end":
+            rally = self.rally_manager.update_rally_timing(
+                index=index,
+                start_delta=0.0,
+                end_delta=delta
+            )
+        else:
+            return
+
+        # Mark session as dirty
+        self._dirty = True
+
+        # Show feedback
+        direction = "earlier" if delta < 0 else "later"
+        self.video_widget.show_osd(
+            f"{which.title()} adjusted {abs(delta):.1f}s {direction}",
+            duration=1.5
+        )
+
+    @pyqtSlot(int, str, bool)
+    def _on_review_score_changed(self, index: int, new_score: str, cascade: bool) -> None:
+        """Handle score change in review mode.
+
+        Updates the rally's score_at_start and optionally cascades to later rallies.
+
+        Args:
+            index: Rally index (0-based)
+            new_score: New score string
+            cascade: If True, recalculate subsequent rally scores
+        """
+        # Check if index is valid
+        if not (0 <= index < self.rally_manager.get_rally_count()):
+            return
+
+        # Check if new score is non-empty
+        if not new_score:
+            return
+
+        # Update rally score
+        self.rally_manager.update_rally_score(
+            index=index,
+            new_score=new_score,
+            cascade=cascade
+        )
+
+        # If cascade is enabled, replay score state for subsequent rallies
+        if cascade:
+            # Parse new score and set as starting point
+            try:
+                self.score_state.set_score(new_score)
+
+                # Replay all rallies from index onwards
+                for i in range(index, self.rally_manager.get_rally_count()):
+                    rally = self.rally_manager.get_rally(i)
+
+                    # Update score at start for this rally
+                    if i > index:
+                        rally.score_at_start = self.score_state.get_score_string()
+
+                    # Apply winner to score state for next rally
+                    if rally.winner == "server":
+                        self.score_state.server_wins()
+                    elif rally.winner == "receiver":
+                        self.score_state.receiver_wins()
+
+                # Update review widget with new rally data
+                if self._review_widget is not None:
+                    rallies = self.rally_manager.get_rallies()
+                    self._review_widget.set_rallies(rallies, fps=self.video_fps)
+                    self._review_widget.set_current_rally(index)
+
+                ToastManager.show_success(
+                    self,
+                    f"Score updated and cascaded to {self.rally_manager.get_rally_count() - index} rallies",
+                    duration_ms=3000
+                )
+            except (ValueError, IndexError) as e:
+                ToastManager.show_error(
+                    self,
+                    f"Invalid score format: {e}",
+                    duration_ms=3000
+                )
+                return
+        else:
+            # Just show success for single update
+            ToastManager.show_success(
+                self,
+                f"Score updated for rally {index + 1}",
+                duration_ms=2000
+            )
+
+        # Mark session as dirty
+        self._dirty = True
+
+    @pyqtSlot(int)
+    def _on_review_play_rally(self, index: int) -> None:
+        """Play the selected rally from start to end.
+
+        Sets up a timer to automatically pause when the rally ends.
+
+        Args:
+            index: Rally index (0-based)
+        """
+        # Check if index is valid
+        if not (0 <= index < self.rally_manager.get_rally_count()):
+            return
+
+        # Get rally
+        rally = self.rally_manager.get_rally(index)
+
+        # Convert frames to seconds
+        start_seconds = rally.start_frame / self.video_fps
+        end_seconds = rally.end_frame / self.video_fps
+        duration_ms = int((end_seconds - start_seconds) * 1000)
+
+        # Seek to start
+        self.video_widget.seek(start_seconds, absolute=True)
+
+        # Start playback
+        self.video_widget.play()
+
+        # Set up timer to pause at end
+        if self._rally_playback_timer is not None:
+            self._rally_playback_timer.stop()
+            self._rally_playback_timer.deleteLater()
+
+        self._rally_playback_timer = QTimer(self)
+        self._rally_playback_timer.setSingleShot(True)
+        self._rally_playback_timer.timeout.connect(lambda: self.video_widget.pause())
+        self._rally_playback_timer.start(duration_ms)
+
+        # Show feedback
+        self.video_widget.show_osd(
+            f"Playing Rally {index + 1}",
+            duration=2.0
+        )
+
+    @pyqtSlot()
+    def _on_review_generate(self) -> None:
+        """Handle generate Kdenlive project request.
+
+        Placeholder for future Kdenlive generation integration.
+        """
+        # TODO: Implement Kdenlive project generation
+        # This will:
+        # 1. Call KdenliveGenerator with rally segments
+        # 2. Save the .kdenlive XML file
+        # 3. Show success dialog with file path
+        # 4. Optionally open in Kdenlive
+
+        ToastManager.show_info(
+            self,
+            "Kdenlive generation not yet implemented",
+            duration_ms=3000
+        )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event.
