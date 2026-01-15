@@ -265,27 +265,33 @@
 > Save, load, and resume functionality
 
 ### 7.1 Session Manager
-- [ ] Create src/core/session_manager.py
-- [ ] Implement SessionManager.__init__() with session directory
-- [ ] Implement _get_video_hash() for session identification
-- [ ] Implement save() - serialize state to JSON
-- [ ] Implement load() - deserialize state from JSON
-- [ ] Implement find_existing() - check for existing session
-- [ ] Implement delete() - remove session file
-- [ ] Create session directory if not exists (~/.local/share/pickleball-editor/sessions/)
-- [ ] **GIT CHECKPOINT**: Commit "Implement session manager"
+- [x] Create src/core/session_manager.py
+- [x] Implement SessionManager.__init__() with session directory
+- [x] Implement _get_video_hash() for session identification
+- [x] Implement save() - serialize state to JSON
+- [x] Implement load() - deserialize state from JSON
+- [x] Implement find_existing() - check for existing session
+- [x] Implement delete() - remove session file
+- [x] Create session directory if not exists (~/.local/share/pickleball-editor/sessions/)
+- [x] **GIT CHECKPOINT**: Commit "Implement session manager" (34ea808)
 
 ### 7.2 Session Integration
-- [ ] Check for existing session on video selection in Setup
-- [ ] Show Resume Session dialog if session exists
-- [ ] Implement session restore in MainWindow
-- [ ] Restore score state from session
-- [ ] Restore rally list from session
-- [ ] Seek video to last position
-- [ ] Connect Save Session button
-- [ ] Connect Save & Quit button
-- [ ] Auto-save prompt on close with unsaved changes
-- [ ] **GIT CHECKPOINT**: Commit "Integrate session save/load with application"
+- [x] Add session_state field to GameConfig
+- [x] Check for existing session on video selection in Setup
+- [x] Show Resume Session dialog if session exists
+- [x] Implement _handle_existing_session() and _populate_from_session()
+- [x] Implement session restore in MainWindow._init_core_components()
+- [x] Restore score state from session using ScoreSnapshot
+- [x] Restore rally list from session using RallyManager.from_dict()
+- [x] Seek video to last position after loading
+- [x] Implement _build_session_state() helper
+- [x] Connect Save Session button with full implementation
+- [x] Add dirty state tracking (mark dirty on all changes)
+- [x] Implement unsaved warning on close (UnsavedWarningDialog)
+- [x] Handle Save & Quit / Don't Save / Cancel in closeEvent()
+- [x] Update SessionManager.get_session_info() to include victory_rules
+- [x] Write test_session_integration.py with automated tests
+- [x] **GIT CHECKPOINT**: Commit "Integrate session save/load with application"
 
 ---
 
@@ -456,7 +462,7 @@
 | 4 | UI Foundation | 4 | Complete |
 | 5 | Main Window - Editing Mode | 2 | Complete |
 | 6 | Modal Dialogs | 2 | Complete |
-| 7 | Session Management | 2 | Not Started |
+| 7 | Session Management | 2 | Complete |
 | 8 | Final Review Mode | 2 | Not Started |
 | 9 | Output Generation | 2 | Not Started |
 | 10 | Polish & Edge Cases | 1 | Not Started |

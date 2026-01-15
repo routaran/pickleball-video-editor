@@ -39,9 +39,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.core.models import ScoreSnapshot
+from src.core.models import ScoreSnapshot, SessionState
 from src.core.rally_manager import RallyManager
 from src.core.score_state import ScoreState
+from src.core.session_manager import SessionManager
 from src.ui.dialogs import (
     AddCommentDialog,
     AddCommentResult,
@@ -51,6 +52,8 @@ from src.ui.dialogs import (
     ForceSideOutResult,
     GameOverDialog,
     GameOverResult,
+    UnsavedWarningDialog,
+    UnsavedWarningResult,
 )
 from src.ui.setup_dialog import GameConfig
 from src.ui.styles import (
@@ -116,17 +119,30 @@ class MainWindow(QMainWindow):
     review_requested = pyqtSignal()
     quit_requested = pyqtSignal()
 
-    def __init__(self, config: GameConfig, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config: GameConfig,
+        parent: QWidget | None = None,
+    ) -> None:
         """Initialize main window with game configuration.
 
         Args:
-            config: Game configuration from SetupDialog
+            config: Game configuration from SetupDialog (may include session_state for resuming)
             parent: Parent widget (optional)
         """
         super().__init__(parent)
         self.config = config
 
-        # Initialize core components
+        # Session manager for saving/loading
+        self._session_manager = SessionManager()
+
+        # Dirty state tracking
+        self._dirty = False
+
+        # Position to restore after video loads (for session resumption)
+        self._restore_position: float | None = None
+
+        # Initialize core components (may restore from session)
         self._init_core_components()
 
         # Setup UI
@@ -145,23 +161,65 @@ class MainWindow(QMainWindow):
         """Initialize ScoreState and RallyManager.
 
         Creates the core business logic components that manage scoring
-        and rally tracking throughout the editing session.
+        and rally tracking throughout the editing session. If a session_state
+        is provided in the config, restores from that state.
         """
-        # Create player names dict for ScoreState
-        player_names = {
-            "team1": self.config.team1_players,
-            "team2": self.config.team2_players,
-        }
+        # Check if we're restoring from a session
+        session_state = self.config.session_state
 
-        # Initialize score state machine
-        self.score_state = ScoreState(
-            game_type=self.config.game_type,
-            victory_rules=self.config.victory_rule,
-            player_names=player_names
-        )
+        if session_state is not None:
+            # Restore from session
+            # Create player names dict for ScoreState
+            player_names = session_state.player_names
 
-        # Initialize rally manager (fps will be updated after video probe)
-        self.rally_manager = RallyManager(fps=60.0)
+            # Initialize score state machine
+            self.score_state = ScoreState(
+                game_type=session_state.game_type,
+                victory_rules=session_state.victory_rules,
+                player_names=player_names
+            )
+
+            # Restore score state from session
+            score_snapshot_dict = {
+                "score": session_state.current_score,
+                "serving_team": session_state.serving_team,
+                "server_number": session_state.server_number
+            }
+            score_snapshot = ScoreSnapshot.from_dict(score_snapshot_dict)
+            self.score_state.restore_snapshot(score_snapshot)
+
+            # Initialize rally manager with session rallies (fps will be updated after video probe)
+            self.rally_manager = RallyManager(fps=60.0)
+
+            # Restore rally manager state
+            rally_manager_dict = {
+                "rallies": [r.to_dict() for r in session_state.rallies],
+                "undo_stack": [],  # Start with empty undo stack
+                "fps": 60.0  # Will be updated after probe
+            }
+            self.rally_manager = RallyManager.from_dict(rally_manager_dict)
+
+            # Store position to restore after video loads
+            self._restore_position = session_state.last_position
+        else:
+            # New session - initialize from scratch
+            # Create player names dict for ScoreState
+            player_names = {
+                "team1": self.config.team1_players,
+                "team2": self.config.team2_players,
+            }
+
+            # Initialize score state machine
+            self.score_state = ScoreState(
+                game_type=self.config.game_type,
+                victory_rules=self.config.victory_rule,
+                player_names=player_names
+            )
+
+            # Initialize rally manager (fps will be updated after video probe)
+            self.rally_manager = RallyManager(fps=60.0)
+
+            self._restore_position = None
 
         # Track video info (set after probing)
         self.video_fps = 60.0
@@ -413,7 +471,8 @@ class MainWindow(QMainWindow):
         """Load the video file and probe metadata.
 
         Probes the video using ffprobe to extract fps and duration,
-        then loads it into the MPV player widget.
+        then loads it into the MPV player widget. If restoring a session,
+        seeks to the last saved position.
         """
         video_path = self.config.video_path
 
@@ -446,11 +505,20 @@ class MainWindow(QMainWindow):
         # Load video into player
         self.video_widget.load(str(video_path), fps=self.video_fps)
 
-        ToastManager.show_success(
-            self,
-            f"Loaded video: {video_path.name} ({video_info.resolution})",
-            duration_ms=3000
-        )
+        # If restoring session, seek to last position
+        if self._restore_position is not None:
+            self.video_widget.seek(self._restore_position, absolute=True)
+            ToastManager.show_success(
+                self,
+                f"Resumed session at {self._restore_position:.1f}s",
+                duration_ms=3000
+            )
+        else:
+            ToastManager.show_success(
+                self,
+                f"Loaded video: {video_path.name} ({video_info.resolution})",
+                duration_ms=3000
+            )
 
     # Rally marking handlers
 
@@ -474,6 +542,9 @@ class MainWindow(QMainWindow):
 
         # Mark rally start (precondition checked above)
         start_frame = self.rally_manager.start_rally(timestamp, score_snapshot)
+
+        # Mark session as dirty
+        self._dirty = True
 
         # Pause video for precise marking
         self.video_widget.pause()
@@ -515,6 +586,9 @@ class MainWindow(QMainWindow):
             score_at_start=score_at_start,
             score_snapshot=score_snapshot
         )
+
+        # Mark session as dirty
+        self._dirty = True
 
         # Pause video
         self.video_widget.pause()
@@ -560,6 +634,9 @@ class MainWindow(QMainWindow):
             score_at_start=score_at_start,
             score_snapshot=score_snapshot
         )
+
+        # Mark session as dirty
+        self._dirty = True
 
         # Pause video
         self.video_widget.pause()
@@ -732,6 +809,7 @@ class MainWindow(QMainWindow):
             if result is not None:
                 # Parse and apply the new score
                 self.score_state.set_score(result.new_score)
+                self._dirty = True
                 self._update_display()
                 ToastManager.show_success(
                     self,
@@ -771,6 +849,7 @@ class MainWindow(QMainWindow):
                     self.score_state.set_score(result.new_score)
                 # Force side-out
                 self.score_state.force_side_out()
+                self._dirty = True
                 self._update_display()
                 ToastManager.show_warning(
                     self,
@@ -792,6 +871,7 @@ class MainWindow(QMainWindow):
             if result is not None:
                 # Store the comment (for now, just show feedback)
                 # TODO: Store in session/rally manager when persistence is implemented
+                self._dirty = True
                 ToastManager.show_success(
                     self,
                     f"Comment added at {result.timestamp:.2f}s",
@@ -835,14 +915,78 @@ class MainWindow(QMainWindow):
 
         self.video_widget.show_osd(f"Time Expired! {winner_name} wins", duration=5.0)
 
+    def _build_session_state(self) -> SessionState:
+        """Build SessionState from current state.
+
+        Collects all current state information into a SessionState object
+        for persistence.
+
+        Returns:
+            SessionState containing complete session information
+        """
+        # Get current score snapshot
+        score_snapshot = self.score_state.save_snapshot()
+
+        # Build player names dict
+        player_names = {
+            "team1": self.config.team1_players,
+            "team2": self.config.team2_players,
+        }
+
+        # Get current video position
+        last_position = self.video_widget.get_position()
+
+        # Create session state
+        session_state = SessionState(
+            version="1.0",
+            video_path=str(self.config.video_path),
+            video_hash="",  # Will be set by SessionManager.save()
+            game_type=self.config.game_type,
+            victory_rules=self.config.victory_rule,
+            player_names=player_names,
+            rallies=self.rally_manager.get_rallies(),
+            current_score=list(score_snapshot.score),
+            serving_team=score_snapshot.serving_team,
+            server_number=score_snapshot.server_number,
+            last_position=last_position,
+            created_at="",  # Will be set by SessionManager.save() if new
+            modified_at="",  # Will be set by SessionManager.save()
+            interventions=[],  # TODO: Implement interventions tracking
+            comments=[],  # TODO: Implement comments tracking
+        )
+
+        return session_state
+
     @pyqtSlot()
     def _on_save_session(self) -> None:
         """Handle Save Session button click.
 
-        TODO: Implement session persistence to JSON.
+        Saves current session state to JSON file and clears dirty flag.
         """
-        ToastManager.show_info(self, "Save Session - Coming soon", duration_ms=2000)
-        self.session_saved.emit()
+        # Build session state from current state
+        session_state = self._build_session_state()
+
+        # Save to disk
+        saved_path = self._session_manager.save(session_state, str(self.config.video_path))
+
+        if saved_path is not None:
+            # Clear dirty flag
+            self._dirty = False
+
+            # Show success feedback
+            ToastManager.show_success(
+                self,
+                "Session saved successfully",
+                duration_ms=3000
+            )
+            self.session_saved.emit()
+        else:
+            # Save failed
+            ToastManager.show_error(
+                self,
+                "Failed to save session",
+                duration_ms=3000
+            )
 
     @pyqtSlot()
     def _on_final_review(self) -> None:
@@ -866,9 +1010,43 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event.
 
+        Checks for unsaved changes and prompts user before closing.
+
         Args:
             event: Close event from Qt
         """
+        # Check if there are unsaved changes
+        if self._dirty:
+            # Show unsaved warning dialog
+            dialog = UnsavedWarningDialog(self)
+            dialog.exec()
+            result = dialog.get_result()
+
+            if result == UnsavedWarningResult.SAVE_AND_QUIT:
+                # Save session before closing
+                session_state = self._build_session_state()
+                saved_path = self._session_manager.save(session_state, str(self.config.video_path))
+
+                if saved_path is None:
+                    # Save failed - show error and cancel close
+                    ToastManager.show_error(
+                        self,
+                        "Failed to save session",
+                        duration_ms=3000
+                    )
+                    event.ignore()
+                    return
+
+                # Save succeeded - continue with close
+                self._dirty = False
+
+            elif result == UnsavedWarningResult.CANCEL:
+                # User cancelled - don't close
+                event.ignore()
+                return
+
+            # DONT_SAVE - continue with close without saving
+
         # Clean up video player
         self.video_widget.cleanup()
 

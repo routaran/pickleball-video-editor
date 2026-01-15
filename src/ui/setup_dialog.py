@@ -29,6 +29,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.core.models import SessionState
+from src.core.session_manager import SessionManager
+from src.ui.dialogs import ResumeSessionDialog, ResumeSessionResult, SessionDetails
 from src.ui.styles.colors import (
     BG_BORDER,
     BG_PRIMARY,
@@ -57,6 +60,7 @@ class GameConfig:
         victory_rule: Victory condition ("11", "9", or "timed")
         team1_players: List of player names for Team 1
         team2_players: List of player names for Team 2
+        session_state: Optional loaded session state for resuming
     """
 
     video_path: Path
@@ -64,6 +68,7 @@ class GameConfig:
     victory_rule: str
     team1_players: list[str]
     team2_players: list[str]
+    session_state: SessionState | None = None
 
 
 class SetupDialog(QDialog):
@@ -98,6 +103,12 @@ class SetupDialog(QDialog):
 
         # Configuration result (set when accepted)
         self._config: GameConfig | None = None
+
+        # Session manager for checking existing sessions
+        self._session_manager = SessionManager()
+
+        # Session state to resume (if user chooses to resume)
+        self._session_state: SessionState | None = None
 
         # Create UI components
         self._create_widgets()
@@ -385,7 +396,11 @@ class SetupDialog(QDialog):
 
     @pyqtSlot()
     def _browse_video(self) -> None:
-        """Open file dialog to select video file."""
+        """Open file dialog to select video file.
+
+        After selection, checks if a session exists for the video and
+        prompts the user to resume or start fresh.
+        """
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Video File",
@@ -393,8 +408,99 @@ class SetupDialog(QDialog):
             "Video Files (*.mp4 *.MP4);;All Files (*)"
         )
 
-        if file_path:
-            self.video_path_edit.setText(file_path)
+        if not file_path:
+            return
+
+        self.video_path_edit.setText(file_path)
+
+        # Check if session exists for this video
+        session_info = self._session_manager.get_session_info(file_path)
+
+        if session_info is not None:
+            # Session exists - show resume dialog
+            self._handle_existing_session(file_path, session_info)
+
+    def _handle_existing_session(self, video_path: str, session_info: dict) -> None:
+        """Handle detection of an existing session.
+
+        Shows ResumeSessionDialog and handles user's choice to resume or start fresh.
+
+        Args:
+            video_path: Path to the video file
+            session_info: Session information dictionary from SessionManager
+        """
+        # Map victory_rules to display format
+        victory_map = {
+            "11": "Game to 11",
+            "9": "Game to 9",
+            "timed": "Timed"
+        }
+        victory_display = victory_map.get(session_info["victory_rules"], session_info["victory_rules"])
+
+        # Format game type for display
+        game_type_display = session_info["game_type"].capitalize()
+
+        # Create SessionDetails for dialog
+        details = SessionDetails(
+            video_name=Path(video_path).name,
+            rally_count=session_info["rally_count"],
+            current_score=session_info["current_score"],
+            last_position=session_info["last_position"],
+            game_type=game_type_display,
+            victory_rule=victory_display
+        )
+
+        # Show resume dialog
+        dialog = ResumeSessionDialog(details, self)
+        dialog.exec()
+        result = dialog.get_result()
+
+        if result == ResumeSessionResult.RESUME:
+            # Load full session state
+            state = self._session_manager.load(video_path)
+            if state is not None:
+                self._session_state = state
+                # Pre-fill form fields from session
+                self._populate_from_session(state)
+        else:  # START_FRESH
+            # Delete the old session
+            self._session_manager.delete(video_path)
+            self._session_state = None
+
+    def _populate_from_session(self, state: SessionState) -> None:
+        """Populate form fields from loaded session state.
+
+        Args:
+            state: Loaded session state
+        """
+        # Set game type
+        if state.game_type == "doubles":
+            self.game_type_combo.setCurrentIndex(0)
+        else:  # singles
+            self.game_type_combo.setCurrentIndex(1)
+
+        # Set victory rules
+        victory_index_map = {
+            "11": 0,
+            "9": 1,
+            "timed": 2
+        }
+        victory_index = victory_index_map.get(state.victory_rules, 0)
+        self.victory_combo.setCurrentIndex(victory_index)
+
+        # Set player names
+        team1_names = state.player_names.get("team1", [])
+        team2_names = state.player_names.get("team2", [])
+
+        if len(team1_names) >= 1:
+            self.team1_player1_edit.setText(team1_names[0])
+        if len(team1_names) >= 2:
+            self.team1_player2_edit.setText(team1_names[1])
+
+        if len(team2_names) >= 1:
+            self.team2_player1_edit.setText(team2_names[0])
+        if len(team2_names) >= 2:
+            self.team2_player2_edit.setText(team2_names[1])
 
     @pyqtSlot(int)
     def _on_game_type_changed(self, index: int) -> None:
@@ -513,6 +619,7 @@ class SetupDialog(QDialog):
             victory_rule=victory_rule,
             team1_players=team1_players,
             team2_players=team2_players,
+            session_state=self._session_state,  # Include loaded session state
         )
 
         # Accept the dialog

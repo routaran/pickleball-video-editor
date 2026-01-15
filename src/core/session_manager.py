@@ -227,6 +227,7 @@ class SessionManager:
                 - last_position: Last video position in seconds
                 - last_modified: ISO timestamp of last modification
                 - game_type: "singles" or "doubles"
+                - victory_rules: Victory condition ("11", "9", or "timed")
                 - video_path: Path to video file
         """
         state = self.load(video_path)
@@ -247,5 +248,6 @@ class SessionManager:
             "last_position": state.last_position,
             "last_modified": state.modified_at,
             "game_type": state.game_type,
+            "victory_rules": state.victory_rules,
             "video_path": state.video_path,
         }
