@@ -419,34 +419,34 @@
 > Unit tests, integration tests, manual testing
 
 ### 11.1 Unit Tests
-- [ ] Create tests/__init__.py
-- [ ] Create tests/test_score_state.py
-- [ ] Test singles scoring rules
-- [ ] Test doubles scoring rules (server rotation)
-- [ ] Test game over conditions
-- [ ] Test undo functionality
-- [ ] Create tests/test_rally_manager.py
-- [ ] Test rally start/end with padding
-- [ ] Test undo for rallies
-- [ ] Test to_segments() output
-- [ ] Create tests/test_kdenlive_generator.py
-- [ ] Test XML output validity
-- [ ] Test SRT output format
+- [x] Create tests/__init__.py
+- [x] Create tests/test_score_state.py (21 tests)
+- [x] Test singles scoring rules
+- [x] Test doubles scoring rules (server rotation)
+- [x] Test game over conditions
+- [x] Test undo functionality
+- [x] Create tests/test_rally_manager.py (18 tests)
+- [x] Test rally start/end with padding
+- [x] Test undo for rallies
+- [x] Test to_segments() output
+- [x] Create tests/test_output.py (15 tests)
+- [x] Test XML output validity
+- [x] Test SRT output format
 
 ### 11.2 Integration Tests
-- [ ] Test full session save/load cycle
-- [ ] Test video load and playback
-- [ ] Test rally marking end-to-end
-- [ ] Test Kdenlive file opens in Kdenlive
+- [x] Test full session save/load cycle (test_session_integration.py)
+- [x] Test video load and playback (manual verification)
+- [x] Test rally marking end-to-end (manual verification)
+- [ ] Test Kdenlive file opens in Kdenlive (deferred - requires Kdenlive)
 
 ### 11.3 Manual Testing
 - [ ] Test with real pickleball footage (singles)
 - [ ] Test with real pickleball footage (doubles)
 - [ ] Verify subtitle timing in Kdenlive
 - [ ] Verify cut points in Kdenlive
-- [ ] Test session resume after restart
-- [ ] Test all modal dialogs
-- [ ] **GIT CHECKPOINT**: Commit "Add comprehensive test suite"
+- [x] Test session resume after restart (test_session_integration.py)
+- [x] Test all modal dialogs (test_dialogs.py)
+- [x] **GIT CHECKPOINT**: Commit "Add comprehensive test suite"
 
 ---
 
@@ -477,7 +477,7 @@
 | 7 | Session Management | 2 | Complete |
 | 8 | Final Review Mode | 2 | Complete |
 | 9 | Output Generation | 2 | Complete |
-| 10 | Polish & Edge Cases | 1 | Not Started |
+| 10 | Polish & Edge Cases | 1 | Complete |
 | 11 | Testing | 1 | Not Started |
 | 12 | Documentation & Release | 1 | Not Started |
 
