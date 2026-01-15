@@ -85,7 +85,7 @@ class KdenliveGenerator:
 
         # Set default output directory
         if output_dir is None:
-            self.output_dir = Path.home() / "Videos" / "pickleball"
+            self.output_dir = Path("/home/rkalluri/Videos")
         else:
             self.output_dir = Path(output_dir)
 

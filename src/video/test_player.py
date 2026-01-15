@@ -133,6 +133,13 @@ class TestWindow(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
+    # CRITICAL: Qt resets locale during init - must restore for MPV.
+    # Use both environment variable AND locale.setlocale for robustness.
+    import os
+    import locale
+    os.environ["LC_NUMERIC"] = "C"
+    locale.setlocale(locale.LC_NUMERIC, "C")
+
     win = TestWindow()
     win.show()
 

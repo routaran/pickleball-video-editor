@@ -404,7 +404,7 @@ class SetupDialog(QDialog):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Video File",
-            str(Path.home() / "Videos"),
+            "/home/rkalluri/Videos/pickleball",
             "Video Files (*.mp4 *.MP4);;All Files (*)"
         )
 

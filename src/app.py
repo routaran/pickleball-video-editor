@@ -115,6 +115,21 @@ def create_application() -> tuple[QApplication, AppConfig]:
         ```
     """
     app = QApplication(sys.argv)
+
+    # CRITICAL: Qt resets locale during QApplication init.
+    # MPV requires LC_NUMERIC="C" or it crashes with segfault.
+    # Use ctypes to call C library setlocale directly - Python's locale
+    # module doesn't reliably affect the C library on all systems.
+    import ctypes
+    import locale
+    import os
+    os.environ["LC_NUMERIC"] = "C"
+    locale.setlocale(locale.LC_NUMERIC, "C")
+    libc = ctypes.CDLL("libc.so.6")
+    libc.setlocale.restype = ctypes.c_char_p
+    result = libc.setlocale(1, b"C")  # LC_NUMERIC = 1 on Linux
+    print(f"DEBUG app.py after QApplication: C setlocale returned: {result}")
+
     app.setApplicationName("Pickleball Video Editor")
     app.setOrganizationName("Pickleball Video Editor")
     app.setOrganizationDomain("pickleballeditor.local")

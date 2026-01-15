@@ -28,7 +28,7 @@ All actions trigger score state updates and rally manager tracking.
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QCloseEvent, QKeyEvent, QResizeEvent, QShowEvent
+from PyQt6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShowEvent, QShortcut
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -211,6 +211,9 @@ class MainWindow(QMainWindow):
 
         # Connect signals
         self._connect_signals()
+
+        # Setup keyboard shortcuts (using QShortcut for window-level shortcuts)
+        self._setup_shortcuts()
 
         # NOTE: Video loading is deferred to showEvent() to ensure
         # the widget has a valid native window ID for MPV embedding.
@@ -526,6 +529,85 @@ class MainWindow(QMainWindow):
         self.btn_save_session.clicked.connect(self._on_save_session)
         self.btn_final_review.clicked.connect(self._on_final_review)
 
+    def _setup_shortcuts(self) -> None:
+        """Set up global keyboard shortcuts using QShortcut.
+
+        Uses QShortcut instead of keyPressEvent() because QShortcut has higher
+        priority than widget-level key handling. This ensures shortcuts work
+        regardless of which widget currently has focus.
+
+        Shortcuts:
+            Space: Pause/unpause video
+            Left: Seek back 3 seconds
+            Right: Seek forward 5 seconds
+            Down: Seek back 15 seconds
+            Up: Seek forward 30 seconds
+            C: Rally Start (when enabled, not in review mode)
+            S: Server wins point (when enabled, not in review mode)
+            R: Receiver wins point (when enabled, not in review mode)
+            U: Undo (when enabled, not in review mode)
+        """
+        # Video control shortcuts (always active)
+        self._shortcut_pause = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
+        self._shortcut_pause.activated.connect(self._on_shortcut_pause)
+
+        self._shortcut_seek_back = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
+        self._shortcut_seek_back.activated.connect(
+            lambda: self.video_widget.seek(-3.0, absolute=False)
+        )
+
+        self._shortcut_seek_forward = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
+        self._shortcut_seek_forward.activated.connect(
+            lambda: self.video_widget.seek(5.0, absolute=False)
+        )
+
+        self._shortcut_seek_back_long = QShortcut(QKeySequence(Qt.Key.Key_Down), self)
+        self._shortcut_seek_back_long.activated.connect(
+            lambda: self.video_widget.seek(-15.0, absolute=False)
+        )
+
+        self._shortcut_seek_forward_long = QShortcut(QKeySequence(Qt.Key.Key_Up), self)
+        self._shortcut_seek_forward_long.activated.connect(
+            lambda: self.video_widget.seek(30.0, absolute=False)
+        )
+
+        # Rally control shortcuts (only when not in review mode)
+        self._shortcut_rally_start = QShortcut(QKeySequence(Qt.Key.Key_C), self)
+        self._shortcut_rally_start.activated.connect(self._on_shortcut_rally_start)
+
+        self._shortcut_server_wins = QShortcut(QKeySequence(Qt.Key.Key_S), self)
+        self._shortcut_server_wins.activated.connect(self._on_shortcut_server_wins)
+
+        self._shortcut_receiver_wins = QShortcut(QKeySequence(Qt.Key.Key_R), self)
+        self._shortcut_receiver_wins.activated.connect(self._on_shortcut_receiver_wins)
+
+        self._shortcut_undo = QShortcut(QKeySequence(Qt.Key.Key_U), self)
+        self._shortcut_undo.activated.connect(self._on_shortcut_undo)
+
+    def _on_shortcut_pause(self) -> None:
+        """Handle Space shortcut for pause/unpause."""
+        self.video_widget.toggle_pause()
+
+    def _on_shortcut_rally_start(self) -> None:
+        """Handle C shortcut for rally start."""
+        if not self._in_review_mode and self.btn_rally_start.isEnabled():
+            self.on_rally_start()
+
+    def _on_shortcut_server_wins(self) -> None:
+        """Handle S shortcut for server wins."""
+        if not self._in_review_mode and self.btn_server_wins.isEnabled():
+            self.on_server_wins()
+
+    def _on_shortcut_receiver_wins(self) -> None:
+        """Handle R shortcut for receiver wins."""
+        if not self._in_review_mode and self.btn_receiver_wins.isEnabled():
+            self.on_receiver_wins()
+
+    def _on_shortcut_undo(self) -> None:
+        """Handle U shortcut for undo."""
+        if not self._in_review_mode and self.btn_undo.isEnabled():
+            self.on_undo()
+
     def _load_video(self) -> None:
         """Load the video file and probe metadata.
 
@@ -567,14 +649,19 @@ class MainWindow(QMainWindow):
         # Load video into player
         self.video_widget.load(str(video_path), fps=self.video_fps)
 
-        # If restoring session, seek to last position
+        # If restoring session, seek to last position after MPV has loaded
+        # Use a timer because MPV needs time to initialize before seeking works
         if self._restore_position is not None:
-            self.video_widget.seek(self._restore_position, absolute=True)
-            ToastManager.show_success(
-                self,
-                f"Resumed session at {self._restore_position:.1f}s",
-                duration_ms=3000
-            )
+            restore_pos = self._restore_position
+            def _do_restore_seek() -> None:
+                self.video_widget.seek(restore_pos, absolute=True)
+                ToastManager.show_success(
+                    self,
+                    f"Resumed session at {restore_pos:.1f}s",
+                    duration_ms=3000
+                )
+            # Wait 500ms for MPV to initialize before seeking
+            QTimer.singleShot(500, _do_restore_seek)
         else:
             ToastManager.show_success(
                 self,
@@ -1422,71 +1509,6 @@ class MainWindow(QMainWindow):
             # Use a timer to ensure the window is fully realized
             # 100ms gives Qt time to create native windows and process events
             QTimer.singleShot(100, self._load_video)
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle global keyboard shortcuts.
-
-        Shortcuts:
-            Space: Pause/unpause video
-            Left: Seek back 5 seconds
-            Right: Seek forward 5 seconds
-            C: Rally Start
-            S: Server wins point
-            R: Receiver wins point
-            U: Undo (also pauses video)
-
-        Args:
-            event: Key event from Qt
-        """
-        # Don't handle shortcuts when in review mode
-        if self._in_review_mode:
-            super().keyPressEvent(event)
-            return
-
-        key = event.key()
-
-        if key == Qt.Key.Key_Space:
-            # Space: Toggle pause
-            self.video_widget.toggle_pause()
-            event.accept()
-
-        elif key == Qt.Key.Key_Left:
-            # Left arrow: Seek back 5 seconds
-            self.video_widget.seek(-5.0, absolute=False)
-            event.accept()
-
-        elif key == Qt.Key.Key_Right:
-            # Right arrow: Seek forward 5 seconds
-            self.video_widget.seek(5.0, absolute=False)
-            event.accept()
-
-        elif key == Qt.Key.Key_C:
-            # C: Rally Start (if enabled)
-            if self.btn_rally_start.isEnabled():
-                self.on_rally_start()
-            event.accept()
-
-        elif key == Qt.Key.Key_S:
-            # S: Server wins (if enabled)
-            if self.btn_server_wins.isEnabled():
-                self.on_server_wins()
-            event.accept()
-
-        elif key == Qt.Key.Key_R:
-            # R: Receiver wins (if enabled)
-            if self.btn_receiver_wins.isEnabled():
-                self.on_receiver_wins()
-            event.accept()
-
-        elif key == Qt.Key.Key_U:
-            # U: Undo (if enabled)
-            if self.btn_undo.isEnabled():
-                self.on_undo()
-            event.accept()
-
-        else:
-            # Let other keys propagate normally
-            super().keyPressEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event.
