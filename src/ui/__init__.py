@@ -11,10 +11,12 @@ This package contains:
 """
 
 from src.ui.main_window import MainWindow
+from src.ui.review_mode import ReviewModeWidget
 from src.ui.setup_dialog import GameConfig, SetupDialog
 
 __all__ = [
     "GameConfig",
     "MainWindow",
+    "ReviewModeWidget",
     "SetupDialog",
 ]

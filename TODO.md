@@ -299,18 +299,18 @@
 > Rally verification and adjustment interface
 
 ### 8.1 Review Mode UI
-- [ ] Create src/ui/review_mode.py
-- [ ] Implement ReviewMode widget/panel
-- [ ] Display "Rally X of Y" header
-- [ ] Implement timing adjustment controls (+/- 0.1s buttons)
-- [ ] Implement score adjustment text field
-- [ ] Implement cascade checkbox
-- [ ] Implement rally list grid (clickable)
-- [ ] Highlight current rally in list
-- [ ] Implement Previous/Next navigation buttons
-- [ ] Implement Play Rally button
-- [ ] Implement Exit Review button
-- [ ] Implement Generate Kdenlive button
+- [x] Create src/ui/review_mode.py
+- [x] Implement ReviewMode widget/panel
+- [x] Display "Rally X of Y" header
+- [x] Implement timing adjustment controls (+/- 0.1s buttons)
+- [x] Implement score adjustment text field
+- [x] Implement cascade checkbox
+- [x] Implement rally list grid (clickable)
+- [x] Highlight current rally in list
+- [x] Implement Previous/Next navigation buttons
+- [x] Implement Play Rally button
+- [x] Implement Exit Review button
+- [x] Implement Generate Kdenlive button
 
 ### 8.2 Review Mode Logic
 - [ ] Implement navigate_to_rally() - seek video, update display
