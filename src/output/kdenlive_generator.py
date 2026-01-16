@@ -53,7 +53,10 @@ class KdenliveGenerator:
         segments: list[dict[str, Any]],
         fps: float,
         resolution: tuple[int, int] = (1920, 1080),
-        output_dir: Path | None = None
+        output_dir: Path | None = None,
+        team1_players: list[str] | None = None,
+        team2_players: list[str] | None = None,
+        game_type: str = "doubles"
     ) -> None:
         """Initialize Kdenlive project generator.
 
@@ -63,6 +66,9 @@ class KdenliveGenerator:
             fps: Video frames per second
             resolution: Video resolution (width, height), default 1080p
             output_dir: Output directory (default: ~/Videos/pickleball/)
+            team1_players: List of Team 1 player names (for intro subtitle)
+            team2_players: List of Team 2 player names (for intro subtitle)
+            game_type: "singles" or "doubles"
 
         Raises:
             ValueError: If fps is non-positive or resolution is invalid
@@ -82,6 +88,9 @@ class KdenliveGenerator:
         self.segments = segments
         self.fps = fps
         self.resolution = resolution
+        self.team1_players = team1_players or []
+        self.team2_players = team2_players or []
+        self.game_type = game_type
 
         # Set default output directory
         if output_dir is None:
@@ -180,6 +189,7 @@ class KdenliveGenerator:
         # with video/audio entries. MLT calculates entry duration as (out_tc - in_tc)
         # where timecodes are rounded to milliseconds. We must use the same math.
         current_output_seconds = 0.0
+        is_first_segment = True
 
         for seg in self.segments:
             # Calculate segment duration using the SAME method as MLT:
@@ -196,12 +206,51 @@ class KdenliveGenerator:
             if score:
                 start_time = self._seconds_to_ass_time(current_output_seconds)
                 end_time = self._seconds_to_ass_time(current_output_seconds + segment_duration)
-                lines.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{score}")
+
+                # First segment includes player names
+                if is_first_segment and (self.team1_players or self.team2_players):
+                    subtitle_text = self._format_intro_subtitle(score)
+                    is_first_segment = False
+                else:
+                    subtitle_text = score
+
+                lines.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{subtitle_text}")
 
             current_output_seconds += segment_duration
 
         lines.append("")
         ass_path.write_text("\n".join(lines), encoding="utf-8")
+
+    def _format_intro_subtitle(self, score: str) -> str:
+        """Format the intro subtitle with player names and score.
+
+        Args:
+            score: The score string (e.g., "0-0-2")
+
+        Returns:
+            Formatted subtitle text with player names, vs, and score.
+            Uses \\N for ASS line breaks.
+
+        Example output for doubles:
+            "Alice & Bob\\Nvs\\NCharlie & Dana\\N\\N0-0-2"
+
+        Example output for singles:
+            "Alice\\Nvs\\NBob\\N\\N0-0-2"
+        """
+        # Format team 1 players
+        if self.game_type == "singles":
+            team1_str = self.team1_players[0] if self.team1_players else "Team 1"
+        else:
+            team1_str = " & ".join(self.team1_players) if self.team1_players else "Team 1"
+
+        # Format team 2 players
+        if self.game_type == "singles":
+            team2_str = self.team2_players[0] if self.team2_players else "Team 2"
+        else:
+            team2_str = " & ".join(self.team2_players) if self.team2_players else "Team 2"
+
+        # Build subtitle with line breaks (\\N is ASS line break)
+        return f"{team1_str}\\Nvs\\N{team2_str}\\N\\N{score}"
 
     def _seconds_to_ass_time(self, seconds: float) -> str:
         """Convert seconds to ASS time format (H:MM:SS.cc).

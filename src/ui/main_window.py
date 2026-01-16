@@ -1524,12 +1524,15 @@ class MainWindow(QMainWindow):
                 duration_ms=3000
             )
 
-        # Create generator
+        # Create generator with player names for intro subtitle
         generator = KdenliveGenerator(
             video_path=str(self.config.video_path),
             segments=segments,
             fps=self.video_fps,
-            resolution=resolution
+            resolution=resolution,
+            team1_players=self.config.team1_players,
+            team2_players=self.config.team2_players,
+            game_type=self.config.game_type
         )
 
         # Generate files
