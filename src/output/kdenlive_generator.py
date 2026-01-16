@@ -300,7 +300,8 @@ class KdenliveGenerator:
         if self.game_completion is None:
             return ""
 
-        final_score = self.game_completion.final_score
+        # BUG FIX: Escape final_score to prevent ASS injection
+        final_score = _escape_ass_text(self.game_completion.final_score)
 
         # Format winner names with ASS escaping
         if self.game_completion.winning_team_names:
@@ -724,6 +725,10 @@ class KdenliveGenerator:
         Returns:
             XML string with entry elements (indented properly)
         """
+        # Probe video to get frame count for bounds checking
+        video_info = probe_video(self.video_path)
+        max_frames = video_info.frame_count or int(video_info.duration * self.fps)
+
         entries: list[str] = []
 
         for i, seg in enumerate(self.segments):
@@ -733,7 +738,10 @@ class KdenliveGenerator:
             is_last = (i == len(self.segments) - 1)
             if is_last and self.game_completion is not None and self.game_completion.is_completed:
                 extension_frames = int(self.game_completion.extension_seconds * self.fps)
-                out_tc = self.frames_to_timecode(seg["out"] + extension_frames)
+                # BUG FIX: Clamp extension to avoid exceeding video duration
+                max_extension = max_frames - seg["out"]
+                safe_extension = min(extension_frames, max_extension)
+                out_tc = self.frames_to_timecode(seg["out"] + safe_extension)
             else:
                 out_tc = self.frames_to_timecode(seg["out"])
 
@@ -757,6 +765,10 @@ class KdenliveGenerator:
         Returns:
             JSON string with AVSplit groups
         """
+        # Probe video to get frame count for bounds checking
+        video_info = probe_video(self.video_path)
+        max_frames = video_info.frame_count or int(video_info.duration * self.fps)
+
         groups = []
         current_frame = 0
 
@@ -767,7 +779,10 @@ class KdenliveGenerator:
             is_last = (i == len(self.segments) - 1)
             if is_last and self.game_completion is not None and self.game_completion.is_completed:
                 extension_frames = int(self.game_completion.extension_seconds * self.fps)
-                duration_frames += extension_frames
+                # BUG FIX: Clamp extension to avoid exceeding video duration
+                max_extension = max_frames - seg["out"]
+                safe_extension = min(extension_frames, max_extension)
+                duration_frames += safe_extension
 
             # Create AVSplit group for this clip pair
             group = {
@@ -797,8 +812,17 @@ class KdenliveGenerator:
 
         # Add extension for game completion
         if self.game_completion is not None and self.game_completion.is_completed:
+            # Probe video to get frame count for bounds checking
+            video_info = probe_video(self.video_path)
+            max_frames = video_info.frame_count or int(video_info.duration * self.fps)
+
             extension_frames = int(self.game_completion.extension_seconds * self.fps)
-            return base_length + extension_frames
+            # BUG FIX: Clamp extension to avoid exceeding video duration
+            if self.segments:
+                last_seg_out = self.segments[-1]["out"]
+                max_extension = max_frames - last_seg_out
+                safe_extension = min(extension_frames, max_extension)
+                return base_length + safe_extension
 
         return base_length
 

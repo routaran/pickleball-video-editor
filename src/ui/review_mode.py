@@ -84,9 +84,11 @@ class RallyHeaderWidget(QWidget):
 
     Signals:
         exit_requested(): User clicked Exit Review button
+        return_to_menu_requested(): User clicked Return to Main Menu button
     """
 
     exit_requested = pyqtSignal()
+    return_to_menu_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the rally header widget.
@@ -118,6 +120,24 @@ class RallyHeaderWidget(QWidget):
         layout.addWidget(self._counter_label)
 
         layout.addStretch()
+
+        # Return to Main Menu button
+        self._return_to_menu_button = QPushButton("Main Menu")
+        self._return_to_menu_button.setFont(Fonts.button_other())
+        self._return_to_menu_button.clicked.connect(self.return_to_menu_requested.emit)
+        self._return_to_menu_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_TERTIARY};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {RADIUS_MD}px;
+                padding: {SPACE_SM}px {SPACE_MD}px;
+            }}
+            QPushButton:hover {{
+                background-color: {BG_BORDER};
+            }}
+        """)
+        layout.addWidget(self._return_to_menu_button)
 
         # Exit button
         self._exit_button = QPushButton("Exit Review")
@@ -724,6 +744,7 @@ class ReviewModeWidget(QWidget):
     timing_adjusted = pyqtSignal(int, str, float)
     score_changed = pyqtSignal(int, str, bool)
     exit_requested = pyqtSignal()
+    return_to_menu_requested = pyqtSignal()
     generate_requested = pyqtSignal()
     play_rally_requested = pyqtSignal(int)
     navigate_previous = pyqtSignal()
@@ -754,6 +775,7 @@ class ReviewModeWidget(QWidget):
         # Header with rally progress (stays at top, outside splitters)
         self._header = RallyHeaderWidget()
         self._header.exit_requested.connect(self.exit_requested.emit)
+        self._header.return_to_menu_requested.connect(self.return_to_menu_requested.emit)
         main_layout.addWidget(self._header)
 
         # ===================================================================

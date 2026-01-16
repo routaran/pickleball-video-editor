@@ -40,6 +40,28 @@ from src.ui.styles import (
 __all__ = ["PlaybackControls"]
 
 
+def _format_skip(seconds: float) -> str:
+    """Format skip duration for display.
+
+    Args:
+        seconds: Duration in seconds
+
+    Returns:
+        Formatted string (e.g., "1s", "5s", "0.5s")
+
+    Examples:
+        >>> _format_skip(1.0)
+        '1s'
+        >>> _format_skip(5.0)
+        '5s'
+        >>> _format_skip(0.5)
+        '0.5s'
+    """
+    if seconds == int(seconds):
+        return f"{int(seconds)}s"
+    return f"{seconds:.1f}s"
+
+
 def _format_time(seconds: float) -> str:
     """Format seconds as MM:SS.
 
@@ -75,11 +97,12 @@ class PlaybackControls(QFrame):
     - Time display: MM:SS / MM:SS (current/total)
 
     Signals:
-        skip_back_5s: User clicked |◀ button (skip back 5 seconds)
-        skip_back_1s: User clicked ◀◀ button (skip back 1 second)
+        skip_back_5s: User clicked |◀ button (skip back large duration)
+        skip_back_1s: User clicked ◀◀ button (skip back small duration)
         play_pause: User clicked ▶/❚❚ button (toggle playback)
-        skip_forward_1s: User clicked ▶▶ button (skip forward 1 second)
-        skip_forward_5s: User clicked ▶| button (skip forward 5 seconds)
+        skip_forward_1s: User clicked ▶▶ button (skip forward small duration)
+        skip_forward_5s: User clicked ▶| button (skip forward large duration)
+        skip_requested: User clicked skip button (emits signed float: negative=backward, positive=forward)
         speed_changed: User changed playback speed (emits 0.5, 1.0, or 2.0)
 
     Example:
@@ -106,17 +129,29 @@ class PlaybackControls(QFrame):
     skip_forward_1s = pyqtSignal()
     skip_forward_5s = pyqtSignal()
 
+    # Detailed navigation signal with duration
+    skip_requested = pyqtSignal(float)  # Emits signed duration (negative = backward)
+
     # Speed signal
     speed_changed = pyqtSignal(float)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        small_skip: float = 1.0,
+        large_skip: float = 5.0,
+        parent: QWidget | None = None,
+    ) -> None:
         """Initialize playback controls.
 
         Args:
+            small_skip: Duration in seconds for small skip buttons (default: 1.0)
+            large_skip: Duration in seconds for large skip buttons (default: 5.0)
             parent: Parent widget (default: None)
         """
         super().__init__(parent)
 
+        self._small_skip = small_skip
+        self._large_skip = large_skip
         self._is_playing = False
         self._current_speed = 1.0
 
@@ -149,11 +184,11 @@ class PlaybackControls(QFrame):
         self._btn_skip_forward_5s.setObjectName("transport_button")
 
         # Set tooltips
-        self._btn_skip_back_5s.setToolTip("Skip back 5 seconds")
-        self._btn_skip_back_1s.setToolTip("Skip back 1 second")
+        self._btn_skip_back_5s.setToolTip(f"Skip back {_format_skip(self._large_skip)}")
+        self._btn_skip_back_1s.setToolTip(f"Skip back {_format_skip(self._small_skip)}")
         self._btn_play_pause.setToolTip("Play / Pause")
-        self._btn_skip_forward_1s.setToolTip("Skip forward 1 second")
-        self._btn_skip_forward_5s.setToolTip("Skip forward 5 seconds")
+        self._btn_skip_forward_1s.setToolTip(f"Skip forward {_format_skip(self._small_skip)}")
+        self._btn_skip_forward_5s.setToolTip(f"Skip forward {_format_skip(self._large_skip)}")
 
         # Make play button slightly larger
         self._btn_play_pause.setMinimumWidth(80)
@@ -283,12 +318,28 @@ class PlaybackControls(QFrame):
 
     def _connect_signals(self) -> None:
         """Connect internal button signals to external signals."""
-        # Transport buttons
+        # Transport buttons - emit both generic signal and detailed skip_requested signal
         self._btn_skip_back_5s.clicked.connect(self.skip_back_5s.emit)
+        self._btn_skip_back_5s.clicked.connect(
+            lambda: self.skip_requested.emit(-self._large_skip)
+        )
+
         self._btn_skip_back_1s.clicked.connect(self.skip_back_1s.emit)
+        self._btn_skip_back_1s.clicked.connect(
+            lambda: self.skip_requested.emit(-self._small_skip)
+        )
+
         self._btn_play_pause.clicked.connect(self.play_pause.emit)
+
         self._btn_skip_forward_1s.clicked.connect(self.skip_forward_1s.emit)
+        self._btn_skip_forward_1s.clicked.connect(
+            lambda: self.skip_requested.emit(self._small_skip)
+        )
+
         self._btn_skip_forward_5s.clicked.connect(self.skip_forward_5s.emit)
+        self._btn_skip_forward_5s.clicked.connect(
+            lambda: self.skip_requested.emit(self._large_skip)
+        )
 
         # Speed buttons
         self._btn_speed_half.clicked.connect(lambda: self._on_speed_changed(0.5))
@@ -392,3 +443,33 @@ class PlaybackControls(QFrame):
             ```
         """
         return self._current_speed
+
+    @property
+    def small_skip_duration(self) -> float:
+        """Get the small skip duration in seconds.
+
+        Returns:
+            Small skip duration (default: 1.0)
+
+        Example:
+            ```python
+            controls = PlaybackControls(small_skip=0.5)
+            print(controls.small_skip_duration)  # 0.5
+            ```
+        """
+        return self._small_skip
+
+    @property
+    def large_skip_duration(self) -> float:
+        """Get the large skip duration in seconds.
+
+        Returns:
+            Large skip duration (default: 5.0)
+
+        Example:
+            ```python
+            controls = PlaybackControls(large_skip=10.0)
+            print(controls.large_skip_duration)  # 10.0
+            ```
+        """
+        return self._large_skip

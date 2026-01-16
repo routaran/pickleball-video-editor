@@ -44,9 +44,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.core.app_config import AppSettings
 from src.core.models import SessionState
 from src.core.session_manager import SessionManager
 from src.ui.dialogs import ResumeSessionDialog, ResumeSessionResult, SessionDetails
+from src.ui.dialogs.config_dialog import ConfigDialog
 from src.ui.styles.colors import (
     BG_BORDER,
     BG_PRIMARY,
@@ -60,6 +62,7 @@ from src.ui.styles.colors import (
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
+from src.ui.styles.fonts import RADIUS_MD, SPACE_MD, SPACE_SM, Fonts
 from src.ui.widgets.saved_session_card import SavedSessionCard, SavedSessionInfo
 
 
@@ -112,11 +115,16 @@ class SetupDialog(QDialog):
     - Automatic session detection when browsing for video
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        app_settings: AppSettings | None = None,
+    ) -> None:
         """Initialize the setup dialog.
 
         Args:
             parent: Parent widget (optional)
+            app_settings: Application settings instance (optional, will load if not provided)
         """
         super().__init__(parent)
         self.setObjectName("setupDialog")
@@ -132,6 +140,9 @@ class SetupDialog(QDialog):
 
         # Session state to resume (if user chooses to resume)
         self._session_state: SessionState | None = None
+
+        # Application settings
+        self._app_settings = app_settings or AppSettings.load()
 
         # Create UI components
         self._create_widgets()
@@ -464,6 +475,12 @@ class SetupDialog(QDialog):
 
     def _create_widgets(self) -> None:
         """Create all dialog widgets."""
+        # Settings button (appears at top)
+        self._settings_button = QPushButton("Settings")
+        self._settings_button.setFont(Fonts.button_other())
+        self._settings_button.setObjectName("settings_button")
+        self._settings_button.setToolTip("Configure application settings")
+
         # Recent Sessions section
         self.sessions_label = QLabel("RECENT SESSIONS")
         self.sessions_count_label = QLabel("")  # Will be populated later
@@ -527,6 +544,12 @@ class SetupDialog(QDialog):
         main_layout = QVBoxLayout()
         main_layout.setSpacing(24)
         main_layout.setContentsMargins(24, 24, 24, 24)
+
+        # Top header with Settings button
+        header_layout = QHBoxLayout()
+        header_layout.addStretch()
+        header_layout.addWidget(self._settings_button)
+        main_layout.addLayout(header_layout)
 
         # Recent Sessions section (conditionally visible)
         sessions_header_layout = QHBoxLayout()
@@ -618,6 +641,20 @@ class SetupDialog(QDialog):
             #setupDialog {{
                 background-color: {BG_SECONDARY};
                 color: {TEXT_PRIMARY};
+            }}
+
+            #setupDialog QPushButton#settings_button {{
+                background-color: {BG_TERTIARY};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BG_BORDER};
+                border-radius: {RADIUS_MD}px;
+                padding: {SPACE_SM}px {SPACE_MD}px;
+                min-width: 80px;
+            }}
+
+            #setupDialog QPushButton#settings_button:hover {{
+                background-color: {BG_BORDER};
+                border-color: {TEXT_ACCENT};
             }}
 
             #setupDialog QLabel#section-label {{
@@ -786,6 +823,9 @@ class SetupDialog(QDialog):
 
     def _connect_signals(self) -> None:
         """Connect widget signals to slots."""
+        # Settings button
+        self._settings_button.clicked.connect(self._on_settings_clicked)
+
         self.browse_button.clicked.connect(self._browse_video)
         self.game_type_combo.currentIndexChanged.connect(self._on_game_type_changed)
 
@@ -1039,3 +1079,25 @@ class SetupDialog(QDialog):
             GameConfig if dialog was accepted, None otherwise
         """
         return self._config
+
+    def get_app_settings(self) -> AppSettings:
+        """Get the current application settings.
+
+        Returns:
+            Current application settings instance
+        """
+        return self._app_settings
+
+    @pyqtSlot()
+    def _on_settings_clicked(self) -> None:
+        """Open the configuration dialog.
+
+        When the user applies changes, the settings are saved and
+        the internal app_settings instance is updated.
+        """
+        dialog = ConfigDialog(self._app_settings, self)
+        if dialog.exec():
+            result = dialog.get_result()
+            if result is not None:
+                self._app_settings = result.settings
+                self._app_settings.save()

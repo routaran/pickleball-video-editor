@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.core.app_config import AppSettings
 from src.core.models import GameCompletionInfo, ScoreSnapshot, SessionState
 from src.core.rally_manager import RallyManager
 from src.core.score_state import ScoreState
@@ -181,20 +182,24 @@ class MainWindow(QMainWindow):
     session_saved = pyqtSignal()
     review_requested = pyqtSignal()
     quit_requested = pyqtSignal()
+    return_to_menu_requested = pyqtSignal()
 
     def __init__(
         self,
         config: GameConfig,
+        app_settings: AppSettings | None = None,
         parent: QWidget | None = None,
     ) -> None:
         """Initialize main window with game configuration.
 
         Args:
             config: Game configuration from SetupDialog (may include session_state for resuming)
+            app_settings: Application settings for shortcuts and window sizes
             parent: Parent widget (optional)
         """
         super().__init__(parent)
         self.config = config
+        self._app_settings = app_settings or AppSettings()
 
         # Session manager for saving/loading
         self._session_manager = SessionManager()
@@ -314,9 +319,11 @@ class MainWindow(QMainWindow):
         """
         # Window properties
         self.setWindowTitle(f"Pickleball Video Editor - {self.config.video_path.name}")
-        # Minimum height of 1080 as requested, width scaled for 16:9 video + controls
-        # Width: ~1400 to fit video + control panel + margins
-        self.setMinimumSize(1400, 1080)
+        # Apply window size from config
+        ws = self._app_settings.window_size
+        self.setMinimumSize(ws.min_width, ws.min_height)
+        if ws.max_width > 0 and ws.max_height > 0:
+            self.setMaximumSize(ws.max_width, ws.max_height)
         self.resize(1600, 1100)
 
         # Central widget with main layout
@@ -452,14 +459,18 @@ class MainWindow(QMainWindow):
         layout.addStretch()
 
         # Session buttons (right side)
+        self.btn_return_to_menu = QPushButton("Main Menu")
         self.btn_save_session = QPushButton("Save Session")
         self.btn_final_review = QPushButton("Final Review")
 
-        for btn in [self.btn_save_session, self.btn_final_review]:
+        for btn in [self.btn_return_to_menu, self.btn_save_session, self.btn_final_review]:
             btn.setObjectName("toolbar_button")
             btn.setFont(Fonts.button_other())
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
+        self.btn_return_to_menu.setToolTip("Return to main menu")
+
+        layout.addWidget(self.btn_return_to_menu)
         layout.addWidget(self.btn_save_session)
         layout.addWidget(self.btn_final_review)
 
@@ -546,8 +557,20 @@ class MainWindow(QMainWindow):
         self.btn_force_sideout.clicked.connect(self._on_force_sideout)
         self.btn_add_comment.clicked.connect(self._on_add_comment)
         self.btn_time_expired.clicked.connect(self._on_time_expired)
+        self.btn_return_to_menu.clicked.connect(self._on_return_to_menu)
         self.btn_save_session.clicked.connect(self._on_save_session)
         self.btn_final_review.clicked.connect(self._on_final_review)
+
+    def _key_from_char(self, char: str) -> Qt.Key:
+        """Convert single character to Qt.Key.
+
+        Args:
+            char: Single character string (case-insensitive)
+
+        Returns:
+            Qt.Key enum value
+        """
+        return getattr(Qt.Key, f"Key_{char.upper()}")
 
     def _setup_shortcuts(self) -> None:
         """Set up global keyboard shortcuts using QShortcut.
@@ -556,52 +579,46 @@ class MainWindow(QMainWindow):
         priority than widget-level key handling. This ensures shortcuts work
         regardless of which widget currently has focus.
 
-        Shortcuts:
-            Space: Pause/unpause video
-            Left: Seek back 3 seconds
-            Right: Seek forward 5 seconds
-            Down: Seek back 15 seconds
-            Up: Seek forward 30 seconds
-            C: Rally Start (when enabled, not in review mode)
-            S: Server wins point (when enabled, not in review mode)
-            R: Receiver wins point (when enabled, not in review mode)
-            U: Undo (when enabled, not in review mode)
+        Shortcuts are loaded from AppSettings for customization.
         """
+        shortcuts = self._app_settings.shortcuts
+        skip_durations = self._app_settings.skip_durations
+
         # Video control shortcuts (always active)
         self._shortcut_pause = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self._shortcut_pause.activated.connect(self._on_shortcut_pause)
 
         self._shortcut_seek_back = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
         self._shortcut_seek_back.activated.connect(
-            lambda: self.video_widget.seek(-3.0, absolute=False)
+            lambda: self.video_widget.seek(skip_durations.arrow_left, absolute=False)
         )
 
         self._shortcut_seek_forward = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
         self._shortcut_seek_forward.activated.connect(
-            lambda: self.video_widget.seek(5.0, absolute=False)
+            lambda: self.video_widget.seek(skip_durations.arrow_right, absolute=False)
         )
 
         self._shortcut_seek_back_long = QShortcut(QKeySequence(Qt.Key.Key_Down), self)
         self._shortcut_seek_back_long.activated.connect(
-            lambda: self.video_widget.seek(-15.0, absolute=False)
+            lambda: self.video_widget.seek(skip_durations.arrow_down, absolute=False)
         )
 
         self._shortcut_seek_forward_long = QShortcut(QKeySequence(Qt.Key.Key_Up), self)
         self._shortcut_seek_forward_long.activated.connect(
-            lambda: self.video_widget.seek(30.0, absolute=False)
+            lambda: self.video_widget.seek(skip_durations.arrow_up, absolute=False)
         )
 
         # Rally control shortcuts (only when not in review mode)
-        self._shortcut_rally_start = QShortcut(QKeySequence(Qt.Key.Key_C), self)
+        self._shortcut_rally_start = QShortcut(QKeySequence(self._key_from_char(shortcuts.rally_start)), self)
         self._shortcut_rally_start.activated.connect(self._on_shortcut_rally_start)
 
-        self._shortcut_server_wins = QShortcut(QKeySequence(Qt.Key.Key_S), self)
+        self._shortcut_server_wins = QShortcut(QKeySequence(self._key_from_char(shortcuts.server_wins)), self)
         self._shortcut_server_wins.activated.connect(self._on_shortcut_server_wins)
 
-        self._shortcut_receiver_wins = QShortcut(QKeySequence(Qt.Key.Key_R), self)
+        self._shortcut_receiver_wins = QShortcut(QKeySequence(self._key_from_char(shortcuts.receiver_wins)), self)
         self._shortcut_receiver_wins.activated.connect(self._on_shortcut_receiver_wins)
 
-        self._shortcut_undo = QShortcut(QKeySequence(Qt.Key.Key_U), self)
+        self._shortcut_undo = QShortcut(QKeySequence(self._key_from_char(shortcuts.undo)), self)
         self._shortcut_undo.activated.connect(self._on_shortcut_undo)
 
     def _on_shortcut_pause(self) -> None:
@@ -1095,6 +1112,24 @@ class MainWindow(QMainWindow):
 
         self.video_widget.show_osd(f"Time Expired! {winner_name} wins", duration=5.0)
 
+    @pyqtSlot()
+    def _on_return_to_menu(self) -> None:
+        """Handle Return to Main Menu button click.
+
+        Shows unsaved warning if there are unsaved changes, then
+        emits return_to_menu_requested signal.
+        """
+        if self._dirty:
+            dialog = UnsavedWarningDialog(self)
+            if dialog.exec():
+                result = dialog.get_result()
+                if result == UnsavedWarningResult.CANCEL:
+                    return
+                if result == UnsavedWarningResult.SAVE_AND_QUIT:
+                    self._on_save_session()
+
+        self.return_to_menu_requested.emit()
+
     def _build_session_state(self) -> SessionState:
         """Build SessionState from current state.
 
@@ -1242,6 +1277,7 @@ class MainWindow(QMainWindow):
             self._review_widget.exit_requested.connect(self.exit_review_mode)
             self._review_widget.generate_requested.connect(self._on_review_generate)
             self._review_widget.game_completed_toggled.connect(self._on_game_completed_toggled)
+            self._review_widget.return_to_menu_requested.connect(self.return_to_menu_requested.emit)
 
         # === Move video container into review widget's video placeholder ===
         video_placeholder = self._review_widget.get_video_placeholder()
@@ -1407,6 +1443,31 @@ class MainWindow(QMainWindow):
             duration=1.5
         )
 
+    def _refresh_game_completion_info(self) -> None:
+        """Recompute game completion info after score changes.
+
+        Updates the final score and winning team based on current score state
+        and refreshes the review widget if in review mode.
+        """
+        if not self._in_review_mode or self._review_widget is None:
+            return
+
+        # Recalculate final score from score_state
+        final_score = self._calculate_final_score()
+
+        # Determine winner based on current scores
+        t1_score, t2_score = self.score_state.score[0], self.score_state.score[1]
+        if t1_score > t2_score:
+            winning_team_names = self.config.team1_players
+        elif t2_score > t1_score:
+            winning_team_names = self.config.team2_players
+        else:
+            # Tie - use empty list
+            winning_team_names = []
+
+        # Update review widget with new completion info
+        self._review_widget.set_game_completion_info(final_score, winning_team_names)
+
     @pyqtSlot(int, str, bool)
     def _on_review_score_changed(self, index: int, new_score: str, cascade: bool) -> None:
         """Handle score change in review mode.
@@ -1481,6 +1542,9 @@ class MainWindow(QMainWindow):
 
         # Mark session as dirty
         self._dirty = True
+
+        # Refresh game completion info after any score edit
+        self._refresh_game_completion_info()
 
     @pyqtSlot(int)
     def _on_review_play_rally(self, index: int) -> None:
