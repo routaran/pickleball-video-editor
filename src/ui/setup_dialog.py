@@ -1,7 +1,11 @@
 """Setup dialog for Pickleball Video Editor.
 
 This module provides the initial configuration dialog that users see when
-starting a new editing session. It collects:
+starting the application. It provides:
+- Recent Sessions: Display of saved sessions with click-to-resume functionality
+- New Session: Form for starting a new editing session
+
+For new sessions, it collects:
 - Source video file path
 - Game type (Singles or Doubles)
 - Victory rules (Game to 11, 9, or Timed)
@@ -9,6 +13,12 @@ starting a new editing session. It collects:
 
 The dialog validates all inputs and provides visual feedback for errors.
 Team 1 is highlighted with an accent border to indicate the first server.
+
+Recent Sessions features:
+- Horizontal scrollable card layout
+- Click to resume or start fresh
+- Delete session with confirmation
+- Missing video detection with re-link capability
 """
 
 from dataclasses import dataclass
@@ -24,7 +34,9 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -45,6 +57,7 @@ from src.ui.styles.colors import (
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
+from src.ui.widgets.saved_session_card import SavedSessionCard, SavedSessionInfo
 
 
 __all__ = ["GameConfig", "SetupDialog"]
@@ -72,22 +85,28 @@ class GameConfig:
 
 
 class SetupDialog(QDialog):
-    """Initial setup dialog for configuring a new editing session.
+    """Initial setup dialog for configuring editing sessions.
 
-    This dialog collects all necessary information before starting the main
-    editing interface. It provides validation and visual feedback for all
-    required fields.
+    This dialog serves as the entry point for the application, providing:
+    1. Recent Sessions: Horizontal scrollable cards showing saved sessions
+       - Click to resume or start fresh
+       - Delete with confirmation
+       - Missing video handling with hash validation
+    2. New Session Form: Input fields for starting new editing session
 
     The dialog uses a vertical layout with sections for:
+    - Recent Sessions (hidden if no sessions exist)
     - Video file selection
     - Game configuration (type and victory rules)
     - Team 1 player names (highlighted as first server)
     - Team 2 player names
 
     Dynamic behavior:
+    - Recent Sessions section hidden when no saved sessions
     - Singles mode hides Player 2 fields
     - Doubles mode shows all 4 player fields
     - Start Editing button disabled until all validation passes
+    - Automatic session detection when browsing for video
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -97,9 +116,9 @@ class SetupDialog(QDialog):
             parent: Parent widget (optional)
         """
         super().__init__(parent)
-        self.setWindowTitle("New Editing Session")
+        self.setWindowTitle("Pickleball Video Editor")
         self.setModal(True)
-        self.setMinimumWidth(600)
+        self.setMinimumWidth(700)
 
         # Configuration result (set when accepted)
         self._config: GameConfig | None = None
@@ -119,8 +138,288 @@ class SetupDialog(QDialog):
         # Initial validation state
         self._validate()
 
+        # Load saved sessions
+        self._load_saved_sessions()
+
+    def _load_saved_sessions(self) -> None:
+        """Load and display saved session cards.
+
+        Fetches session metadata from SessionManager and creates SavedSessionCard
+        widgets for each session. Hides the entire section if no sessions exist.
+        """
+        # Get all sessions from SessionManager
+        sessions = self._session_manager.list_all_sessions(limit=6)
+
+        # Hide section if no sessions
+        if not sessions:
+            self.sessions_section.setVisible(False)
+            return
+
+        # Show section and update count label
+        self.sessions_section.setVisible(True)
+        total_count = len(self._session_manager.list_all_sessions(limit=100))
+        displayed_count = len(sessions)
+
+        if displayed_count < total_count:
+            self.sessions_count_label.setText(f"(showing {displayed_count} of {total_count})")
+        else:
+            self.sessions_count_label.setText(f"({displayed_count})")
+
+        # Create cards for each session
+        for session_dict in sessions:
+            session_info = SavedSessionInfo(
+                session_path=session_dict["session_path"],
+                session_hash=session_dict["session_hash"],
+                video_name=session_dict["video_name"],
+                rally_count=session_dict["rally_count"],
+                current_score=session_dict["current_score"],
+                last_modified=session_dict["last_modified"],
+                game_type=session_dict["game_type"],
+                video_exists=session_dict["video_exists"],
+            )
+
+            card = SavedSessionCard(session_info)
+            card.clicked.connect(self._on_session_card_clicked)
+            card.delete_requested.connect(self._on_session_delete_requested)
+            self.sessions_layout.addWidget(card)
+
+        # Add stretch to push cards to the left
+        self.sessions_layout.addStretch()
+
+    @pyqtSlot(SavedSessionInfo)
+    def _on_session_card_clicked(self, info: SavedSessionInfo) -> None:
+        """Handle session card click.
+
+        If video exists, show ResumeSessionDialog.
+        If video missing, show MissingVideoDialog with options to browse, delete, or cancel.
+
+        Args:
+            info: Session metadata from the clicked card
+        """
+        if info.video_exists:
+            # Video exists - show existing resume dialog flow
+            self._handle_existing_session_from_card(info)
+        else:
+            # Video missing - show missing video dialog
+            self._handle_missing_video(info)
+
+    def _handle_existing_session_from_card(self, info: SavedSessionInfo) -> None:
+        """Handle session card click when video exists.
+
+        Shows ResumeSessionDialog and handles user's choice.
+
+        Args:
+            info: Session metadata
+        """
+        # Load full session state from session file
+        state = self._session_manager.load_from_session_file(info.session_path)
+        if state is None:
+            QMessageBox.warning(
+                self,
+                "Session Load Error",
+                "Failed to load session data. The session file may be corrupted."
+            )
+            return
+
+        # Extract video path from session state
+        video_path = state.video_path
+
+        # Map victory_rules to display format
+        victory_map = {
+            "11": "Game to 11",
+            "9": "Game to 9",
+            "timed": "Timed"
+        }
+        victory_display = victory_map.get(state.victory_rules, state.victory_rules)
+
+        # Format game type for display
+        game_type_display = state.game_type.capitalize()
+
+        # Create SessionDetails for dialog
+        details = SessionDetails(
+            video_name=info.video_name,
+            rally_count=info.rally_count,
+            current_score=info.current_score,
+            last_position=state.last_position,
+            game_type=game_type_display,
+            victory_rule=victory_display
+        )
+
+        # Show resume dialog
+        dialog = ResumeSessionDialog(details, self)
+        dialog.exec()
+        result = dialog.get_result()
+
+        if result == ResumeSessionResult.RESUME:
+            # User chose to resume - populate form and set session state
+            self._session_state = state
+            self.video_path_edit.setText(video_path)
+            self._populate_from_session(state)
+        else:  # START_FRESH
+            # User chose to start fresh - delete session and populate video path
+            self._session_manager.delete_session_file(info.session_path)
+            self._session_state = None
+            self.video_path_edit.setText(video_path)
+            # Reload sessions to update UI
+            self._reload_sessions()
+
+    def _handle_missing_video(self, info: SavedSessionInfo) -> None:
+        """Handle session card click when video is missing.
+
+        Shows dialog with options to browse for video, delete session, or cancel.
+
+        Args:
+            info: Session metadata
+        """
+        # Create custom message box
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Video Not Found")
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setText(f"The video file for this session could not be found.")
+        msg_box.setInformativeText(
+            f"Original path:\n{info.session_path.parent / info.video_name}\n\n"
+            "What would you like to do?"
+        )
+
+        # Add custom buttons
+        browse_btn = msg_box.addButton("Browse for Video", QMessageBox.ButtonRole.ActionRole)
+        delete_btn = msg_box.addButton("Delete Session", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = msg_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+
+        msg_box.exec()
+
+        clicked_button = msg_box.clickedButton()
+
+        if clicked_button == browse_btn:
+            # User wants to browse for video
+            self._browse_for_missing_video(info)
+        elif clicked_button == delete_btn:
+            # User wants to delete session
+            self._delete_session(info)
+
+    def _browse_for_missing_video(self, info: SavedSessionInfo) -> None:
+        """Browse for missing video file and validate hash.
+
+        Args:
+            info: Session metadata
+        """
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Locate Video File",
+            str(Path.home() / "Videos"),
+            "Video Files (*.mp4 *.MP4);;All Files (*)"
+        )
+
+        if not file_path:
+            return
+
+        # Validate that the selected file matches the session hash
+        selected_hash = self._session_manager.get_video_hash(file_path)
+
+        if selected_hash != info.session_hash:
+            QMessageBox.critical(
+                self,
+                "Video Mismatch",
+                "The selected video doesn't match this session.\n\n"
+                "Please select the correct video file, or delete this session."
+            )
+            return
+
+        # Hash matches - load session and populate form
+        state = self._session_manager.load_from_session_file(info.session_path)
+        if state is None:
+            QMessageBox.warning(
+                self,
+                "Session Load Error",
+                "Failed to load session data. The session file may be corrupted."
+            )
+            return
+
+        # Update session with new video path
+        state.video_path = file_path
+        self._session_manager.save(state, file_path)
+
+        # Show resume dialog
+        self._handle_existing_session_from_card(info)
+
+        # Reload sessions to update UI
+        self._reload_sessions()
+
+    @pyqtSlot(SavedSessionInfo)
+    def _on_session_delete_requested(self, info: SavedSessionInfo) -> None:
+        """Handle delete button click on session card.
+
+        Shows confirmation dialog before deleting.
+
+        Args:
+            info: Session metadata for the session to delete
+        """
+        # Show confirmation dialog
+        reply = QMessageBox.question(
+            self,
+            "Delete Session",
+            f"Are you sure you want to delete this session?\n\n"
+            f"Video: {info.video_name}\n"
+            f"Score: {info.current_score}\n"
+            f"Rallies: {info.rally_count}\n\n"
+            "This action cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self._delete_session(info)
+
+    def _delete_session(self, info: SavedSessionInfo) -> None:
+        """Delete a session and refresh the UI.
+
+        Args:
+            info: Session metadata for the session to delete
+        """
+        # Delete the session file
+        success = self._session_manager.delete_session_file(info.session_path)
+
+        if not success:
+            QMessageBox.warning(
+                self,
+                "Delete Failed",
+                "Failed to delete session file."
+            )
+            return
+
+        # Reload sessions to update UI
+        self._reload_sessions()
+
+    def _reload_sessions(self) -> None:
+        """Reload and redisplay all saved sessions.
+
+        Clears existing cards and repopulates from SessionManager.
+        """
+        # Clear existing cards
+        while self.sessions_layout.count():
+            item = self.sessions_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Reload sessions
+        self._load_saved_sessions()
+
     def _create_widgets(self) -> None:
         """Create all dialog widgets."""
+        # Recent Sessions section
+        self.sessions_label = QLabel("RECENT SESSIONS")
+        self.sessions_count_label = QLabel("")  # Will be populated later
+        self.sessions_scroll = QScrollArea()
+        self.sessions_scroll.setWidgetResizable(True)
+        self.sessions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.sessions_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sessions_scroll.setMaximumHeight(220)
+        self.sessions_container = QWidget()
+        self.sessions_layout = QHBoxLayout(self.sessions_container)
+        self.sessions_layout.setContentsMargins(0, 0, 0, 0)
+        self.sessions_layout.setSpacing(16)
+        self.sessions_scroll.setWidget(self.sessions_container)
+
         # Video source section
         self.video_label = QLabel("SOURCE VIDEO")
         self.video_path_edit = QLineEdit()
@@ -155,6 +454,9 @@ class SetupDialog(QDialog):
         self.start_button = QPushButton("Start Editing")
 
         # Set object names for stylesheet targeting
+        self.sessions_label.setObjectName("section-label")
+        self.sessions_count_label.setObjectName("count-label")
+        self.sessions_scroll.setObjectName("sessions-scroll")
         self.video_label.setObjectName("section-label")
         self.game_type_label.setObjectName("section-label")
         self.victory_label.setObjectName("section-label")
@@ -167,6 +469,21 @@ class SetupDialog(QDialog):
         main_layout = QVBoxLayout()
         main_layout.setSpacing(24)
         main_layout.setContentsMargins(24, 24, 24, 24)
+
+        # Recent Sessions section (conditionally visible)
+        sessions_header_layout = QHBoxLayout()
+        sessions_header_layout.addWidget(self.sessions_label)
+        sessions_header_layout.addWidget(self.sessions_count_label)
+        sessions_header_layout.addStretch()
+
+        self.sessions_section = QWidget()
+        sessions_section_layout = QVBoxLayout(self.sessions_section)
+        sessions_section_layout.setContentsMargins(0, 0, 0, 0)
+        sessions_section_layout.setSpacing(12)
+        sessions_section_layout.addLayout(sessions_header_layout)
+        sessions_section_layout.addWidget(self.sessions_scroll)
+
+        main_layout.addWidget(self.sessions_section)
 
         # Video source section
         video_layout = QVBoxLayout()
@@ -250,6 +567,42 @@ class SetupDialog(QDialog):
                 font-size: 12px;
                 font-weight: 600;
                 letter-spacing: 0.5px;
+            }}
+
+            QLabel#count-label {{
+                color: {TEXT_DISABLED};
+                font-size: 11px;
+                font-weight: 500;
+            }}
+
+            QScrollArea#sessions-scroll {{
+                background-color: {BG_SECONDARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 8px;
+            }}
+
+            QScrollArea#sessions-scroll > QWidget {{
+                background-color: {BG_SECONDARY};
+            }}
+
+            QScrollBar:horizontal {{
+                height: 10px;
+                background-color: {BG_TERTIARY};
+                border-radius: 5px;
+            }}
+
+            QScrollBar::handle:horizontal {{
+                background-color: {BG_BORDER};
+                border-radius: 5px;
+                min-width: 40px;
+            }}
+
+            QScrollBar::handle:horizontal:hover {{
+                background-color: {TEXT_ACCENT};
+            }}
+
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
             }}
 
             QLineEdit {{
@@ -347,11 +700,6 @@ class SetupDialog(QDialog):
 
             QPushButton:hover:!disabled {{
                 border-color: {TEXT_ACCENT};
-                transform: translateY(-1px);
-            }}
-
-            QPushButton:pressed:!disabled {{
-                transform: translateY(0);
             }}
 
             QPushButton:disabled {{
@@ -368,7 +716,7 @@ class SetupDialog(QDialog):
             }}
 
             QPushButton#primary-button:hover:!disabled {{
-                box-shadow: 0 0 20px {GLOW_GREEN};
+                background-color: {TEXT_ACCENT};
             }}
 
             QPushButton#primary-button:disabled {{
