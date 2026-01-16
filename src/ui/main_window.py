@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.core.models import ScoreSnapshot, SessionState
+from src.core.models import GameCompletionInfo, ScoreSnapshot, SessionState
 from src.core.rally_manager import RallyManager
 from src.core.score_state import ScoreState
 from src.core.session_manager import SessionManager
@@ -927,6 +927,29 @@ class MainWindow(QMainWindow):
                 self.review_requested.emit()
             # else CONTINUE_EDITING - just close dialog and continue
 
+    def _calculate_final_score(self) -> str:
+        """Calculate final score for display.
+
+        Returns formatted score like "11-9" (team scores, not server-perspective).
+        """
+        score = self.score_state.score
+        return f"{score[0]}-{score[1]}"
+
+    def _get_winning_team_names(self) -> list[str]:
+        """Get the names of the winning team based on current score.
+
+        Returns:
+            List of player names for the winning team
+        """
+        score = self.score_state.score
+        if score[0] > score[1]:
+            return self.config.team1_players
+        elif score[1] > score[0]:
+            return self.config.team2_players
+        else:
+            # Tie - return empty (shouldn't happen in completed game)
+            return []
+
     # Video player handlers
 
     @pyqtSlot(float)
@@ -1218,6 +1241,7 @@ class MainWindow(QMainWindow):
             self._review_widget.play_rally_requested.connect(self._on_review_play_rally)
             self._review_widget.exit_requested.connect(self.exit_review_mode)
             self._review_widget.generate_requested.connect(self._on_review_generate)
+            self._review_widget.game_completed_toggled.connect(self._on_game_completed_toggled)
 
         # === Move video container into review widget's video placeholder ===
         video_placeholder = self._review_widget.get_video_placeholder()
@@ -1249,6 +1273,16 @@ class MainWindow(QMainWindow):
         # Populate with current rallies
         rallies = self.rally_manager.get_rallies()
         self._review_widget.set_rallies(rallies, fps=self.video_fps)
+
+        # Calculate and set game completion info
+        final_score = self._calculate_final_score()
+        winning_team_names = self._get_winning_team_names()
+        self._review_widget.set_game_completion_info(final_score, winning_team_names)
+
+        # Auto-detect if game is already over based on current score
+        is_over, winner = self.score_state.is_game_over()
+        if is_over:
+            self._review_widget._mark_complete_checkbox.setChecked(True)
 
         # Show review widget
         self._review_widget.show()
@@ -1491,6 +1525,15 @@ class MainWindow(QMainWindow):
             duration=2.0
         )
 
+    @pyqtSlot(bool)
+    def _on_game_completed_toggled(self, completed: bool) -> None:
+        """Handle game completed toggle from review widget.
+
+        Args:
+            completed: Whether game is now marked as completed
+        """
+        self._dirty = True
+
     @pyqtSlot()
     def _on_review_generate(self) -> None:
         """Handle generate Kdenlive project request.
@@ -1510,6 +1553,16 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Warn if game appears incomplete and not marked as completed
+        is_over, _ = self.score_state.is_game_over()
+        if not is_over and (self._review_widget is None or not self._review_widget.is_game_completed()):
+            ToastManager.show_warning(
+                self,
+                "Game appears incomplete - final score subtitle will not be added",
+                duration_ms=3000
+            )
+
+
         # Get video resolution from probe
         # We need to re-probe because we only stored fps/duration, not resolution
         try:
@@ -1524,6 +1577,19 @@ class MainWindow(QMainWindow):
                 duration_ms=3000
             )
 
+        # Check if game is marked as completed
+        game_completion_info = None
+        if self._review_widget is not None and self._review_widget.is_game_completed():
+            final_score, winning_names = self._review_widget.get_game_completion_info()
+            winning_team = 0 if self.score_state.score[0] > self.score_state.score[1] else 1
+            game_completion_info = GameCompletionInfo(
+                is_completed=True,
+                final_score=final_score,
+                winning_team=winning_team,
+                winning_team_names=winning_names,
+                extension_seconds=8.0
+            )
+
         # Create generator with player names for intro subtitle
         generator = KdenliveGenerator(
             video_path=str(self.config.video_path),
@@ -1532,7 +1598,8 @@ class MainWindow(QMainWindow):
             resolution=resolution,
             team1_players=self.config.team1_players,
             team2_players=self.config.team2_players,
-            game_type=self.config.game_type
+            game_type=self.config.game_type,
+            game_completion=game_completion_info
         )
 
         # Generate files

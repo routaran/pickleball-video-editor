@@ -728,6 +728,7 @@ class ReviewModeWidget(QWidget):
     play_rally_requested = pyqtSignal(int)
     navigate_previous = pyqtSignal()
     navigate_next = pyqtSignal()
+    game_completed_toggled = pyqtSignal(bool)  # Emitted when Mark Game Completed is toggled
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the review mode widget.
@@ -739,6 +740,9 @@ class ReviewModeWidget(QWidget):
         self._rallies: list[Rally] = []
         self._current_index = 0
         self._fps = 60.0  # Default fps, should be set by parent
+        self._game_completed = False
+        self._final_score = ""
+        self._winning_team_names: list[str] = []
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -900,6 +904,19 @@ class ReviewModeWidget(QWidget):
         summary_label.setFont(Fonts.body(size=14, weight=500))
         summary_label.setStyleSheet(f"color: {TEXT_ACCENT};")
         generate_layout.addWidget(summary_label)
+
+        # Mark Game Completed checkbox
+        self._mark_complete_checkbox = QCheckBox("Mark Game Completed")
+        self._mark_complete_checkbox.setFont(Fonts.button_other())
+        self._mark_complete_checkbox.toggled.connect(self._on_mark_complete_toggled)
+        generate_layout.addWidget(self._mark_complete_checkbox)
+
+        # Final score display (hidden until checkbox checked)
+        self._final_score_label = QLabel("")
+        self._final_score_label.setFont(Fonts.display(size=16, weight=600))
+        self._final_score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._final_score_label.hide()
+        generate_layout.addWidget(self._final_score_label)
 
         generate_button = QPushButton("GENERATE KDENLIVE PROJECT")
         generate_button.setFont(Fonts.button_rally())
@@ -1098,3 +1115,41 @@ class ReviewModeWidget(QWidget):
             Outer QSplitter (vertical)
         """
         return self._outer_splitter
+
+    @pyqtSlot(bool)
+    def _on_mark_complete_toggled(self, checked: bool) -> None:
+        """Handle Mark Game Completed checkbox toggle."""
+        self._game_completed = checked
+        if checked:
+            self._final_score_label.show()
+        else:
+            self._final_score_label.hide()
+        self.game_completed_toggled.emit(checked)
+
+    def set_game_completion_info(
+        self,
+        final_score: str,
+        winning_team_names: list[str]
+    ) -> None:
+        """Set the game completion display info."""
+        self._final_score = final_score
+        self._winning_team_names = winning_team_names
+
+        # Format display: "11-9\nJane/Joe Win"
+        if winning_team_names:
+            winner_str = " & ".join(winning_team_names) + " Win"
+        else:
+            winner_str = ""
+
+        display_text = final_score
+        if winner_str:
+            display_text += f"\n{winner_str}"
+        self._final_score_label.setText(display_text)
+
+    def is_game_completed(self) -> bool:
+        """Check if game is marked as completed."""
+        return self._game_completed
+
+    def get_game_completion_info(self) -> tuple[str, list[str]]:
+        """Get game completion info for export."""
+        return self._final_score, self._winning_team_names

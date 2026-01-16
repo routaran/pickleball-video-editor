@@ -24,6 +24,7 @@ __all__ = [
     "Action",
     "Comment",
     "Intervention",
+    "GameCompletionInfo",
     "SessionState",
 ]
 
@@ -328,6 +329,57 @@ class Intervention:
 
 
 @dataclass
+class GameCompletionInfo:
+    """Information about game completion for final subtitle generation.
+
+    Attributes:
+        is_completed: Whether the game has been marked as completed
+        final_score: Final score string (e.g., "11-9")
+        winning_team: Index of the winning team (0 or 1)
+        winning_team_names: Player names of the winning team
+        extension_seconds: Seconds to extend the last rally (default: 8.0)
+    """
+
+    is_completed: bool = False
+    final_score: str = ""
+    winning_team: int = 0
+    winning_team_names: list[str] = field(default_factory=list)
+    extension_seconds: float = 8.0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary for JSON export.
+
+        Returns:
+            Dictionary containing game completion data
+        """
+        return {
+            "is_completed": self.is_completed,
+            "final_score": self.final_score,
+            "winning_team": self.winning_team,
+            "winning_team_names": self.winning_team_names,
+            "extension_seconds": self.extension_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GameCompletionInfo":
+        """Deserialize from dictionary.
+
+        Args:
+            data: Dictionary containing game completion data
+
+        Returns:
+            GameCompletionInfo instance
+        """
+        return cls(
+            is_completed=data.get("is_completed", False),
+            final_score=data.get("final_score", ""),
+            winning_team=data.get("winning_team", 0),
+            winning_team_names=data.get("winning_team_names", []),
+            extension_seconds=data.get("extension_seconds", 8.0),
+        )
+
+
+@dataclass
 class SessionState:
     """Complete session state for persistence to JSON.
 
@@ -366,6 +418,7 @@ class SessionState:
     modified_at: str = ""
     interventions: list[Intervention] = field(default_factory=list)
     comments: list[Comment] = field(default_factory=list)
+    game_completion: GameCompletionInfo = field(default_factory=GameCompletionInfo)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for JSON export.
@@ -389,6 +442,7 @@ class SessionState:
             "modified_at": self.modified_at,
             "interventions": [intervention.to_dict() for intervention in self.interventions],
             "comments": [comment.to_dict() for comment in self.comments],
+            "game_completion": self.game_completion.to_dict(),
         }
 
     @classmethod
@@ -417,6 +471,7 @@ class SessionState:
             modified_at=data.get("modified_at", ""),
             interventions=[Intervention.from_dict(i) for i in data.get("interventions", [])],
             comments=[Comment.from_dict(c) for c in data.get("comments", [])],
+            game_completion=GameCompletionInfo.from_dict(data.get("game_completion", {})),
         )
 
     def update_modified_timestamp(self) -> None:

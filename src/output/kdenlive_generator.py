@@ -20,11 +20,31 @@ from html import escape as xml_escape
 from pathlib import Path
 from typing import Any
 
-from src.output.subtitle_generator import SubtitleGenerator
+from src.core.models import GameCompletionInfo
 from src.video.probe import probe_video, frames_to_timecode
 
 
 __all__ = ["KdenliveGenerator"]
+
+
+def _escape_ass_text(text: str) -> str:
+    """Escape text for safe inclusion in ASS subtitle files.
+
+    ASS interprets {...} as style overrides and \\commands as control sequences.
+    This function escapes these to prevent injection/corruption.
+
+    Args:
+        text: Text to escape
+
+    Returns:
+        Escaped text safe for ASS files
+    """
+    # Escape backslash first (before other replacements add backslashes)
+    text = text.replace("\\", "\\\\")
+    # Escape curly braces (style override markers)
+    text = text.replace("{", "\\{")
+    text = text.replace("}", "\\}")
+    return text
 
 
 class KdenliveGenerator:
@@ -56,7 +76,8 @@ class KdenliveGenerator:
         output_dir: Path | None = None,
         team1_players: list[str] | None = None,
         team2_players: list[str] | None = None,
-        game_type: str = "doubles"
+        game_type: str = "doubles",
+        game_completion: GameCompletionInfo | None = None,
     ) -> None:
         """Initialize Kdenlive project generator.
 
@@ -69,6 +90,7 @@ class KdenliveGenerator:
             team1_players: List of Team 1 player names (for intro subtitle)
             team2_players: List of Team 2 player names (for intro subtitle)
             game_type: "singles" or "doubles"
+            game_completion: Game completion info for final subtitle and extension
 
         Raises:
             ValueError: If fps is non-positive or resolution is invalid
@@ -91,6 +113,7 @@ class KdenliveGenerator:
         self.team1_players = team1_players or []
         self.team2_players = team2_players or []
         self.game_type = game_type
+        self.game_completion = game_completion
 
         # Set default output directory
         if output_dir is None:
@@ -218,6 +241,20 @@ class KdenliveGenerator:
 
             current_output_seconds += segment_duration
 
+        # Add final score subtitle if game is marked as completed
+        if self.game_completion is not None and self.game_completion.is_completed:
+            # Calculate start time (end of last segment in output timeline)
+            final_start_time = self._seconds_to_ass_time(current_output_seconds)
+
+            # Calculate end time (start + extension duration)
+            final_end_seconds = current_output_seconds + self.game_completion.extension_seconds
+            final_end_time = self._seconds_to_ass_time(final_end_seconds)
+
+            # Format the final score subtitle
+            final_subtitle = self._format_final_score_subtitle()
+
+            lines.append(f"Dialogue: 0,{final_start_time},{final_end_time},Default,,0,0,0,,{final_subtitle}")
+
         lines.append("")
         ass_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -237,20 +274,46 @@ class KdenliveGenerator:
         Example output for singles:
             "Alice\\Nvs\\NBob\\N\\N0-0-2"
         """
-        # Format team 1 players
+        # Format team 1 players with ASS escaping
         if self.game_type == "singles":
-            team1_str = self.team1_players[0] if self.team1_players else "Team 1"
+            team1_str = _escape_ass_text(self.team1_players[0]) if self.team1_players else "Team 1"
         else:
-            team1_str = " & ".join(self.team1_players) if self.team1_players else "Team 1"
+            escaped_t1 = [_escape_ass_text(p) for p in self.team1_players] if self.team1_players else []
+            team1_str = " & ".join(escaped_t1) if escaped_t1 else "Team 1"
 
-        # Format team 2 players
+        # Format team 2 players with ASS escaping
         if self.game_type == "singles":
-            team2_str = self.team2_players[0] if self.team2_players else "Team 2"
+            team2_str = _escape_ass_text(self.team2_players[0]) if self.team2_players else "Team 2"
         else:
-            team2_str = " & ".join(self.team2_players) if self.team2_players else "Team 2"
+            escaped_t2 = [_escape_ass_text(p) for p in self.team2_players] if self.team2_players else []
+            team2_str = " & ".join(escaped_t2) if escaped_t2 else "Team 2"
 
         # Build subtitle with line breaks (\\N is ASS line break)
         return f"{team1_str}\\Nvs\\N{team2_str}\\N\\N{score}"
+
+    def _format_final_score_subtitle(self) -> str:
+        """Format the final score subtitle with score and winner.
+
+        Returns:
+            Formatted subtitle text like "11-9\\NJane & Joe Win"
+        """
+        if self.game_completion is None:
+            return ""
+
+        final_score = self.game_completion.final_score
+
+        # Format winner names with ASS escaping
+        if self.game_completion.winning_team_names:
+            escaped_names = [_escape_ass_text(name) for name in self.game_completion.winning_team_names]
+            if len(escaped_names) == 1:
+                winner_str = f"{escaped_names[0]} Wins"
+            else:
+                winner_str = " & ".join(escaped_names) + " Win"
+        else:
+            winner_str = "Game Over"
+
+        # Use \\N for ASS line break
+        return f"{final_score}\\N{winner_str}"
 
     def _seconds_to_ass_time(self, seconds: float) -> str:
         """Convert seconds to ASS time format (H:MM:SS.cc).
@@ -651,7 +714,8 @@ class KdenliveGenerator:
         """Generate playlist entry elements for rally cuts.
 
         Creates <entry> elements for each rally segment with proper in/out
-        timecodes referencing the source video.
+        timecodes referencing the source video. If the game is completed,
+        extends the last segment by the extension duration.
 
         Args:
             chain_id: ID of the chain producer ("chain0" for audio, "chain1" for video)
@@ -662,9 +726,16 @@ class KdenliveGenerator:
         """
         entries: list[str] = []
 
-        for seg in self.segments:
+        for i, seg in enumerate(self.segments):
             in_tc = self.frames_to_timecode(seg["in"])
-            out_tc = self.frames_to_timecode(seg["out"])
+
+            # For the last segment, add extension if game is completed
+            is_last = (i == len(self.segments) - 1)
+            if is_last and self.game_completion is not None and self.game_completion.is_completed:
+                extension_frames = int(self.game_completion.extension_seconds * self.fps)
+                out_tc = self.frames_to_timecode(seg["out"] + extension_frames)
+            else:
+                out_tc = self.frames_to_timecode(seg["out"])
 
             entries.append(f'''  <entry in="{in_tc}" out="{out_tc}" producer="{chain_id}">
    <property name="kdenlive:id">{kdenlive_id}</property>
@@ -680,14 +751,23 @@ class KdenliveGenerator:
         - Track 2 = video track (tractor2/playlist4)
         - TIMELINE_FRAME = cumulative frame position on OUTPUT timeline
 
+        If the game is completed, the last segment's duration includes the
+        extension frames for the final score display.
+
         Returns:
             JSON string with AVSplit groups
         """
         groups = []
         current_frame = 0
 
-        for seg in self.segments:
+        for i, seg in enumerate(self.segments):
             duration_frames = seg["out"] - seg["in"]
+
+            # For the last segment, add extension if game is completed
+            is_last = (i == len(self.segments) - 1)
+            if is_last and self.game_completion is not None and self.game_completion.is_completed:
+                extension_frames = int(self.game_completion.extension_seconds * self.fps)
+                duration_frames += extension_frames
 
             # Create AVSplit group for this clip pair
             group = {
@@ -707,12 +787,20 @@ class KdenliveGenerator:
         """Calculate total timeline length in frames.
 
         Sums the duration of all rally segments to get the total output
-        timeline length (rallies placed back-to-back).
+        timeline length (rallies placed back-to-back). If the game is
+        completed, adds extension frames to the end.
 
         Returns:
             Total frames in the output timeline
         """
-        return sum(seg["out"] - seg["in"] for seg in self.segments)
+        base_length = sum(seg["out"] - seg["in"] for seg in self.segments)
+
+        # Add extension for game completion
+        if self.game_completion is not None and self.game_completion.is_completed:
+            extension_frames = int(self.game_completion.extension_seconds * self.fps)
+            return base_length + extension_frames
+
+        return base_length
 
     def _calculate_aspect_ratio(self, width: int, height: int) -> tuple[int, int]:
         """Calculate simplified aspect ratio.

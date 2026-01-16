@@ -96,8 +96,6 @@ class VideoWidget(QWidget):
 
         # CRITICAL: Re-enforce LC_NUMERIC immediately before MPV creation.
         import ctypes
-        import sys
-        from pathlib import Path
         libc = ctypes.CDLL("libc.so.6")
         libc.setlocale.restype = ctypes.c_char_p
         LC_NUMERIC = 1
