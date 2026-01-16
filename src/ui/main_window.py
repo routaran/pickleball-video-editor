@@ -27,13 +27,14 @@ All actions trigger score state updates and rally manager tracking.
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShowEvent, QShortcut
+from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QCloseEvent, QDesktopServices, QKeySequence, QResizeEvent, QShowEvent, QShortcut
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -49,6 +50,8 @@ from src.ui.dialogs import (
     AddCommentResult,
     EditScoreDialog,
     EditScoreResult,
+    ExportCompleteDialog,
+    ExportCompleteResult,
     ForceSideOutDialog,
     ForceSideOutResult,
     GameOverDialog,
@@ -111,6 +114,10 @@ class _VideoContainer(QWidget):
         super().__init__(parent)
         self.setObjectName("video_container")
 
+        # CRITICAL: Make this container a native window so MPV's X11 window
+        # can be properly reparented when moving between editing/review modes.
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+
         # Store references and reparent widgets
         self._video_widget = video_widget
         self._status_overlay = status_overlay
@@ -120,8 +127,11 @@ class _VideoContainer(QWidget):
         # Ensure overlay is on top
         status_overlay.raise_()
 
-        # Set minimum size
-        self.setMinimumSize(640, 480)
+        # Set minimum size for 16:9 video (user requirement: 870x490)
+        self.setMinimumSize(870, 490)
+
+        # Force native window creation
+        self.winId()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle resize events to keep video widget filling the container.
@@ -200,8 +210,15 @@ class MainWindow(QMainWindow):
         self._in_review_mode = False
         self._rally_playback_timer: QTimer | None = None
 
+        # Video container reparenting state (for review mode)
+        self._video_container_original_parent: QWidget | None = None
+        self._video_container_original_index: int = 0
+
         # Flag to track if video has been loaded (deferred until showEvent)
         self._video_loaded = False
+
+        # Compact mode state
+        self._compact_mode = False
 
         # Initialize core components (may restore from session)
         self._init_core_components()
@@ -297,8 +314,10 @@ class MainWindow(QMainWindow):
         """
         # Window properties
         self.setWindowTitle(f"Pickleball Video Editor - {self.config.video_path.name}")
-        self.setMinimumSize(1024, 768)
-        self.resize(1280, 900)
+        # Minimum height of 1080 as requested, width scaled for 16:9 video + controls
+        # Width: ~1400 to fit video + control panel + margins
+        self.setMinimumSize(1400, 1080)
+        self.resize(1600, 1100)
 
         # Central widget with main layout
         central_widget = QWidget()
@@ -338,9 +357,10 @@ class MainWindow(QMainWindow):
         self.status_overlay = StatusOverlay()
 
         # Use custom container that handles resize events
-        container = _VideoContainer(self.video_widget, self.status_overlay)
+        # Store as instance variable for reparenting in review mode
+        self._video_container = _VideoContainer(self.video_widget, self.status_overlay)
 
-        return container
+        return self._video_container
 
     def _create_rally_controls(self) -> QFrame:
         """Create rally control buttons panel.
@@ -1159,14 +1179,36 @@ class MainWindow(QMainWindow):
 
     # Review mode methods
 
+    def _get_widget_index(self, widget: QWidget) -> int:
+        """Get the index of a widget in its parent's layout.
+
+        Args:
+            widget: Widget to find index for
+
+        Returns:
+            Index of widget in parent layout, or 0 if not found
+        """
+        parent = widget.parent()
+        if parent and parent.layout():
+            for i in range(parent.layout().count()):
+                item = parent.layout().itemAt(i)
+                # Check for spacer items (item.widget() returns None for spacers)
+                if item is not None and item.widget() is not None and item.widget() == widget:
+                    return i
+        return 0
+
     def enter_review_mode(self) -> None:
-        """Switch to review mode.
+        """Switch to review mode with video in splitter layout.
 
         Hides rally controls and toolbar, creates ReviewModeWidget if needed,
+        reparents video container into the review widget's placeholder,
         populates it with rallies, and connects signals.
         """
         if self._in_review_mode:
             return
+
+        # Set flag early to prevent race condition from multiple calls
+        self._in_review_mode = True
 
         # Hide editing mode panels
         self.rally_controls_panel.hide()
@@ -1190,15 +1232,39 @@ class MainWindow(QMainWindow):
             self._review_widget.exit_requested.connect(self.exit_review_mode)
             self._review_widget.generate_requested.connect(self._on_review_generate)
 
+        # === Move video container into review widget's video placeholder ===
+        video_placeholder = self._review_widget.get_video_placeholder()
+        if video_placeholder is not None:
+            # Store original parent for restoration
+            central = self.centralWidget()
+            if central is not None:
+                self._video_container_original_parent = central
+                main_layout = central.layout()
+                if main_layout is not None:
+                    self._video_container_original_index = main_layout.indexOf(self._video_container)
+                    # Remove from main layout
+                    main_layout.removeWidget(self._video_container)
+
+            # Reparent video container directly to placeholder (no layout)
+            # This matches how _VideoContainer handles its children
+            self._video_container.setParent(video_placeholder)
+            self._video_container.setGeometry(0, 0, video_placeholder.width(), video_placeholder.height())
+            self._video_container.show()
+            self._video_container.raise_()
+
+            # Install resize handler on placeholder to keep video container sized correctly
+            self._placeholder_original_resize_event = video_placeholder.resizeEvent
+            def _placeholder_resize(event: QResizeEvent) -> None:
+                self._placeholder_original_resize_event(event)
+                self._video_container.setGeometry(0, 0, video_placeholder.width(), video_placeholder.height())
+            video_placeholder.resizeEvent = _placeholder_resize
+
         # Populate with current rallies
         rallies = self.rally_manager.get_rallies()
         self._review_widget.set_rallies(rallies, fps=self.video_fps)
 
         # Show review widget
         self._review_widget.show()
-
-        # Update state
-        self._in_review_mode = True
 
         # Show feedback
         ToastManager.show_success(
@@ -1208,12 +1274,32 @@ class MainWindow(QMainWindow):
         )
 
     def exit_review_mode(self) -> None:
-        """Exit review mode and return to editing mode.
+        """Exit review mode and restore video to original location.
 
-        Hides review widget and restores rally controls and toolbar.
+        Restores video container to its original parent, hides review widget,
+        and shows rally controls and toolbar.
         """
         if not self._in_review_mode:
             return
+
+        # Set flag early to prevent race condition from multiple calls
+        self._in_review_mode = False
+
+        # === Restore video container to original parent ===
+        if self._video_container_original_parent is not None:
+            # Restore placeholder's original resize event if we replaced it
+            if self._review_widget is not None:
+                video_placeholder = self._review_widget.get_video_placeholder()
+                if video_placeholder is not None and hasattr(self, '_placeholder_original_resize_event'):
+                    video_placeholder.resizeEvent = self._placeholder_original_resize_event
+
+            # Restore to original layout at original position
+            original_layout = self._video_container_original_parent.layout()
+            if original_layout is not None:
+                # Insert at original index with stretch=1 (as it was originally)
+                original_layout.insertWidget(self._video_container_original_index, self._video_container, stretch=1)
+
+            self._video_container.show()
 
         # Hide review widget
         if self._review_widget is not None:
@@ -1222,9 +1308,6 @@ class MainWindow(QMainWindow):
         # Show editing mode panels
         self.rally_controls_panel.show()
         self.toolbar_panel.show()
-
-        # Update state
-        self._in_review_mode = False
 
         # Show feedback
         ToastManager.show_info(
@@ -1426,6 +1509,7 @@ class MainWindow(QMainWindow):
         """Handle generate Kdenlive project request.
 
         Generates Kdenlive project and SRT subtitle files from current rallies.
+        Shows ExportCompleteDialog with options to delete session and open folder.
         """
         # Get segments from rally manager
         segments = self.rally_manager.to_segments()
@@ -1472,18 +1556,44 @@ class MainWindow(QMainWindow):
         try:
             kdenlive_path, srt_path = generator.generate()
 
-            # Show success message
-            ToastManager.show_success(
-                self,
-                f"Generated: {kdenlive_path.name}",
-                duration_ms=5000
-            )
+            # Check if session exists
+            session_exists = self._session_manager.find_existing(
+                str(self.config.video_path)
+            ) is not None
 
-            # Also show in OSD
-            self.video_widget.show_osd(
-                f"Project saved to {kdenlive_path.parent}",
-                duration=4.0
+            # Show export complete dialog
+            dialog = ExportCompleteDialog(
+                kdenlive_path=kdenlive_path,
+                show_delete_option=session_exists,
+                parent=self
             )
+            result = dialog.exec_and_get_result()
+
+            if result.delete_session:
+                # CRITICAL: Handle unsaved changes before deletion
+                should_delete = True
+                if self._dirty:
+                    confirm = QMessageBox.question(
+                        self,
+                        "Unsaved Changes",
+                        "You have unsaved changes. Delete session anyway?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                    )
+                    if confirm != QMessageBox.StandardButton.Yes:
+                        should_delete = False
+
+                if should_delete:
+                    self._session_manager.delete(str(self.config.video_path))
+                    self._dirty = False  # Only clear after confirmed deletion
+                    ToastManager.show_success(
+                        self,
+                        "Session deleted successfully",
+                        duration_ms=3000
+                    )
+
+            if result.open_folder:
+                # Open file manager to output directory
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(kdenlive_path.parent)))
 
         except Exception as e:
             ToastManager.show_error(
@@ -1491,6 +1601,44 @@ class MainWindow(QMainWindow):
                 f"Generation failed: {e}",
                 duration_ms=5000
             )
+
+    def _check_compact_mode(self) -> None:
+        """Check if compact mode should be toggled based on window width."""
+        width = self.width()
+        new_compact = width < 950
+        if new_compact != self._compact_mode:
+            self._compact_mode = new_compact
+            self._apply_compact_styles()
+
+    def _apply_compact_styles(self) -> None:
+        """Apply or remove compact mode styles."""
+        from PyQt6.QtGui import QFont
+
+        if self._compact_mode:
+            # Smaller fonts for compact mode
+            for btn in [self.btn_rally_start, self.btn_server_wins,
+                        self.btn_receiver_wins, self.btn_undo]:
+                if btn:
+                    btn.setFont(QFont("IBM Plex Sans", 14))
+            # Notify status overlay
+            if hasattr(self, 'status_overlay') and self.status_overlay:
+                self.status_overlay.set_compact_mode(True)
+        else:
+            # Restore normal fonts
+            for btn in [self.btn_rally_start, self.btn_server_wins,
+                        self.btn_receiver_wins]:
+                if btn:
+                    btn.setFont(QFont("IBM Plex Sans", 18, QFont.Weight.DemiBold))
+            if self.btn_undo:
+                self.btn_undo.setFont(QFont("IBM Plex Sans", 14, QFont.Weight.Medium))
+            # Notify status overlay
+            if hasattr(self, 'status_overlay') and self.status_overlay:
+                self.status_overlay.set_compact_mode(False)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Handle window resize - check compact mode threshold."""
+        super().resizeEvent(event)
+        self._check_compact_mode()
 
     def showEvent(self, event: QShowEvent) -> None:
         """Handle window show event.
