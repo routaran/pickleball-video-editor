@@ -543,6 +543,7 @@ class RallyListWidget(QWidget):
 
         # Use QListWidget in IconMode - single horizontal row with scroll
         self._list_widget = QListWidget()
+        self._list_widget.setObjectName("rallyList")  # Set object name for theme targeting
         self._list_widget.setViewMode(QListWidget.ViewMode.IconMode)
         self._list_widget.setFlow(QListWidget.Flow.LeftToRight)
         self._list_widget.setWrapping(False)  # Single row, no wrapping
@@ -556,24 +557,24 @@ class RallyListWidget(QWidget):
         self._list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._list_widget.setFixedHeight(66)  # Fixed height for single row + scrollbar
 
-        # Style the list widget
+        # Style the list widget with object-scoped selectors
         self._list_widget.setStyleSheet(f"""
-            QListWidget {{
+            QListWidget#rallyList {{
                 background: {BG_PRIMARY};
                 border: none;
                 padding: {SPACE_SM}px;
             }}
-            QListWidget::item {{
+            QListWidget#rallyList::item {{
                 background: {BG_TERTIARY};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: {RADIUS_MD}px;
                 padding: {SPACE_SM}px;
             }}
-            QListWidget::item:selected {{
+            QListWidget#rallyList::item:selected {{
                 background: rgba(74, 222, 128, 0.15);
                 border: 2px solid {PRIMARY_ACTION};
                             }}
-            QListWidget::item:hover {{
+            QListWidget#rallyList::item:hover {{
                 background: {BG_BORDER};
                 border-color: {PRIMARY_ACTION};
             }}
