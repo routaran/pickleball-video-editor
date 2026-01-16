@@ -5,7 +5,7 @@ This package contains reusable dialog windows for:
 - Session management: ResumeSessionDialog
 - Data loss prevention: UnsavedWarningDialog
 - Interventions: EditScoreDialog, ForceSideOutDialog, AddCommentDialog
-- Export progress (future)
+- Export completion: ExportCompleteDialog
 """
 
 from src.ui.dialogs.game_over import GameOverDialog, GameOverResult
@@ -18,6 +18,7 @@ from src.ui.dialogs.unsaved_warning import UnsavedWarningDialog, UnsavedWarningR
 from src.ui.dialogs.edit_score import EditScoreDialog, EditScoreResult
 from src.ui.dialogs.force_sideout import ForceSideOutDialog, ForceSideOutResult
 from src.ui.dialogs.add_comment import AddCommentDialog, AddCommentResult
+from src.ui.dialogs.export_complete import ExportCompleteDialog, ExportCompleteResult
 
 __all__ = [
     # Game Over Dialog
@@ -39,4 +40,7 @@ __all__ = [
     # Add Comment Dialog
     "AddCommentDialog",
     "AddCommentResult",
+    # Export Complete Dialog
+    "ExportCompleteDialog",
+    "ExportCompleteResult",
 ]
