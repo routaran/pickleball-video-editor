@@ -13,17 +13,43 @@
    1. RESET & BASE
    ============================================================================= */
 
-QWidget {
-    background-color: #1A1D23;  /* Primary Background - Deep Slate */
-    color: #F5F5F5;             /* Primary Text - Off White */
-    font-family: "IBM Plex Sans", "Segoe UI", "Roboto", sans-serif;
-    font-size: 14px;
-    selection-background-color: #3DDC84;  /* Pickle Green accent */
-    selection-color: #1A1D23;
-}
+/* Base styling for application windows only.
+   IMPORTANT: Do NOT use a generic QWidget{} selector!
+   It forces Qt to use non-native file dialogs and applies styling
+   to QFileDialog internals, causing display issues.
+   Target specific top-level widgets instead. */
 
 QMainWindow {
     background-color: #1A1D23;
+    color: #F5F5F5;
+    font-family: "IBM Plex Sans", "Segoe UI", "Roboto", sans-serif;
+    font-size: 14px;
+    selection-background-color: #3DDC84;
+    selection-color: #1A1D23;
+}
+
+/* Propagate to main window children via explicit rule */
+QMainWindow * {
+    font-family: "IBM Plex Sans", "Segoe UI", "Roboto", sans-serif;
+}
+
+/* Custom dialogs only - scoped by object name to exclude QFileDialog.
+   QFileDialog inherits from QDialog but should NOT receive app styling.
+   Each custom dialog must call setObjectName() with its ID. */
+QDialog#setupDialog,
+QDialog#gameOverDialog,
+QDialog#resumeSessionDialog,
+QDialog#unsavedWarningDialog,
+QDialog#exportCompleteDialog,
+QDialog#editScoreDialog,
+QDialog#addCommentDialog,
+QDialog#forceSideoutDialog {
+    background-color: #1A1D23;
+    color: #F5F5F5;
+    font-family: "IBM Plex Sans", "Segoe UI", "Roboto", sans-serif;
+    font-size: 14px;
+    selection-background-color: #3DDC84;
+    selection-color: #1A1D23;
 }
 
 
@@ -531,8 +557,15 @@ QTextEdit:focus, QPlainTextEdit:focus {
    6. DIALOGS
    ============================================================================= */
 
-QDialog {
-    background-color: #252A33;  /* Secondary Background */
+/* Dialog-specific styling (scoped to avoid affecting QFileDialog) */
+QDialog#setupDialog,
+QDialog#gameOverDialog,
+QDialog#resumeSessionDialog,
+QDialog#unsavedWarningDialog,
+QDialog#exportCompleteDialog,
+QDialog#editScoreDialog,
+QDialog#addCommentDialog,
+QDialog#forceSideoutDialog {
     border: 1px solid #3D4450;
     border-radius: 12px;
 }
@@ -670,7 +703,12 @@ QScrollBar::sub-page:horizontal {
    9. TABLES & LISTS
    ============================================================================= */
 
-QTableView, QListView, QTreeView {
+/* Custom app list/table/tree views only - scoped to avoid bleeding into native QFileDialog.
+   These selectors target only widgets with specific object names set by the application.
+   Native OS dialogs (QFileDialog, etc.) will NOT inherit these styles. */
+
+QTableView#customTable, QListView#customList, QTreeView#customTree,
+QListWidget#rallyList, QListWidget#sessionList {
     background-color: #2D3340;
     border: 1px solid #3D4450;
     border-radius: 4px;
@@ -680,16 +718,19 @@ QTableView, QListView, QTreeView {
     selection-color: #1A1D23;
 }
 
-QTableView::item, QListView::item, QTreeView::item {
+QTableView#customTable::item, QListView#customList::item, QTreeView#customTree::item,
+QListWidget#rallyList::item, QListWidget#sessionList::item {
     padding: 4px 8px;
     border: none;
 }
 
-QTableView::item:hover, QListView::item:hover, QTreeView::item:hover {
+QTableView#customTable::item:hover, QListView#customList::item:hover, QTreeView#customTree::item:hover,
+QListWidget#rallyList::item:hover, QListWidget#sessionList::item:hover {
     background-color: #353C4A;
 }
 
-QTableView::item:selected, QListView::item:selected, QTreeView::item:selected {
+QTableView#customTable::item:selected, QListView#customList::item:selected, QTreeView#customTree::item:selected,
+QListWidget#rallyList::item:selected, QListWidget#sessionList::item:selected {
     background-color: #3DDC84;
     color: #1A1D23;
 }
