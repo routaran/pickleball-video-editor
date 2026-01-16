@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -163,6 +164,33 @@ class SetupDialog(QDialog):
                 app.setStyleSheet(saved_stylesheet)
         else:
             yield
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Handle Enter key to start editing if form is valid.
+
+        Behavior:
+        - If Browse button or video path field is focused: open file browser
+        - If form is valid: start editing
+        - Otherwise: do nothing (don't close dialog)
+        """
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            focused = self.focusWidget()
+
+            # If browse button or video path field is focused, open file browser
+            if focused in (self.browse_button, self.video_path_edit):
+                self._browse_video()
+                return
+
+            # If form is valid, start editing
+            if self.start_button.isEnabled():
+                self._on_start_editing()
+                return
+
+            # Otherwise, do nothing (ignore Enter)
+            return
+
+        # Let parent handle other keys
+        super().keyPressEvent(event)
 
     def _load_saved_sessions(self) -> None:
         """Load and display saved session cards.
