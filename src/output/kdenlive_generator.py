@@ -176,11 +176,21 @@ class KdenliveGenerator:
         lines.append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")
 
         # Generate subtitles based on segments
+        # IMPORTANT: Calculate timing from MLT timecodes to stay synchronized
+        # with video/audio entries. MLT calculates entry duration as (out_tc - in_tc)
+        # where timecodes are rounded to milliseconds. We must use the same math.
         current_output_seconds = 0.0
 
         for seg in self.segments:
-            # Calculate segment duration
-            segment_duration = (seg["out"] - seg["in"]) / self.fps
+            # Calculate segment duration using the SAME method as MLT:
+            # Convert frames to timecode (which rounds to milliseconds),
+            # then parse back to get the actual duration MLT will use.
+            in_tc = self.frames_to_timecode(seg["in"])
+            out_tc = self.frames_to_timecode(seg["out"])
+            in_seconds = self._timecode_to_seconds(in_tc)
+            out_seconds = self._timecode_to_seconds(out_tc)
+            segment_duration = out_seconds - in_seconds
+
             score = seg.get("score", "")
 
             if score:
@@ -194,12 +204,36 @@ class KdenliveGenerator:
         ass_path.write_text("\n".join(lines), encoding="utf-8")
 
     def _seconds_to_ass_time(self, seconds: float) -> str:
-        """Convert seconds to ASS time format (H:MM:SS.cc)."""
+        """Convert seconds to ASS time format (H:MM:SS.cc).
+
+        Note: ASS format uses centiseconds (2 decimal places), while MLT uses
+        milliseconds (3 decimal places). We round to nearest centisecond to
+        minimize drift, rather than truncating.
+        """
+        # Round to nearest centisecond to minimize drift
+        seconds = round(seconds, 2)
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = int(seconds % 60)
-        centiseconds = int((seconds % 1) * 100)
+        centiseconds = round((seconds % 1) * 100)
         return f"{hours}:{minutes:02d}:{secs:02d}.{centiseconds:02d}"
+
+    def _timecode_to_seconds(self, timecode: str) -> float:
+        """Convert MLT timecode (HH:MM:SS.mmm) to seconds.
+
+        This is used to ensure subtitle timing matches MLT entry timing exactly.
+
+        Args:
+            timecode: MLT timecode string (e.g., "00:01:23.456")
+
+        Returns:
+            Time in seconds
+        """
+        parts = timecode.split(":")
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+        return hours * 3600 + minutes * 60 + seconds
 
     def _build_mlt_xml(self, subtitle_path: Path) -> str:
         """Build the MLT XML document.
