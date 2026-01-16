@@ -21,11 +21,13 @@ Recent Sessions features:
 - Missing video detection with re-link capability
 """
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -116,6 +118,7 @@ class SetupDialog(QDialog):
             parent: Parent widget (optional)
         """
         super().__init__(parent)
+        self.setObjectName("setupDialog")
         self.setWindowTitle("Pickleball Video Editor")
         self.setModal(True)
         self.setMinimumWidth(700)
@@ -140,6 +143,26 @@ class SetupDialog(QDialog):
 
         # Load saved sessions
         self._load_saved_sessions()
+
+    @contextmanager
+    def _native_file_dialog(self):
+        """Temporarily clear app stylesheet for native file dialog appearance.
+
+        Qt applies app-level stylesheets to ALL widgets including QFileDialog.
+        Global selectors like QLabel{}, QPushButton{}, QScrollBar{} cannot be
+        scoped and will style file dialog internals. The only way to get native
+        appearance is to temporarily clear the stylesheet.
+        """
+        app = QApplication.instance()
+        if app:
+            saved_stylesheet = app.styleSheet()
+            app.setStyleSheet("")
+            try:
+                yield
+            finally:
+                app.setStyleSheet(saved_stylesheet)
+        else:
+            yield
 
     def _load_saved_sessions(self) -> None:
         """Load and display saved session cards.
@@ -171,6 +194,7 @@ class SetupDialog(QDialog):
                 session_path=session_dict["session_path"],
                 session_hash=session_dict["session_hash"],
                 video_name=session_dict["video_name"],
+                video_path=session_dict["video_path"],
                 rally_count=session_dict["rally_count"],
                 current_score=session_dict["current_score"],
                 last_modified=session_dict["last_modified"],
@@ -277,7 +301,7 @@ class SetupDialog(QDialog):
         msg_box.setIcon(QMessageBox.Icon.Warning)
         msg_box.setText(f"The video file for this session could not be found.")
         msg_box.setInformativeText(
-            f"Original path:\n{info.session_path.parent / info.video_name}\n\n"
+            f"Original path:\n{info.video_path}\n\n"
             "What would you like to do?"
         )
 
@@ -303,12 +327,13 @@ class SetupDialog(QDialog):
         Args:
             info: Session metadata
         """
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Locate Video File",
-            str(Path.home() / "Videos"),
-            "Video Files (*.mp4 *.MP4);;All Files (*)"
-        )
+        with self._native_file_dialog():
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Locate Video File",
+                str(Path.home() / "Videos"),
+                "Video Files (*.mp4 *.MP4);;All Files (*)"
+            )
 
         if not file_path:
             return
@@ -335,9 +360,14 @@ class SetupDialog(QDialog):
             )
             return
 
-        # Update session with new video path
+        # Update session with new video path and save
         state.video_path = file_path
-        self._session_manager.save(state, file_path)
+        saved_path = self._session_manager.save(state, file_path)
+
+        # Delete old session file ONLY if it's different from the new one
+        # (same-hash relinks save to the same file, so no deletion needed)
+        if saved_path and saved_path != info.session_path and info.session_path.exists():
+            info.session_path.unlink()
 
         # Show resume dialog
         self._handle_existing_session_from_card(info)
@@ -557,55 +587,55 @@ class SetupDialog(QDialog):
     def _apply_styles(self) -> None:
         """Apply QSS styling to the dialog."""
         self.setStyleSheet(f"""
-            QDialog {{
+            #setupDialog {{
                 background-color: {BG_SECONDARY};
                 color: {TEXT_PRIMARY};
             }}
 
-            QLabel#section-label {{
+            #setupDialog QLabel#section-label {{
                 color: {TEXT_SECONDARY};
                 font-size: 12px;
                 font-weight: 600;
                 letter-spacing: 0.5px;
             }}
 
-            QLabel#count-label {{
+            #setupDialog QLabel#count-label {{
                 color: {TEXT_DISABLED};
                 font-size: 11px;
                 font-weight: 500;
             }}
 
-            QScrollArea#sessions-scroll {{
+            #setupDialog QScrollArea#sessions-scroll {{
                 background-color: {BG_SECONDARY};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: 8px;
             }}
 
-            QScrollArea#sessions-scroll > QWidget {{
+            #setupDialog QScrollArea#sessions-scroll > QWidget {{
                 background-color: {BG_SECONDARY};
             }}
 
-            QScrollBar:horizontal {{
+            #setupDialog QScrollBar:horizontal {{
                 height: 10px;
                 background-color: {BG_TERTIARY};
                 border-radius: 5px;
             }}
 
-            QScrollBar::handle:horizontal {{
+            #setupDialog QScrollBar::handle:horizontal {{
                 background-color: {BG_BORDER};
                 border-radius: 5px;
                 min-width: 40px;
             }}
 
-            QScrollBar::handle:horizontal:hover {{
+            #setupDialog QScrollBar::handle:horizontal:hover {{
                 background-color: {TEXT_ACCENT};
             }}
 
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+            #setupDialog QScrollBar::add-line:horizontal, #setupDialog QScrollBar::sub-line:horizontal {{
                 width: 0px;
             }}
 
-            QLineEdit {{
+            #setupDialog QLineEdit {{
                 background-color: {BG_TERTIARY};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_COLOR};
@@ -614,16 +644,16 @@ class SetupDialog(QDialog):
                 font-size: 14px;
             }}
 
-            QLineEdit:focus {{
+            #setupDialog QLineEdit:focus {{
                 border-color: {TEXT_ACCENT};
                 outline: none;
             }}
 
-            QLineEdit[invalid="true"] {{
+            #setupDialog QLineEdit[invalid="true"] {{
                 border-color: #EF5350;
             }}
 
-            QComboBox {{
+            #setupDialog QComboBox {{
                 background-color: {BG_TERTIARY};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_COLOR};
@@ -633,16 +663,16 @@ class SetupDialog(QDialog):
                 min-width: 150px;
             }}
 
-            QComboBox:hover {{
+            #setupDialog QComboBox:hover {{
                 border-color: {TEXT_ACCENT};
             }}
 
-            QComboBox::drop-down {{
+            #setupDialog QComboBox::drop-down {{
                 border: none;
                 width: 20px;
             }}
 
-            QComboBox::down-arrow {{
+            #setupDialog QComboBox::down-arrow {{
                 image: none;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
@@ -650,7 +680,7 @@ class SetupDialog(QDialog):
                 margin-right: 8px;
             }}
 
-            QComboBox QAbstractItemView {{
+            #setupDialog QComboBox QAbstractItemView {{
                 background-color: {BG_TERTIARY};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_COLOR};
@@ -658,13 +688,13 @@ class SetupDialog(QDialog):
                 selection-color: {BG_PRIMARY};
             }}
 
-            QWidget#config-container {{
+            #setupDialog QWidget#config-container {{
                 background-color: {BG_SECONDARY};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: 8px;
             }}
 
-            QGroupBox {{
+            #setupDialog QGroupBox {{
                 background-color: {BG_SECONDARY};
                 border: 2px solid {BORDER_COLOR};
                 border-radius: 8px;
@@ -675,19 +705,19 @@ class SetupDialog(QDialog):
                 padding-top: 16px;
             }}
 
-            QGroupBox::title {{
+            #setupDialog QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
                 left: 16px;
                 padding: 0 8px;
             }}
 
-            QGroupBox#team1-group {{
+            #setupDialog QGroupBox#team1-group {{
                 border-color: {TEXT_ACCENT};
                 border-width: 2px;
             }}
 
-            QPushButton {{
+            #setupDialog QPushButton {{
                 background-color: {BG_TERTIARY};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_COLOR};
@@ -698,28 +728,28 @@ class SetupDialog(QDialog):
                 min-width: 100px;
             }}
 
-            QPushButton:hover:!disabled {{
+            #setupDialog QPushButton:hover:!disabled {{
                 border-color: {TEXT_ACCENT};
             }}
 
-            QPushButton:disabled {{
+            #setupDialog QPushButton:disabled {{
                 opacity: 0.4;
                 color: {TEXT_DISABLED};
                 border-color: {BG_BORDER};
             }}
 
-            QPushButton#primary-button {{
+            #setupDialog QPushButton#primary-button {{
                 background-color: {PRIMARY_ACTION};
                 color: {BG_PRIMARY};
                 border: 2px solid {PRIMARY_ACTION};
                 font-weight: 600;
             }}
 
-            QPushButton#primary-button:hover:!disabled {{
+            #setupDialog QPushButton#primary-button:hover:!disabled {{
                 background-color: {TEXT_ACCENT};
             }}
 
-            QPushButton#primary-button:disabled {{
+            #setupDialog QPushButton#primary-button:disabled {{
                 background-color: {BG_TERTIARY};
                 color: {TEXT_DISABLED};
                 border-color: {BG_BORDER};
@@ -749,12 +779,13 @@ class SetupDialog(QDialog):
         After selection, checks if a session exists for the video and
         prompts the user to resume or start fresh.
         """
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Video File",
-            "/home/rkalluri/Videos/pickleball",
-            "Video Files (*.mp4 *.MP4);;All Files (*)"
-        )
+        with self._native_file_dialog():
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Video File",
+                "/home/rkalluri/Videos/pickleball",
+                "Video Files (*.mp4 *.MP4);;All Files (*)"
+            )
 
         if not file_path:
             return
