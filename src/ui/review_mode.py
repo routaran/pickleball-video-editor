@@ -8,23 +8,24 @@ Components:
 - TimingControlWidget: Adjust rally start/end times with +/- buttons
 - ScoreEditWidget: Edit rally score with cascade option
 - RallyCardWidget: Individual rally card for rally list
-- RallyListWidget: Horizontal scrollable grid of rally cards
+- RallyListWidget: Responsive wrapping grid of rally cards (uses QListWidget IconMode)
 - ReviewModeWidget: Main container composing all components
 
 The Review Mode replaces the Rally Controls and Toolbar sections when activated
 from the Main Window's "Final Review" button.
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QCheckBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
-    QScrollArea,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -54,7 +55,6 @@ __all__ = [
     "RallyHeaderWidget",
     "TimingControlWidget",
     "ScoreEditWidget",
-    "RallyCardWidget",
     "RallyListWidget",
     "ReviewModeWidget",
 ]
@@ -477,6 +477,7 @@ class ScoreEditWidget(QWidget):
             }}
         """)
 
+    @pyqtSlot()
     def _on_score_changed(self) -> None:
         """Handle score input changes."""
         new_score = self._new_score_input.text()
@@ -510,112 +511,11 @@ class ScoreEditWidget(QWidget):
         return self._cascade_checkbox.isChecked()
 
 
-class RallyCardWidget(QWidget):
-    """Individual rally card for the rally list.
-
-    Displays:
-    - Rally number (large)
-    - Score at start (small)
-
-    Supports selection state with visual highlighting.
-
-    Signals:
-        clicked(): Emitted when card is clicked
-    """
-
-    clicked = pyqtSignal()
-
-    def __init__(
-        self,
-        rally_number: int,
-        score: str,
-        parent: QWidget | None = None,
-    ) -> None:
-        """Initialize the rally card.
-
-        Args:
-            rally_number: Rally number (1-based for display)
-            score: Score string
-            parent: Parent widget
-        """
-        super().__init__(parent)
-        self._rally_number = rally_number
-        self._score = score
-        self._selected = False
-        self._init_ui()
-
-    def _init_ui(self) -> None:
-        """Initialize UI components."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
-        layout.setSpacing(SPACE_SM // 2)
-
-        # Rally number
-        number_label = QLabel(f"Rally {self._rally_number}")
-        number_label.setFont(Fonts.body(size=14, weight=600))
-        number_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        number_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(number_label)
-
-        # Score
-        score_label = QLabel(self._score)
-        score_label.setFont(Fonts.display(size=12))
-        score_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(score_label)
-
-        self.setFixedSize(100, 60)
-        self._update_style()
-
-    def _update_style(self) -> None:
-        """Update widget styling based on selection state."""
-        if self._selected:
-            self.setStyleSheet(f"""
-                RallyCardWidget {{
-                    background-color: {BG_SECONDARY};
-                    border: 2px solid {PRIMARY_ACTION};
-                    border-radius: {RADIUS_MD}px;
-                    box-shadow: 0 0 8px {GLOW_GREEN};
-                }}
-            """)
-        else:
-            self.setStyleSheet(f"""
-                RallyCardWidget {{
-                    background-color: {BG_TERTIARY};
-                    border: 1px solid {BORDER_COLOR};
-                    border-radius: {RADIUS_MD}px;
-                }}
-                RallyCardWidget:hover {{
-                    background-color: {BG_BORDER};
-                    border-color: {PRIMARY_ACTION};
-                }}
-            """)
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Handle mouse press events.
-
-        Args:
-            event: Mouse event from Qt
-        """
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
-    def set_selected(self, selected: bool) -> None:
-        """Set the card's selection state.
-
-        Args:
-            selected: True if card should be selected
-        """
-        self._selected = selected
-        self._update_style()
-
-
 class RallyListWidget(QWidget):
-    """Horizontal scrollable grid of rally cards.
+    """Horizontal scrolling list of rally cards using QListWidget IconMode.
 
-    Displays all rallies as cards in a grid layout with horizontal scrolling.
-    Clicking a card navigates to that rally.
+    Displays all rallies as cards in a single horizontal row with
+    horizontal scrolling when there are more cards than can fit.
 
     Signals:
         rally_selected(int): Emitted when a rally card is clicked
@@ -631,7 +531,7 @@ class RallyListWidget(QWidget):
             parent: Parent widget
         """
         super().__init__(parent)
-        self._cards: list[RallyCardWidget] = []
+        self._rallies: list[Rally] = []
         self._current_index = 0
         self._init_ui()
 
@@ -641,21 +541,41 @@ class RallyListWidget(QWidget):
         layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
         layout.setSpacing(SPACE_SM)
 
-        # Section title
-        title = QLabel("RALLY LIST (click to navigate)")
-        title.setFont(Fonts.body(size=12, weight=600))
-        title.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        layout.addWidget(title)
+        # Use QListWidget in IconMode - single horizontal row with scroll
+        self._list_widget = QListWidget()
+        self._list_widget.setViewMode(QListWidget.ViewMode.IconMode)
+        self._list_widget.setFlow(QListWidget.Flow.LeftToRight)
+        self._list_widget.setWrapping(False)  # Single row, no wrapping
+        self._list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self._list_widget.setSpacing(4)
+        self._list_widget.setGridSize(QSize(70, 50))  # Grid cell size
+        self._list_widget.setUniformItemSizes(True)
+        self._list_widget.setMovement(QListWidget.Movement.Static)
+        self._list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self._list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list_widget.setFixedHeight(66)  # Fixed height for single row + scrollbar
 
-        # Scroll area for rally cards
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setStyleSheet(f"""
-            QScrollArea {{
-                background-color: {BG_PRIMARY};
+        # Style the list widget
+        self._list_widget.setStyleSheet(f"""
+            QListWidget {{
+                background: {BG_PRIMARY};
                 border: none;
+                padding: {SPACE_SM}px;
+            }}
+            QListWidget::item {{
+                background: {BG_TERTIARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {RADIUS_MD}px;
+                padding: {SPACE_SM}px;
+            }}
+            QListWidget::item:selected {{
+                background: rgba(74, 222, 128, 0.15);
+                border: 2px solid {PRIMARY_ACTION};
+                            }}
+            QListWidget::item:hover {{
+                background: {BG_BORDER};
+                border-color: {PRIMARY_ACTION};
             }}
             QScrollBar:horizontal {{
                 background-color: {BG_TERTIARY};
@@ -670,14 +590,8 @@ class RallyListWidget(QWidget):
             }}
         """)
 
-        # Container widget for cards
-        self._cards_container = QWidget()
-        self._cards_layout = QGridLayout(self._cards_container)
-        self._cards_layout.setSpacing(SPACE_SM)
-        self._cards_layout.setContentsMargins(0, 0, 0, 0)
-
-        scroll_area.setWidget(self._cards_container)
-        layout.addWidget(scroll_area)
+        self._list_widget.itemClicked.connect(self._on_item_clicked)
+        layout.addWidget(self._list_widget)
 
         # Container styling
         self.setStyleSheet(f"""
@@ -688,42 +602,70 @@ class RallyListWidget(QWidget):
             }}
         """)
 
+    def _create_card_widget(self, rally_num: int, score: str) -> QWidget:
+        """Create a card widget for a rally item.
+
+        Args:
+            rally_num: Rally number (1-based for display)
+            score: Score string
+
+        Returns:
+            QWidget containing rally card content
+        """
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        num_label = QLabel(str(rally_num))
+        num_label.setFont(Fonts.display(size=14, weight=600))
+        num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        num_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent; border: none;")
+
+        score_label = QLabel(score)
+        score_label.setFont(Fonts.display(size=9))
+        score_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; border: none;")
+        score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        layout.addWidget(num_label)
+        layout.addWidget(score_label)
+
+        # Make the widget transparent so item styling shows through
+        widget.setStyleSheet("background: transparent;")
+        return widget
+
     def set_rallies(self, rallies: list[Rally]) -> None:
         """Populate the rally list with cards.
 
         Args:
             rallies: List of Rally objects
         """
-        # Clear existing cards
-        for card in self._cards:
-            card.deleteLater()
-        self._cards.clear()
+        self._rallies = rallies
+        self._list_widget.clear()
 
-        # Create new cards
-        cols = 6  # Number of cards per row
         for idx, rally in enumerate(rallies):
-            card = RallyCardWidget(
-                rally_number=idx + 1,
-                score=rally.score_at_start,
-            )
-            card.clicked.connect(lambda i=idx: self._on_card_clicked(i))
-            self._cards.append(card)
+            item = QListWidgetItem()
+            # Create custom widget for the item
+            widget = self._create_card_widget(idx + 1, rally.score_at_start)
+            item.setSizeHint(QSize(62, 42))
+            item.setData(Qt.ItemDataRole.UserRole, idx)  # Store index
+            self._list_widget.addItem(item)
+            self._list_widget.setItemWidget(item, widget)
 
-            row = idx // cols
-            col = idx % cols
-            self._cards_layout.addWidget(card, row, col)
-
-        if self._cards:
+        if rallies:
             self.set_current_rally(0)
 
-    def _on_card_clicked(self, index: int) -> None:
-        """Handle rally card click.
+    @pyqtSlot(QListWidgetItem)
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        """Handle rally item click.
 
         Args:
-            index: Rally index (0-based)
+            item: Clicked list widget item
         """
-        self.set_current_rally(index)
-        self.rally_selected.emit(index)
+        idx = item.data(Qt.ItemDataRole.UserRole)
+        if idx is not None:
+            self.rally_selected.emit(idx)
 
     def set_current_rally(self, index: int) -> None:
         """Set the currently selected rally.
@@ -731,28 +673,34 @@ class RallyListWidget(QWidget):
         Args:
             index: Rally index (0-based)
         """
-        if 0 <= index < len(self._cards):
-            # Deselect previous
-            if 0 <= self._current_index < len(self._cards):
-                self._cards[self._current_index].set_selected(False)
-
-            # Select new
+        if 0 <= index < self._list_widget.count():
             self._current_index = index
-            self._cards[self._current_index].set_selected(True)
-
-            # Scroll to make visible
-            self._cards[self._current_index].ensurePolished()
+            self._list_widget.setCurrentRow(index)
+            # Ensure selected item is visible
+            self._list_widget.scrollToItem(
+                self._list_widget.item(index),
+                QListWidget.ScrollHint.EnsureVisible
+            )
 
 
 class ReviewModeWidget(QWidget):
-    """Main container for Final Review Mode.
+    """Main container for Final Review Mode with dual-splitter layout.
 
     Composites all review components:
-    - Rally header with progress
-    - Timing adjustment controls
-    - Score editing
-    - Rally list navigation
-    - Generate Kdenlive button
+    - Rally header with progress (top, outside splitters)
+    - Video placeholder + control panel (top section, horizontal split)
+    - Rally list + navigation + generate (bottom section)
+
+    Layout structure:
+    - Header (fixed top)
+    - Outer QSplitter (Vertical):
+      - Top section with Inner QSplitter (Horizontal):
+        - Video placeholder (stretches)
+        - Control panel (fixed ~320px width)
+      - Bottom section:
+        - Rally list header with nav buttons
+        - Rally list widget
+        - Generate section
 
     Signals:
         rally_changed(int): Current rally index changed
@@ -793,60 +741,159 @@ class ReviewModeWidget(QWidget):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        """Initialize UI components."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
-        layout.setSpacing(SPACE_MD)
+        """Initialize UI components with dual-splitter layout."""
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+        main_layout.setSpacing(SPACE_MD)
 
-        # Header with rally progress
+        # Header with rally progress (stays at top, outside splitters)
         self._header = RallyHeaderWidget()
         self._header.exit_requested.connect(self.exit_requested.emit)
-        layout.addWidget(self._header)
+        main_layout.addWidget(self._header)
+
+        # ===================================================================
+        # OUTER SPLITTER (Vertical) - separates top section from rally list
+        # ===================================================================
+        self._outer_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._outer_splitter.setChildrenCollapsible(False)
+        self._outer_splitter.setStyleSheet(f"""
+            QSplitter::handle:vertical {{
+                background: {BG_BORDER};
+                height: 6px;
+                border-radius: 3px;
+            }}
+            QSplitter::handle:vertical:hover {{
+                background: {PRIMARY_ACTION};
+            }}
+        """)
+
+        # ===================================================================
+        # TOP SECTION - contains inner splitter (video + controls)
+        # ===================================================================
+        top_section = QWidget()
+        top_section_layout = QVBoxLayout(top_section)
+        top_section_layout.setContentsMargins(0, 0, 0, 0)
+        top_section_layout.setSpacing(0)
+
+        # INNER SPLITTER (Horizontal) - splits video placeholder from control panel
+        self._inner_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._inner_splitter.setChildrenCollapsible(False)
+        self._inner_splitter.setStyleSheet(f"""
+            QSplitter::handle:horizontal {{
+                background: {BG_BORDER};
+                width: 6px;
+                border-radius: 3px;
+            }}
+            QSplitter::handle:horizontal:hover {{
+                background: {PRIMARY_ACTION};
+            }}
+        """)
+
+        # Video Placeholder (for main_window to embed video widget)
+        # Minimum size enforces 16:9 video at 870x490 (user requirement)
+        self._video_placeholder = QWidget()
+        self._video_placeholder.setObjectName("video_placeholder")
+        self._video_placeholder.setMinimumSize(870, 490)
+        # CRITICAL: Make placeholder a native window so MPV's X11 window can be
+        # properly reparented here. Without this, the video stays at (0,0) of main window.
+        self._video_placeholder.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        self._video_placeholder.winId()  # Force native window creation
+        # No background/border - the embedded video container provides its own styling
+        self._video_placeholder.setStyleSheet("")
+
+        # Control Panel (Play Rally + Timing + Score)
+        control_panel = QWidget()
+        control_panel.setMinimumWidth(280)
+        control_panel.setMaximumWidth(400)
+        control_panel_layout = QVBoxLayout(control_panel)
+        control_panel_layout.setContentsMargins(0, 0, 0, 0)
+        control_panel_layout.setSpacing(SPACE_MD)
+
+        # Play Rally button (prominent with green border)
+        play_rally_button = QPushButton("▶ PLAY RALLY")
+        play_rally_button.setFont(Fonts.button_rally())
+        play_rally_button.clicked.connect(self._on_play_clicked)
+        play_rally_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {PRIMARY_ACTION};
+                border: 2px solid {PRIMARY_ACTION};
+                border-radius: {RADIUS_MD}px;
+                padding: {SPACE_MD}px {SPACE_LG}px;
+                min-height: 48px;
+            }}
+            QPushButton:hover {{
+                background-color: {PRIMARY_ACTION};
+                color: {BG_PRIMARY};
+                            }}
+        """)
+        control_panel_layout.addWidget(play_rally_button)
 
         # Timing controls
         self._timing_widget = TimingControlWidget()
         self._timing_widget.timing_adjusted.connect(self._on_timing_adjusted)
-        layout.addWidget(self._timing_widget)
+        control_panel_layout.addWidget(self._timing_widget)
 
         # Score editing
         self._score_widget = ScoreEditWidget()
         self._score_widget.score_changed.connect(self._on_score_changed)
-        layout.addWidget(self._score_widget)
+        control_panel_layout.addWidget(self._score_widget)
 
-        # Rally list
-        self._rally_list = RallyListWidget()
-        self._rally_list.rally_selected.connect(self._on_rally_selected)
-        layout.addWidget(self._rally_list)
+        control_panel_layout.addStretch()
 
-        # Navigation controls
-        nav_layout = QHBoxLayout()
-        nav_layout.setSpacing(SPACE_MD)
+        # Add widgets to inner splitter
+        self._inner_splitter.addWidget(self._video_placeholder)
+        self._inner_splitter.addWidget(control_panel)
+        self._inner_splitter.setSizes([600, 320])
+        self._inner_splitter.setStretchFactor(0, 1)  # Video stretches
+        self._inner_splitter.setStretchFactor(1, 0)  # Controls stay fixed width
 
-        prev_button = QPushButton("◀ Previous")
+        top_section_layout.addWidget(self._inner_splitter)
+
+        # ===================================================================
+        # BOTTOM SECTION - rally list + navigation + generate
+        # ===================================================================
+        bottom_section = QWidget()
+        bottom_layout = QVBoxLayout(bottom_section)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(SPACE_MD)
+
+        # Rally list header with navigation buttons
+        list_header_layout = QHBoxLayout()
+        list_header_layout.setSpacing(SPACE_MD)
+
+        list_title = QLabel("RALLY LIST (click to navigate)")
+        list_title.setFont(Fonts.body(size=12, weight=600))
+        list_title.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        list_header_layout.addWidget(list_title)
+
+        list_header_layout.addStretch()
+
+        # Navigation buttons
+        prev_button = QPushButton("◀ Prev")
         prev_button.setFont(Fonts.button_other())
         prev_button.clicked.connect(self._on_previous_clicked)
         self._style_nav_button(prev_button)
-        nav_layout.addWidget(prev_button)
-
-        play_button = QPushButton("▶ Play Rally")
-        play_button.setFont(Fonts.button_other())
-        play_button.clicked.connect(self._on_play_clicked)
-        self._style_nav_button(play_button)
-        nav_layout.addWidget(play_button)
+        list_header_layout.addWidget(prev_button)
 
         next_button = QPushButton("Next ▶")
         next_button.setFont(Fonts.button_other())
         next_button.clicked.connect(self._on_next_clicked)
         self._style_nav_button(next_button)
-        nav_layout.addWidget(next_button)
+        list_header_layout.addWidget(next_button)
 
-        layout.addLayout(nav_layout)
+        bottom_layout.addLayout(list_header_layout)
+
+        # Rally list
+        self._rally_list = RallyListWidget()
+        self._rally_list.rally_selected.connect(self._on_rally_selected)
+        bottom_layout.addWidget(self._rally_list)
 
         # Generate section
         generate_container = QWidget()
         generate_layout = QVBoxLayout(generate_container)
-        generate_layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
-        generate_layout.setSpacing(SPACE_MD)
+        generate_layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        generate_layout.setSpacing(SPACE_SM)
 
         summary_label = QLabel("✓ Ready to generate output")
         summary_label.setFont(Fonts.body(size=14, weight=500))
@@ -867,8 +914,7 @@ class ReviewModeWidget(QWidget):
             }}
             QPushButton:hover {{
                 background-color: {TEXT_ACCENT};
-                box-shadow: 0 0 20px {GLOW_GREEN};
-            }}
+                            }}
         """)
         generate_layout.addWidget(generate_button, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -879,7 +925,16 @@ class ReviewModeWidget(QWidget):
                 border-radius: {RADIUS_LG}px;
             }}
         """)
-        layout.addWidget(generate_container)
+        bottom_layout.addWidget(generate_container)
+
+        # ===================================================================
+        # Add sections to outer splitter
+        # ===================================================================
+        self._outer_splitter.addWidget(top_section)
+        self._outer_splitter.addWidget(bottom_section)
+        self._outer_splitter.setSizes([400, 200])
+
+        main_layout.addWidget(self._outer_splitter)
 
         # Main container styling
         self.setStyleSheet(f"""
@@ -901,7 +956,7 @@ class ReviewModeWidget(QWidget):
                 border: 1px solid {BORDER_COLOR};
                 border-radius: {RADIUS_MD}px;
                 padding: {SPACE_SM}px {SPACE_LG}px;
-                min-width: 120px;
+                min-width: 100px;
             }}
             QPushButton:hover {{
                 background-color: {BG_BORDER};
@@ -909,6 +964,7 @@ class ReviewModeWidget(QWidget):
             }}
         """)
 
+    @pyqtSlot(str, float)
     def _on_timing_adjusted(self, field: str, delta: float) -> None:
         """Handle timing adjustment from TimingControlWidget.
 
@@ -918,6 +974,7 @@ class ReviewModeWidget(QWidget):
         """
         self.timing_adjusted.emit(self._current_index, field, delta)
 
+    @pyqtSlot(str, bool)
     def _on_score_changed(self, new_score: str, cascade: bool) -> None:
         """Handle score change from ScoreEditWidget.
 
@@ -927,6 +984,7 @@ class ReviewModeWidget(QWidget):
         """
         self.score_changed.emit(self._current_index, new_score, cascade)
 
+    @pyqtSlot(int)
     def _on_rally_selected(self, index: int) -> None:
         """Handle rally selection from RallyListWidget.
 
@@ -935,18 +993,21 @@ class ReviewModeWidget(QWidget):
         """
         self.set_current_rally(index)
 
+    @pyqtSlot()
     def _on_previous_clicked(self) -> None:
         """Handle previous button click."""
         if self._current_index > 0:
             self.set_current_rally(self._current_index - 1)
             self.navigate_previous.emit()
 
+    @pyqtSlot()
     def _on_next_clicked(self) -> None:
         """Handle next button click."""
         if self._current_index < len(self._rallies) - 1:
             self.set_current_rally(self._current_index + 1)
             self.navigate_next.emit()
 
+    @pyqtSlot()
     def _on_play_clicked(self) -> None:
         """Handle play rally button click."""
         self.play_rally_requested.emit(self._current_index)
@@ -1010,3 +1071,29 @@ class ReviewModeWidget(QWidget):
         """Navigate to the next rally."""
         if self._current_index < len(self._rallies) - 1:
             self.set_current_rally(self._current_index + 1)
+
+    def get_video_placeholder(self) -> QWidget:
+        """Get the video placeholder widget for external embedding.
+
+        MainWindow can use this to parent the video widget inside the review mode.
+
+        Returns:
+            Video placeholder widget
+        """
+        return self._video_placeholder
+
+    def get_inner_splitter(self) -> QSplitter:
+        """Get the inner horizontal splitter for external configuration.
+
+        Returns:
+            Inner QSplitter (horizontal)
+        """
+        return self._inner_splitter
+
+    def get_outer_splitter(self) -> QSplitter:
+        """Get the outer vertical splitter for external configuration.
+
+        Returns:
+            Outer QSplitter (vertical)
+        """
+        return self._outer_splitter
