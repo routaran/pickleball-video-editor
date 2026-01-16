@@ -327,10 +327,6 @@ class ResumeSessionDialog(QDialog):
             QPushButton#primary_button:hover {{
                 background-color: #4FE695;
             }}
-
-            QPushButton:pressed {{
-                transform: translateY(1px);
-            }}
         """)
 
     def _on_start_fresh(self) -> None:
