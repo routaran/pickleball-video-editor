@@ -61,6 +61,7 @@ class SavedSessionInfo:
         session_path: Path to the session JSON file
         session_hash: Video file hash for re-linking validation
         video_name: Display name of the video file
+        video_path: Full original video path from session
         rally_count: Number of rallies in the session
         current_score: Current score string (e.g., "5-3-1")
         last_modified: ISO timestamp of last modification
@@ -71,6 +72,7 @@ class SavedSessionInfo:
     session_path: Path
     session_hash: str
     video_name: str
+    video_path: str
     rally_count: int
     current_score: str
     last_modified: str
