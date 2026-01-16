@@ -102,15 +102,9 @@ class VideoWidget(QWidget):
         libc.setlocale.restype = ctypes.c_char_p
         LC_NUMERIC = 1
 
-        # Force set and verify locale
+        # Force set and verify locale for MPV compatibility
         libc.setlocale(LC_NUMERIC, b"C")
         current = libc.setlocale(LC_NUMERIC, None)
-
-        # Write to stdout, stderr AND file to guarantee visibility
-        msg = f">>> LOCALE CHECK: LC_NUMERIC = {current} <<<"
-        print(msg)
-        print(msg, file=sys.stderr)
-        Path("/tmp/mpv_locale_check.txt").write_text(msg + "\n")
 
         if current != b"C":
             raise RuntimeError(f"LOCALE NOT SET! Got {current}, expected b'C'")
