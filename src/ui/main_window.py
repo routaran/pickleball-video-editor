@@ -660,9 +660,6 @@ class MainWindow(QMainWindow):
         self.video_fps = video_info.fps
         self.video_duration = video_info.duration
 
-        # Debug: show actual video properties
-        print(f">>> VIDEO LOADED: fps={video_info.fps}, duration={video_info.duration:.2f}s, frames={video_info.frame_count}")
-
         # Update rally manager with correct fps
         self.rally_manager.fps = self.video_fps
 
@@ -706,11 +703,6 @@ class MainWindow(QMainWindow):
         # Get current video position
         timestamp = self.video_widget.get_position()
 
-        # Debug: Show timing info
-        padded_time = timestamp + self.rally_manager.START_PADDING
-        padded_frame = int(padded_time * self.rally_manager.fps)
-        print(f">>> RALLY START: click_time={timestamp:.2f}s, padded_time={padded_time:.2f}s, frame={padded_frame}, fps={self.rally_manager.fps}")
-
         # Save score snapshot for undo
         score_snapshot = self.score_state.save_snapshot()
 
@@ -740,11 +732,6 @@ class MainWindow(QMainWindow):
 
         # Get current video position
         timestamp = self.video_widget.get_position()
-
-        # Debug: Show timing info
-        padded_time = timestamp + self.rally_manager.END_PADDING
-        padded_frame = int(padded_time * self.rally_manager.fps)
-        print(f">>> SERVER WINS: click_time={timestamp:.2f}s, padded_time={padded_time:.2f}s, frame={padded_frame}, fps={self.rally_manager.fps}")
 
         # Get score before rally ends
         score_at_start = self.score_state.get_score_string()
@@ -1513,13 +1500,6 @@ class MainWindow(QMainWindow):
         """
         # Get segments from rally manager
         segments = self.rally_manager.to_segments()
-
-        # Debug: show segments being exported
-        print(f">>> EXPORT: fps={self.video_fps}, num_segments={len(segments)}")
-        for i, seg in enumerate(segments):
-            in_sec = seg['in'] / self.video_fps
-            out_sec = seg['out'] / self.video_fps
-            print(f">>>   Segment {i+1}: in_frame={seg['in']} ({in_sec:.2f}s), out_frame={seg['out']} ({out_sec:.2f}s), score={seg['score']}")
 
         # Check if there are segments to export
         if not segments:
