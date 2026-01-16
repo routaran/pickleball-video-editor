@@ -94,6 +94,7 @@ class AddCommentDialog(QDialog):
             parent: Parent widget for modal behavior
         """
         super().__init__(parent)
+        self.setObjectName("addCommentDialog")
 
         self.timestamp = timestamp
         self.result: AddCommentResult | None = None

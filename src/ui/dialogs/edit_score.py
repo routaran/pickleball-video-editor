@@ -90,6 +90,7 @@ class EditScoreDialog(QDialog):
             parent: Parent widget for modal behavior
         """
         super().__init__(parent)
+        self.setObjectName("editScoreDialog")
 
         self.current_score = current_score
         self.is_doubles = is_doubles

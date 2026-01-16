@@ -102,6 +102,7 @@ class ExportCompleteDialog(QDialog):
             parent: Parent widget for dialog positioning
         """
         super().__init__(parent)
+        self.setObjectName("exportCompleteDialog")
 
         self._kdenlive_path = kdenlive_path
         self._show_delete_option = show_delete_option

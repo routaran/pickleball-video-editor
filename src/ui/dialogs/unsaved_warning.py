@@ -90,6 +90,7 @@ class UnsavedWarningDialog(QDialog):
             parent: Parent widget for dialog positioning
         """
         super().__init__(parent)
+        self.setObjectName("unsavedWarningDialog")
 
         self._result = UnsavedWarningResult.CANCEL
 

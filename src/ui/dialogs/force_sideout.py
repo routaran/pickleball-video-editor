@@ -94,6 +94,7 @@ class ForceSideOutDialog(QDialog):
             parent: Parent widget for modal behavior
         """
         super().__init__(parent)
+        self.setObjectName("forceSideoutDialog")
 
         self.current_server_info = current_server_info
         self.next_server_info = next_server_info

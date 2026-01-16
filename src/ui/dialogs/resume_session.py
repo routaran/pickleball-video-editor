@@ -118,6 +118,7 @@ class ResumeSessionDialog(QDialog):
             parent: Parent widget for dialog positioning
         """
         super().__init__(parent)
+        self.setObjectName("resumeSessionDialog")
 
         self._details = details
         self._result = ResumeSessionResult.RESUME

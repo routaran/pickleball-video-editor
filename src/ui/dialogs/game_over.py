@@ -100,6 +100,7 @@ class GameOverDialog(QDialog):
             parent: Parent widget for dialog positioning
         """
         super().__init__(parent)
+        self.setObjectName("gameOverDialog")
 
         self._winner_team = winner_team
         self._final_score = final_score
