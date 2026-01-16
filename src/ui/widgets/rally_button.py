@@ -126,14 +126,14 @@ class RallyButton(QPushButton):
     def _apply_size_constraints(self) -> None:
         """Apply minimum size based on button type per UI specification."""
         if self._button_type == BUTTON_TYPE_UNDO:
-            # Undo button: 100px × 40px
-            self.setMinimumSize(100, 40)
+            # Undo button: 70px × 36px (reduced for 800px responsive support)
+            self.setMinimumSize(70, 36)
         elif self._button_type == BUTTON_TYPE_RECEIVER_WINS:
-            # Receiver Wins: 180px × 56px (wider for longer text)
-            self.setMinimumSize(180, 56)
+            # Receiver Wins: 120px × 44px (reduced for 800px responsive support)
+            self.setMinimumSize(120, 44)
         else:
-            # Rally Start, Server Wins: 160px × 56px
-            self.setMinimumSize(160, 56)
+            # Rally Start, Server Wins: 110px × 44px (reduced for 800px responsive support)
+            self.setMinimumSize(110, 44)
 
     @property
     def button_type(self) -> str:

@@ -59,6 +59,9 @@ class StatusOverlay(QFrame):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setObjectName("status_overlay")
 
+        # Track compact mode state
+        self._compact_mode = False
+
         # Initialize child widgets
         self._status_dot = QLabel()
         self._status_text = QLabel("WAITING")
@@ -234,6 +237,40 @@ class StatusOverlay(QFrame):
         self.set_status(in_rally)
         self.set_score(score)
         self.set_server_info(server_info)
+
+    def set_compact_mode(self, compact: bool) -> None:
+        """Apply compact or normal mode styling.
+
+        In compact mode (window < 950px width), font sizes are reduced:
+        - Score value: 18px instead of 24px
+        - Labels: 11px instead of 13px
+        - Status and server text: 12px instead of 14px
+
+        Args:
+            compact: True for smaller fonts (window < 950px width)
+        """
+        if compact == self._compact_mode:
+            return  # No change needed
+
+        self._compact_mode = compact
+
+        # Scale score value (most prominent element)
+        score_size = 18 if compact else 24
+        self._score_value.setFont(Fonts.display(size=score_size, weight=700, tabular=True))
+
+        # Scale labels
+        label_size = 11 if compact else 13
+        label_font = Fonts.body(size=label_size, weight=400)
+        self._score_label.setFont(label_font)
+        self._server_label.setFont(label_font)
+
+        # Scale status and server text
+        text_size = 12 if compact else 14
+        self._status_text.setFont(Fonts.body(size=text_size, weight=500))
+        self._server_value.setFont(Fonts.body(size=text_size, weight=400))
+
+        # Resize widget to fit new font sizes
+        self.adjustSize()
 
 
 __all__ = ["StatusOverlay"]
