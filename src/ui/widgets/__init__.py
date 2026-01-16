@@ -7,6 +7,7 @@ This package contains reusable UI widgets:
 - Toast: Non-blocking toast notification widget
 - ToastManager: Toast notification manager with convenience methods
 - PlaybackControls: Video transport controls with speed toggles
+- SavedSessionCard: Card displaying saved session metadata
 """
 
 from src.ui.widgets.playback_controls import PlaybackControls
@@ -17,6 +18,7 @@ from src.ui.widgets.rally_button import (
     BUTTON_TYPE_UNDO,
     RallyButton,
 )
+from src.ui.widgets.saved_session_card import SavedSessionCard, SavedSessionInfo
 from src.ui.widgets.status_overlay import StatusOverlay
 from src.ui.widgets.toast import Toast, ToastManager, ToastType
 
@@ -35,4 +37,7 @@ __all__ = [
     "ToastType",
     # Playback controls
     "PlaybackControls",
+    # Saved session card
+    "SavedSessionCard",
+    "SavedSessionInfo",
 ]
