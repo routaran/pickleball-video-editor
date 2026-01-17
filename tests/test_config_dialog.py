@@ -146,7 +146,7 @@ class TestShortcutsTab:
 
         # Validation should fail
         assert len(dialog.validation_errors) > 0
-        assert dialog.error_label.isVisible()
+        assert not dialog.error_label.isHidden()
         assert not dialog.apply_button.isEnabled()
         assert "Duplicate" in dialog.error_label.text()
 
@@ -164,7 +164,7 @@ class TestShortcutsTab:
 
         # Validation should fail (case-insensitive)
         assert len(dialog.validation_errors) > 0
-        assert dialog.error_label.isVisible()
+        assert not dialog.error_label.isHidden()
         assert not dialog.apply_button.isEnabled()
         assert "Duplicate" in dialog.error_label.text()
 
@@ -179,7 +179,7 @@ class TestShortcutsTab:
 
         # Validation should fail
         assert len(dialog.validation_errors) > 0
-        assert dialog.error_label.isVisible()
+        assert not dialog.error_label.isHidden()
         assert not dialog.apply_button.isEnabled()
         assert "alphanumeric" in dialog.error_label.text()
 
@@ -193,7 +193,7 @@ class TestShortcutsTab:
 
         # Validation should fail
         assert len(dialog.validation_errors) > 0
-        assert dialog.error_label.isVisible()
+        assert not dialog.error_label.isHidden()
         assert not dialog.apply_button.isEnabled()
         assert "Empty" in dialog.error_label.text()
 
@@ -217,7 +217,7 @@ class TestShortcutsTab:
 
         # Validation should pass
         assert len(dialog.validation_errors) == 0
-        assert not dialog.error_label.isVisible()
+        assert dialog.error_label.isHidden()
         assert dialog.apply_button.isEnabled()
 
     def test_reset_to_defaults_button(self, qapp, custom_settings):
@@ -511,7 +511,7 @@ class TestDialogBehavior:
 
         # Apply button should be disabled
         assert not dialog.apply_button.isEnabled()
-        assert dialog.error_label.isVisible()
+        assert not dialog.error_label.isHidden()
 
     def test_apply_enabled_on_validation_success(self, qapp, default_settings):
         """Apply button enabled when validation passes."""
@@ -529,7 +529,7 @@ class TestDialogBehavior:
 
         # Apply button should be enabled
         assert dialog.apply_button.isEnabled()
-        assert not dialog.error_label.isVisible()
+        assert dialog.error_label.isHidden()
 
     def test_initial_state_valid_defaults(self, qapp, default_settings):
         """Dialog starts with valid defaults and enabled Apply button."""
@@ -537,7 +537,7 @@ class TestDialogBehavior:
 
         # Default settings should be valid
         assert len(dialog.validation_errors) == 0
-        assert not dialog.error_label.isVisible()
+        assert dialog.error_label.isHidden()
         assert dialog.apply_button.isEnabled()
 
     def test_result_is_none_before_apply(self, qapp, default_settings):
@@ -564,7 +564,7 @@ class TestRealTimeValidation:
 
         # Validation should fail immediately
         assert not dialog.apply_button.isEnabled()
-        assert dialog.error_label.isVisible()
+        assert not dialog.error_label.isHidden()
 
         # Fix it
         dialog.rally_start_input.clear()
@@ -572,7 +572,7 @@ class TestRealTimeValidation:
 
         # Validation should pass again
         assert dialog.apply_button.isEnabled()
-        assert not dialog.error_label.isVisible()
+        assert dialog.error_label.isHidden()
 
     def test_validation_error_message_content(self, qapp, default_settings):
         """Validation error messages are descriptive."""
@@ -644,4 +644,4 @@ class TestTabSwitching:
 
         # Error should still prevent Apply
         assert not dialog.apply_button.isEnabled()
-        assert dialog.error_label.isVisible()
+        assert not dialog.error_label.isHidden()

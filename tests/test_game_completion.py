@@ -230,7 +230,22 @@ class TestKdenliveGeneratorWithGameCompletion:
         # Without game completion: (300-0) + (900-600) = 300 + 300 = 600 frames
         assert generator._calculate_timeline_length() == 600
 
-    def test_timeline_length_with_game_completion(self, mock_video_file, basic_segments):
+    @pytest.fixture
+    def mock_video_info(self):
+        """Create a mock VideoInfo object."""
+        return VideoInfo(
+            path="/tmp/test_video.mp4",
+            width=1920,
+            height=1080,
+            fps=60.0,
+            duration=60.0,
+            codec_name="h264",
+            codec_long_name="H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+            bit_rate=8000000,
+            frame_count=3600
+        )
+
+    def test_timeline_length_with_game_completion(self, mock_video_file, basic_segments, mock_video_info):
         """Test timeline length includes extension when game is completed."""
         game_completion = GameCompletionInfo(
             is_completed=True,
@@ -248,7 +263,8 @@ class TestKdenliveGeneratorWithGameCompletion:
         )
 
         # With game completion: 600 + (8.0 * 60) = 600 + 480 = 1080 frames
-        assert generator._calculate_timeline_length() == 1080
+        with patch('src.output.kdenlive_generator.probe_video', return_value=mock_video_info):
+            assert generator._calculate_timeline_length() == 1080
 
     def test_timeline_length_game_completion_not_marked(self, mock_video_file, basic_segments):
         """Test timeline length when game_completion exists but is_completed is False."""
@@ -269,7 +285,7 @@ class TestKdenliveGeneratorWithGameCompletion:
         # Should NOT include extension since is_completed is False
         assert generator._calculate_timeline_length() == 600
 
-    def test_timeline_length_custom_extension(self, mock_video_file, basic_segments):
+    def test_timeline_length_custom_extension(self, mock_video_file, basic_segments, mock_video_info):
         """Test timeline length with custom extension duration."""
         game_completion = GameCompletionInfo(
             is_completed=True,
@@ -287,7 +303,8 @@ class TestKdenliveGeneratorWithGameCompletion:
         )
 
         # With custom extension: 600 + (5.0 * 60) = 600 + 300 = 900 frames
-        assert generator._calculate_timeline_length() == 900
+        with patch('src.output.kdenlive_generator.probe_video', return_value=mock_video_info):
+            assert generator._calculate_timeline_length() == 900
 
 
 class TestFinalScoreSubtitle:
@@ -592,10 +609,24 @@ class TestEdgeCases:
             game_completion=game_completion
         )
 
-        # 150 + (8.0 * 30) = 150 + 240 = 390 frames
-        assert generator._calculate_timeline_length() == 390
+        # Create mock video info with 30fps
+        mock_video_info_30fps = VideoInfo(
+            path="/tmp/test_video.mp4",
+            width=1920,
+            height=1080,
+            fps=30.0,
+            duration=60.0,
+            codec_name="h264",
+            codec_long_name="H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+            bit_rate=8000000,
+            frame_count=1800
+        )
 
-    def test_custom_extension_duration(self, mock_video_file):
+        # 150 + (8.0 * 30) = 150 + 240 = 390 frames
+        with patch('src.output.kdenlive_generator.probe_video', return_value=mock_video_info_30fps):
+            assert generator._calculate_timeline_length() == 390
+
+    def test_custom_extension_duration(self, mock_video_file, mock_video_info):
         """Test with custom extension duration."""
         game_completion = GameCompletionInfo(
             is_completed=True,
@@ -613,7 +644,8 @@ class TestEdgeCases:
         )
 
         # 300 + (5.0 * 60) = 300 + 300 = 600 frames
-        assert generator._calculate_timeline_length() == 600
+        with patch('src.output.kdenlive_generator.probe_video', return_value=mock_video_info):
+            assert generator._calculate_timeline_length() == 600
 
     def test_tie_score_completion(self, mock_video_file):
         """Test game completion with tied score (edge case)."""
@@ -637,7 +669,7 @@ class TestEdgeCases:
         # Should show "Game Over" for tie
         assert result == "5-5\\NGame Over"
 
-    def test_zero_extension_duration(self, mock_video_file):
+    def test_zero_extension_duration(self, mock_video_file, mock_video_info):
         """Test with zero extension duration."""
         game_completion = GameCompletionInfo(
             is_completed=True,
@@ -655,9 +687,10 @@ class TestEdgeCases:
         )
 
         # Should still show final subtitle, just with 0 duration
-        assert generator._calculate_timeline_length() == 300
+        with patch('src.output.kdenlive_generator.probe_video', return_value=mock_video_info):
+            assert generator._calculate_timeline_length() == 300
 
-    def test_fractional_extension_frames(self, mock_video_file):
+    def test_fractional_extension_frames(self, mock_video_file, mock_video_info):
         """Test extension with fractional frame calculation."""
         game_completion = GameCompletionInfo(
             is_completed=True,
@@ -675,7 +708,8 @@ class TestEdgeCases:
         )
 
         # 300 + int(7.5 * 60) = 300 + 450 = 750 frames
-        assert generator._calculate_timeline_length() == 750
+        with patch('src.output.kdenlive_generator.probe_video', return_value=mock_video_info):
+            assert generator._calculate_timeline_length() == 750
 
 
 class TestBackwardCompatibility:
