@@ -1,15 +1,53 @@
-# Claude Code user settings
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build system generated files
+config.mk
+build/
+dist/
+
+# PyInstaller
+*.spec
+!pickleball-editor.spec
+
+# Python
+*.pyc
+*.pyo
+__pycache__/
+*.egg-info/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Linting/Type checking
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude Code
 .claude/settings.json
 .claude/settings.local.json
 .claude/statusline.sh
 
-# Generated/temporary files
-*.pyc
-__pycache__/
-
-# Kdenlive cache and proxy files
-proxy/
-**/proxy/
+# Debug/temporary files
+DEBUG_LOCALE.txt
+*.log
 
 # Large video files
 *.mp4
@@ -17,15 +55,6 @@ proxy/
 *.avi
 *.mov
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# PyInstaller build artifacts
-app
-app.spec
-build/
-dist/
-
-# Debug/temporary files
-DEBUG_LOCALE.txt
+# Kdenlive cache and proxy files
+proxy/
+**/proxy/
