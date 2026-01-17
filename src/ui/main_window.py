@@ -201,6 +201,9 @@ class MainWindow(QMainWindow):
         self.config = config
         self._app_settings = app_settings or AppSettings()
 
+        # Track if we're in highlights mode (no scores, just cuts)
+        self._is_highlights_mode = config.game_type == "highlights"
+
         # Session manager for saving/loading
         self._session_manager = SessionManager()
 
@@ -249,11 +252,30 @@ class MainWindow(QMainWindow):
         Creates the core business logic components that manage scoring
         and rally tracking throughout the editing session. If a session_state
         is provided in the config, restores from that state.
+
+        For highlights mode, score_state is set to None as scoring is not tracked.
         """
         # Check if we're restoring from a session
         session_state = self.config.session_state
 
-        if session_state is not None:
+        if self._is_highlights_mode:
+            # Highlights mode - no score tracking
+            self.score_state = None
+
+            if session_state is not None:
+                # Restore rally manager from session
+                rally_manager_dict = {
+                    "rallies": [r.to_dict() for r in session_state.rallies],
+                    "undo_stack": [],
+                    "fps": 60.0
+                }
+                self.rally_manager = RallyManager.from_dict(rally_manager_dict)
+                self._restore_position = session_state.last_position
+            else:
+                self.rally_manager = RallyManager(fps=60.0)
+                self._restore_position = None
+
+        elif session_state is not None:
             # Restore from session
             # Create player names dict for ScoreState
             player_names = session_state.player_names
@@ -374,6 +396,8 @@ class MainWindow(QMainWindow):
 
         Returns:
             Frame containing rally action buttons and counter
+
+        For highlights mode, shows simplified UI with just MARK START / MARK END buttons.
         """
         panel = QFrame()
         panel.setObjectName("rally_panel")
@@ -384,7 +408,10 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(SPACE_LG, SPACE_MD, SPACE_LG, SPACE_MD)
 
         # Section label
-        label = QLabel("RALLY CONTROLS")
+        if self._is_highlights_mode:
+            label = QLabel("HIGHLIGHT CONTROLS")
+        else:
+            label = QLabel("RALLY CONTROLS")
         label.setObjectName("section_label")
         label.setFont(Fonts.body(12, 600))
         layout.addWidget(label)
@@ -393,27 +420,50 @@ class MainWindow(QMainWindow):
         button_layout = QHBoxLayout()
         button_layout.setSpacing(SPACE_MD)
 
-        # Create rally buttons (NoFocus so they don't steal keyboard shortcuts)
-        self.btn_rally_start = RallyButton("RALLY START", BUTTON_TYPE_RALLY_START)
-        self.btn_server_wins = RallyButton("SERVER WINS", BUTTON_TYPE_SERVER_WINS)
-        self.btn_receiver_wins = RallyButton("RECEIVER WINS", BUTTON_TYPE_RECEIVER_WINS)
-        self.btn_undo = RallyButton("UNDO", BUTTON_TYPE_UNDO)
+        if self._is_highlights_mode:
+            # Highlights mode: just MARK START and MARK END
+            self.btn_rally_start = RallyButton("MARK START", BUTTON_TYPE_RALLY_START)
+            self.btn_mark_end = RallyButton("MARK END", BUTTON_TYPE_SERVER_WINS)
+            self.btn_undo = RallyButton("UNDO", BUTTON_TYPE_UNDO)
 
-        # Prevent buttons from taking focus (keyboard shortcuts handled by MainWindow)
-        for btn in [self.btn_rally_start, self.btn_server_wins,
-                    self.btn_receiver_wins, self.btn_undo]:
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            # Set btn_server_wins and btn_receiver_wins to None so we don't access them
+            self.btn_server_wins = None
+            self.btn_receiver_wins = None
 
-        button_layout.addWidget(self.btn_rally_start)
-        button_layout.addWidget(self.btn_server_wins)
-        button_layout.addWidget(self.btn_receiver_wins)
-        button_layout.addStretch()
-        button_layout.addWidget(self.btn_undo)
+            # Prevent buttons from taking focus
+            for btn in [self.btn_rally_start, self.btn_mark_end, self.btn_undo]:
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+            button_layout.addWidget(self.btn_rally_start)
+            button_layout.addWidget(self.btn_mark_end)
+            button_layout.addStretch()
+            button_layout.addWidget(self.btn_undo)
+        else:
+            # Normal mode: RALLY START, SERVER WINS, RECEIVER WINS
+            self.btn_rally_start = RallyButton("RALLY START", BUTTON_TYPE_RALLY_START)
+            self.btn_server_wins = RallyButton("SERVER WINS", BUTTON_TYPE_SERVER_WINS)
+            self.btn_receiver_wins = RallyButton("RECEIVER WINS", BUTTON_TYPE_RECEIVER_WINS)
+            self.btn_undo = RallyButton("UNDO", BUTTON_TYPE_UNDO)
+            self.btn_mark_end = None  # Not used in normal mode
+
+            # Prevent buttons from taking focus (keyboard shortcuts handled by MainWindow)
+            for btn in [self.btn_rally_start, self.btn_server_wins,
+                        self.btn_receiver_wins, self.btn_undo]:
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+            button_layout.addWidget(self.btn_rally_start)
+            button_layout.addWidget(self.btn_server_wins)
+            button_layout.addWidget(self.btn_receiver_wins)
+            button_layout.addStretch()
+            button_layout.addWidget(self.btn_undo)
 
         layout.addLayout(button_layout)
 
-        # Rally counter
-        self.rally_counter_label = QLabel("Rally: 0")
+        # Rally/Clip counter
+        if self._is_highlights_mode:
+            self.rally_counter_label = QLabel("Clips: 0")
+        else:
+            self.rally_counter_label = QLabel("Rally: 0")
         self.rally_counter_label.setObjectName("rally_counter")
         self.rally_counter_label.setFont(Fonts.body(14, 500))
         layout.addWidget(self.rally_counter_label)
@@ -425,6 +475,8 @@ class MainWindow(QMainWindow):
 
         Returns:
             Frame containing toolbar buttons
+
+        For highlights mode, hides score-related buttons (Edit Score, Force Side-Out, Time Expired).
         """
         panel = QFrame()
         panel.setObjectName("toolbar_panel")
@@ -434,7 +486,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(SPACE_MD)
         layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
 
-        # Intervention buttons (left side)
+        # Intervention buttons (left side) - not all shown in highlights mode
         self.btn_edit_score = QPushButton("Edit Score")
         self.btn_force_sideout = QPushButton("Force Side-Out")
         self.btn_add_comment = QPushButton("Add Comment")
@@ -447,9 +499,15 @@ class MainWindow(QMainWindow):
             btn.setFont(Fonts.button_other())
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        # Time Expired only for timed games
-        if self.config.victory_rule != "timed":
+        # Hide score-related buttons in highlights mode
+        if self._is_highlights_mode:
+            self.btn_edit_score.setVisible(False)
+            self.btn_force_sideout.setVisible(False)
             self.btn_time_expired.setVisible(False)
+        else:
+            # Time Expired only for timed games
+            if self.config.victory_rule != "timed":
+                self.btn_time_expired.setVisible(False)
 
         layout.addWidget(self.btn_edit_score)
         layout.addWidget(self.btn_force_sideout)
@@ -536,8 +594,13 @@ class MainWindow(QMainWindow):
         """
         # Rally control buttons
         self.btn_rally_start.clicked.connect(self.on_rally_start)
-        self.btn_server_wins.clicked.connect(self.on_server_wins)
-        self.btn_receiver_wins.clicked.connect(self.on_receiver_wins)
+        if self._is_highlights_mode:
+            # Highlights mode: MARK END button
+            self.btn_mark_end.clicked.connect(self.on_mark_end)
+        else:
+            # Normal mode: SERVER/RECEIVER WINS buttons
+            self.btn_server_wins.clicked.connect(self.on_server_wins)
+            self.btn_receiver_wins.clicked.connect(self.on_receiver_wins)
         self.btn_undo.clicked.connect(self.on_undo)
 
         # Playback controls
@@ -626,19 +689,31 @@ class MainWindow(QMainWindow):
         self.video_widget.toggle_pause()
 
     def _on_shortcut_rally_start(self) -> None:
-        """Handle C shortcut for rally start."""
+        """Handle C shortcut for rally start / mark start."""
         if not self._in_review_mode and self.btn_rally_start.isEnabled():
             self.on_rally_start()
 
     def _on_shortcut_server_wins(self) -> None:
-        """Handle S shortcut for server wins."""
-        if not self._in_review_mode and self.btn_server_wins.isEnabled():
-            self.on_server_wins()
+        """Handle S shortcut for server wins / mark end (highlights mode)."""
+        if self._in_review_mode:
+            return
+        if self._is_highlights_mode:
+            # In highlights mode, S key triggers MARK END
+            if self.btn_mark_end is not None and self.btn_mark_end.isEnabled():
+                self.on_mark_end()
+        else:
+            # Normal mode: server wins
+            if self.btn_server_wins is not None and self.btn_server_wins.isEnabled():
+                self.on_server_wins()
 
     def _on_shortcut_receiver_wins(self) -> None:
-        """Handle R shortcut for receiver wins."""
-        if not self._in_review_mode and self.btn_receiver_wins.isEnabled():
-            self.on_receiver_wins()
+        """Handle R shortcut for receiver wins (disabled in highlights mode)."""
+        if self._in_review_mode:
+            return
+        # In highlights mode, R key does nothing (no receiver concept)
+        if not self._is_highlights_mode:
+            if self.btn_receiver_wins is not None and self.btn_receiver_wins.isEnabled():
+                self.on_receiver_wins()
 
     def _on_shortcut_undo(self) -> None:
         """Handle U shortcut for undo."""
@@ -705,23 +780,35 @@ class MainWindow(QMainWindow):
 
     # Rally marking handlers
 
+    def _get_dummy_score_snapshot(self) -> ScoreSnapshot:
+        """Create a dummy score snapshot for highlights mode.
+
+        Returns:
+            A ScoreSnapshot with zeroed values (used for undo stack structure)
+        """
+        return ScoreSnapshot(score=(0, 0), serving_team=0, server_number=None)
+
     @pyqtSlot()
     def on_rally_start(self) -> None:
-        """Handle Rally Start button click.
+        """Handle Rally Start / Mark Start button click.
 
-        Marks the beginning of a rally at the current video position.
+        Marks the beginning of a rally/clip at the current video position.
         Captures a score snapshot for undo functionality.
         """
         # LBYL: Check if rally is already in progress
         if self.rally_manager.is_rally_in_progress():
-            ToastManager.show_warning(self, "Rally already in progress", duration_ms=3000)
+            msg = "Clip already in progress" if self._is_highlights_mode else "Rally already in progress"
+            ToastManager.show_warning(self, msg, duration_ms=3000)
             return
 
         # Get current video position
         timestamp = self.video_widget.get_position()
 
-        # Save score snapshot for undo
-        score_snapshot = self.score_state.save_snapshot()
+        # Save score snapshot for undo (use dummy for highlights mode)
+        if self._is_highlights_mode:
+            score_snapshot = self._get_dummy_score_snapshot()
+        else:
+            score_snapshot = self.score_state.save_snapshot()
 
         # Mark rally start (precondition checked above)
         start_frame = self.rally_manager.start_rally(timestamp, score_snapshot)
@@ -733,7 +820,40 @@ class MainWindow(QMainWindow):
         self._update_display()
 
         # Show feedback
-        self.video_widget.show_osd(f"Rally started at {timestamp:.1f}s", duration=2.0)
+        msg = f"Clip started at {timestamp:.1f}s" if self._is_highlights_mode else f"Rally started at {timestamp:.1f}s"
+        self.video_widget.show_osd(msg, duration=2.0)
+
+    @pyqtSlot()
+    def on_mark_end(self) -> None:
+        """Handle Mark End button click (highlights mode only).
+
+        Marks the end of the current clip without score tracking.
+        """
+        # Check if clip is in progress
+        if not self.rally_manager.is_rally_in_progress():
+            ToastManager.show_warning(self, "No clip in progress", duration_ms=3000)
+            return
+
+        # Get current video position
+        timestamp = self.video_widget.get_position()
+
+        # End rally with no score (empty string)
+        rally = self.rally_manager.end_rally(
+            timestamp=timestamp,
+            winner="",  # No winner in highlights mode
+            score_at_start="",  # No score in highlights mode
+            score_snapshot=self._get_dummy_score_snapshot()
+        )
+
+        # Mark session as dirty
+        self._dirty = True
+
+        # Update UI state
+        self._update_display()
+
+        # Show feedback
+        clip_count = self.rally_manager.get_rally_count()
+        self.video_widget.show_osd(f"Clip {clip_count} marked", duration=2.0)
 
     @pyqtSlot()
     def on_server_wins(self) -> None:
@@ -838,8 +958,9 @@ class MainWindow(QMainWindow):
         # Undo the last action (precondition checked above)
         action, seek_position = self.rally_manager.undo()
 
-        # Restore score state from snapshot
-        self.score_state.restore_snapshot(action.score_before)
+        # Restore score state from snapshot (only in normal mode)
+        if not self._is_highlights_mode and self.score_state is not None:
+            self.score_state.restore_snapshot(action.score_before)
 
         # Seek video to where action occurred
         self.video_widget.seek(seek_position, absolute=True)
@@ -865,59 +986,88 @@ class MainWindow(QMainWindow):
         """
         # Update status overlay
         in_rally = self.rally_manager.is_rally_in_progress()
-        score_string = self.score_state.get_score_string()
-        server_info = self.score_state.get_server_info()
 
-        # Format server info for display
-        team_name = f"Team {server_info.serving_team + 1}"
-        server_text = f"{team_name} ({server_info.player_name})"
-        if server_info.server_number is not None:
-            server_text += f" #{server_info.server_number}"
+        if self._is_highlights_mode:
+            # Highlights mode: no score or server info
+            self.status_overlay.update_display(
+                in_rally=in_rally,
+                score="",  # No score display
+                server_info=""  # No server info
+            )
+        else:
+            # Normal mode: full score and server info
+            score_string = self.score_state.get_score_string()
+            server_info = self.score_state.get_server_info()
 
-        self.status_overlay.update_display(
-            in_rally=in_rally,
-            score=score_string,
-            server_info=server_text
-        )
+            # Format server info for display
+            team_name = f"Team {server_info.serving_team + 1}"
+            server_text = f"{team_name} ({server_info.player_name})"
+            if server_info.server_number is not None:
+                server_text += f" #{server_info.server_number}"
+
+            self.status_overlay.update_display(
+                in_rally=in_rally,
+                score=score_string,
+                server_info=server_text
+            )
 
         # Update button states
         self._update_button_states()
 
-        # Update rally counter
+        # Update rally/clip counter
         rally_count = self.rally_manager.get_rally_count()
-        self.rally_counter_label.setText(f"Rally: {rally_count}")
+        if self._is_highlights_mode:
+            self.rally_counter_label.setText(f"Clips: {rally_count}")
+        else:
+            self.rally_counter_label.setText(f"Rally: {rally_count}")
 
     def _update_button_states(self) -> None:
         """Update rally button active/disabled states.
 
         Button logic:
-        - WAITING (no rally): Rally Start active, Server/Receiver disabled
-        - IN_RALLY: Server/Receiver active, Rally Start disabled
+        - WAITING (no rally): Rally Start active, Server/Receiver (or Mark End) disabled
+        - IN_RALLY: Server/Receiver (or Mark End) active, Rally Start disabled
         - Undo: Always enabled if can_undo() is True
         """
         in_rally = self.rally_manager.is_rally_in_progress()
         can_undo = self.rally_manager.can_undo()
 
-        if in_rally:
-            # Rally in progress: Server/Receiver active
-            self.btn_rally_start.setEnabled(False)
-            self.btn_rally_start.set_active(False)
+        if self._is_highlights_mode:
+            # Highlights mode: MARK START / MARK END buttons
+            if in_rally:
+                self.btn_rally_start.setEnabled(False)
+                self.btn_rally_start.set_active(False)
 
-            self.btn_server_wins.setEnabled(True)
-            self.btn_server_wins.set_active(True)
+                self.btn_mark_end.setEnabled(True)
+                self.btn_mark_end.set_active(True)
+            else:
+                self.btn_rally_start.setEnabled(True)
+                self.btn_rally_start.set_active(True)
 
-            self.btn_receiver_wins.setEnabled(True)
-            self.btn_receiver_wins.set_active(True)
+                self.btn_mark_end.setEnabled(False)
+                self.btn_mark_end.set_active(False)
         else:
-            # Waiting: Rally Start active
-            self.btn_rally_start.setEnabled(True)
-            self.btn_rally_start.set_active(True)
+            # Normal mode: RALLY START / SERVER WINS / RECEIVER WINS buttons
+            if in_rally:
+                # Rally in progress: Server/Receiver active
+                self.btn_rally_start.setEnabled(False)
+                self.btn_rally_start.set_active(False)
 
-            self.btn_server_wins.setEnabled(False)
-            self.btn_server_wins.set_active(False)
+                self.btn_server_wins.setEnabled(True)
+                self.btn_server_wins.set_active(True)
 
-            self.btn_receiver_wins.setEnabled(False)
-            self.btn_receiver_wins.set_active(False)
+                self.btn_receiver_wins.setEnabled(True)
+                self.btn_receiver_wins.set_active(True)
+            else:
+                # Waiting: Rally Start active
+                self.btn_rally_start.setEnabled(True)
+                self.btn_rally_start.set_active(True)
+
+                self.btn_server_wins.setEnabled(False)
+                self.btn_server_wins.set_active(False)
+
+                self.btn_receiver_wins.setEnabled(False)
+                self.btn_receiver_wins.set_active(False)
 
         # Undo button
         self.btn_undo.setEnabled(can_undo)
@@ -1139,36 +1289,56 @@ class MainWindow(QMainWindow):
         Returns:
             SessionState containing complete session information
         """
-        # Get current score snapshot
-        score_snapshot = self.score_state.save_snapshot()
-
-        # Build player names dict
-        player_names = {
-            "team1": self.config.team1_players,
-            "team2": self.config.team2_players,
-        }
-
         # Get current video position
         last_position = self.video_widget.get_position()
 
-        # Create session state
-        session_state = SessionState(
-            version="1.0",
-            video_path=str(self.config.video_path),
-            video_hash="",  # Will be set by SessionManager.save()
-            game_type=self.config.game_type,
-            victory_rules=self.config.victory_rule,
-            player_names=player_names,
-            rallies=self.rally_manager.get_rallies(),
-            current_score=list(score_snapshot.score),
-            serving_team=score_snapshot.serving_team,
-            server_number=score_snapshot.server_number,
-            last_position=last_position,
-            created_at="",  # Will be set by SessionManager.save() if new
-            modified_at="",  # Will be set by SessionManager.save()
-            interventions=[],  # TODO: Implement interventions tracking
-            comments=[],  # TODO: Implement comments tracking
-        )
+        if self._is_highlights_mode:
+            # Highlights mode: no score state
+            session_state = SessionState(
+                version="1.0",
+                video_path=str(self.config.video_path),
+                video_hash="",  # Will be set by SessionManager.save()
+                game_type=self.config.game_type,
+                victory_rules=self.config.victory_rule,
+                player_names={"team1": [], "team2": []},
+                rallies=self.rally_manager.get_rallies(),
+                current_score=[0, 0],
+                serving_team=0,
+                server_number=None,
+                last_position=last_position,
+                created_at="",
+                modified_at="",
+                interventions=[],
+                comments=[],
+            )
+        else:
+            # Normal mode: get current score snapshot
+            score_snapshot = self.score_state.save_snapshot()
+
+            # Build player names dict
+            player_names = {
+                "team1": self.config.team1_players,
+                "team2": self.config.team2_players,
+            }
+
+            # Create session state
+            session_state = SessionState(
+                version="1.0",
+                video_path=str(self.config.video_path),
+                video_hash="",  # Will be set by SessionManager.save()
+                game_type=self.config.game_type,
+                victory_rules=self.config.victory_rule,
+                player_names=player_names,
+                rallies=self.rally_manager.get_rallies(),
+                current_score=list(score_snapshot.score),
+                serving_team=score_snapshot.serving_team,
+                server_number=score_snapshot.server_number,
+                last_position=last_position,
+                created_at="",  # Will be set by SessionManager.save() if new
+                modified_at="",  # Will be set by SessionManager.save()
+                interventions=[],  # TODO: Implement interventions tracking
+                comments=[],  # TODO: Implement comments tracking
+            )
 
         return session_state
 
@@ -1308,27 +1478,32 @@ class MainWindow(QMainWindow):
 
         # Populate with current rallies
         rallies = self.rally_manager.get_rallies()
-        self._review_widget.set_rallies(rallies, fps=self.video_fps)
+        self._review_widget.set_rallies(rallies, fps=self.video_fps, is_highlights=self._is_highlights_mode)
 
-        # Calculate and set game completion info
-        final_score = self._calculate_final_score()
-        winning_team_names = self._get_winning_team_names()
-        self._review_widget.set_game_completion_info(final_score, winning_team_names)
+        if self._is_highlights_mode:
+            # Highlights mode: no game completion info needed
+            self._review_widget.set_game_completion_info("", [])
+            self._review_widget.hide_game_completion_controls()
+        else:
+            # Normal mode: calculate and set game completion info
+            final_score = self._calculate_final_score()
+            winning_team_names = self._get_winning_team_names()
+            self._review_widget.set_game_completion_info(final_score, winning_team_names)
 
-        # Auto-detect if game is already over based on current score
-        is_over, winner = self.score_state.is_game_over()
-        if is_over:
-            self._review_widget._mark_complete_checkbox.setChecked(True)
+            # Auto-detect if game is already over based on current score
+            is_over, winner = self.score_state.is_game_over()
+            if is_over:
+                self._review_widget._mark_complete_checkbox.setChecked(True)
 
         # Show review widget
         self._review_widget.show()
 
         # Show feedback
-        ToastManager.show_success(
-            self,
-            "Entered review mode - adjust timings and scores as needed",
-            duration_ms=3000
-        )
+        if self._is_highlights_mode:
+            msg = "Entered review mode - adjust timings as needed"
+        else:
+            msg = "Entered review mode - adjust timings and scores as needed"
+        ToastManager.show_success(self, msg, duration_ms=3000)
 
     def exit_review_mode(self) -> None:
         """Exit review mode and restore video to original location.
@@ -1610,22 +1785,19 @@ class MainWindow(QMainWindow):
 
         # Check if there are segments to export
         if not segments:
-            ToastManager.show_warning(
-                self,
-                "No rallies to export",
-                duration_ms=3000
-            )
+            msg = "No clips to export" if self._is_highlights_mode else "No rallies to export"
+            ToastManager.show_warning(self, msg, duration_ms=3000)
             return
 
-        # Warn if game appears incomplete and not marked as completed
-        is_over, _ = self.score_state.is_game_over()
-        if not is_over and (self._review_widget is None or not self._review_widget.is_game_completed()):
-            ToastManager.show_warning(
-                self,
-                "Game appears incomplete - final score subtitle will not be added",
-                duration_ms=3000
-            )
-
+        # Warn if game appears incomplete and not marked as completed (only for normal mode)
+        if not self._is_highlights_mode:
+            is_over, _ = self.score_state.is_game_over()
+            if not is_over and (self._review_widget is None or not self._review_widget.is_game_completed()):
+                ToastManager.show_warning(
+                    self,
+                    "Game appears incomplete - final score subtitle will not be added",
+                    duration_ms=3000
+                )
 
         # Get video resolution from probe
         # We need to re-probe because we only stored fps/duration, not resolution
@@ -1641,9 +1813,9 @@ class MainWindow(QMainWindow):
                 duration_ms=3000
             )
 
-        # Check if game is marked as completed
+        # Check if game is marked as completed (only for normal mode)
         game_completion_info = None
-        if self._review_widget is not None and self._review_widget.is_game_completed():
+        if not self._is_highlights_mode and self._review_widget is not None and self._review_widget.is_game_completed():
             final_score, winning_names = self._review_widget.get_game_completion_info()
             winning_team = 0 if self.score_state.score[0] > self.score_state.score[1] else 1
             game_completion_info = GameCompletionInfo(

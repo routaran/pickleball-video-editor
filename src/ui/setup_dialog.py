@@ -504,7 +504,7 @@ class SetupDialog(QDialog):
         # Game configuration section
         self.game_type_label = QLabel("GAME TYPE")
         self.game_type_combo = QComboBox()
-        self.game_type_combo.addItems(["Doubles", "Singles"])
+        self.game_type_combo.addItems(["Doubles", "Singles", "Highlights"])
 
         self.victory_label = QLabel("VICTORY RULES")
         self.victory_combo = QComboBox()
@@ -592,16 +592,16 @@ class SetupDialog(QDialog):
         game_type_container.setObjectName("config-container")
 
         # Victory rules container
-        victory_container = QWidget()
-        victory_layout = QVBoxLayout(victory_container)
+        self._victory_container = QWidget()
+        victory_layout = QVBoxLayout(self._victory_container)
         victory_layout.setContentsMargins(16, 16, 16, 16)
         victory_layout.setSpacing(8)
         victory_layout.addWidget(self.victory_label)
         victory_layout.addWidget(self.victory_combo)
-        victory_container.setObjectName("config-container")
+        self._victory_container.setObjectName("config-container")
 
         config_layout.addWidget(game_type_container)
-        config_layout.addWidget(victory_container)
+        config_layout.addWidget(self._victory_container)
 
         main_layout.addLayout(config_layout)
 
@@ -951,18 +951,30 @@ class SetupDialog(QDialog):
 
     @pyqtSlot(int)
     def _on_game_type_changed(self, index: int) -> None:
-        """Show or hide Player 2 fields based on game type.
+        """Show or hide fields based on game type.
 
         Args:
-            index: Index of selected game type (0=Doubles, 1=Singles)
+            index: Index of selected game type (0=Doubles, 1=Singles, 2=Highlights)
         """
         is_doubles = (index == 0)
+        is_highlights = (index == 2)
 
-        # Show/hide Player 2 fields
+        # Show/hide Player 2 fields (visible only for doubles)
         self.team1_player2_label.setVisible(is_doubles)
         self.team1_player2_edit.setVisible(is_doubles)
         self.team2_player2_label.setVisible(is_doubles)
         self.team2_player2_edit.setVisible(is_doubles)
+
+        # For highlights mode, hide victory rules and all player fields
+        self.victory_label.setVisible(not is_highlights)
+        self.victory_combo.setVisible(not is_highlights)
+        self.team1_group.setVisible(not is_highlights)
+        self.team2_group.setVisible(not is_highlights)
+
+        # Find the victory container and hide it too
+        # Victory container is the second child of config_layout
+        if hasattr(self, '_victory_container'):
+            self._victory_container.setVisible(not is_highlights)
 
         # Revalidate after visibility change
         self._validate()
@@ -984,37 +996,47 @@ class SetupDialog(QDialog):
             self.video_path_edit.setProperty("invalid", "false")
 
         # Determine which fields are required based on game type
-        is_doubles = (self.game_type_combo.currentIndex() == 0)
+        game_type_index = self.game_type_combo.currentIndex()
+        is_doubles = (game_type_index == 0)
+        is_highlights = (game_type_index == 2)
 
-        # Validate Team 1 Player 1
-        if not self.team1_player1_edit.text().strip():
-            self.team1_player1_edit.setProperty("invalid", "true")
-            is_valid = False
-        else:
+        # For highlights mode, only video path is required
+        if is_highlights:
+            # Clear any invalid states on player fields
             self.team1_player1_edit.setProperty("invalid", "false")
-
-        # Validate Team 1 Player 2 (only if doubles)
-        if is_doubles:
-            if not self.team1_player2_edit.text().strip():
-                self.team1_player2_edit.setProperty("invalid", "true")
-                is_valid = False
-            else:
-                self.team1_player2_edit.setProperty("invalid", "false")
-
-        # Validate Team 2 Player 1
-        if not self.team2_player1_edit.text().strip():
-            self.team2_player1_edit.setProperty("invalid", "true")
-            is_valid = False
-        else:
+            self.team1_player2_edit.setProperty("invalid", "false")
             self.team2_player1_edit.setProperty("invalid", "false")
-
-        # Validate Team 2 Player 2 (only if doubles)
-        if is_doubles:
-            if not self.team2_player2_edit.text().strip():
-                self.team2_player2_edit.setProperty("invalid", "true")
+            self.team2_player2_edit.setProperty("invalid", "false")
+        else:
+            # Validate Team 1 Player 1
+            if not self.team1_player1_edit.text().strip():
+                self.team1_player1_edit.setProperty("invalid", "true")
                 is_valid = False
             else:
-                self.team2_player2_edit.setProperty("invalid", "false")
+                self.team1_player1_edit.setProperty("invalid", "false")
+
+            # Validate Team 1 Player 2 (only if doubles)
+            if is_doubles:
+                if not self.team1_player2_edit.text().strip():
+                    self.team1_player2_edit.setProperty("invalid", "true")
+                    is_valid = False
+                else:
+                    self.team1_player2_edit.setProperty("invalid", "false")
+
+            # Validate Team 2 Player 1
+            if not self.team2_player1_edit.text().strip():
+                self.team2_player1_edit.setProperty("invalid", "true")
+                is_valid = False
+            else:
+                self.team2_player1_edit.setProperty("invalid", "false")
+
+            # Validate Team 2 Player 2 (only if doubles)
+            if is_doubles:
+                if not self.team2_player2_edit.text().strip():
+                    self.team2_player2_edit.setProperty("invalid", "true")
+                    is_valid = False
+                else:
+                    self.team2_player2_edit.setProperty("invalid", "false")
 
         # Update Start Editing button state
         self.start_button.setEnabled(is_valid)
@@ -1040,24 +1062,34 @@ class SetupDialog(QDialog):
             return
 
         # Collect configuration
-        is_doubles = (self.game_type_combo.currentIndex() == 0)
-        game_type = "doubles" if is_doubles else "singles"
+        game_type_index = self.game_type_combo.currentIndex()
+        if game_type_index == 0:
+            game_type = "doubles"
+        elif game_type_index == 1:
+            game_type = "singles"
+        else:
+            game_type = "highlights"
 
-        # Map victory combo index to rule string
+        # Map victory combo index to rule string (not used for highlights)
         victory_map = {
             0: "11",  # Game to 11
             1: "9",   # Game to 9
             2: "timed"
         }
-        victory_rule = victory_map[self.victory_combo.currentIndex()]
+        # For highlights, use empty string as victory rule doesn't apply
+        victory_rule = "" if game_type == "highlights" else victory_map[self.victory_combo.currentIndex()]
 
-        # Collect player names
-        team1_players = [self.team1_player1_edit.text().strip()]
-        team2_players = [self.team2_player1_edit.text().strip()]
+        # Collect player names (empty for highlights mode)
+        if game_type == "highlights":
+            team1_players = []
+            team2_players = []
+        else:
+            team1_players = [self.team1_player1_edit.text().strip()]
+            team2_players = [self.team2_player1_edit.text().strip()]
 
-        if is_doubles:
-            team1_players.append(self.team1_player2_edit.text().strip())
-            team2_players.append(self.team2_player2_edit.text().strip())
+            if game_type == "doubles":
+                team1_players.append(self.team1_player2_edit.text().strip())
+                team2_players.append(self.team2_player2_edit.text().strip())
 
         # Create configuration
         self._config = GameConfig(

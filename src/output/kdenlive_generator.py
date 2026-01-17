@@ -173,6 +173,9 @@ class KdenliveGenerator:
     def _write_ass_file(self, ass_path: Path) -> None:
         """Generate ASS subtitle file.
 
+        For highlights mode (game_type="highlights"), an empty subtitle file is
+        created since scores are not tracked.
+
         Args:
             ass_path: Path where ASS file should be written
         """
@@ -206,6 +209,12 @@ class KdenliveGenerator:
         # Events section
         lines.append("[Events]")
         lines.append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")
+
+        # For highlights mode, skip all subtitle generation (no scores to display)
+        if self.game_type == "highlights":
+            lines.append("")
+            ass_path.write_text("\n".join(lines), encoding="utf-8")
+            return
 
         # Generate subtitles based on segments
         # IMPORTANT: Calculate timing from MLT timecodes to stay synchronized

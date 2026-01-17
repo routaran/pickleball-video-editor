@@ -1052,15 +1052,24 @@ class ReviewModeWidget(QWidget):
         """Handle play rally button click."""
         self.play_rally_requested.emit(self._current_index)
 
-    def set_rallies(self, rallies: list[Rally], fps: float = 60.0) -> None:
+    def set_rallies(self, rallies: list[Rally], fps: float = 60.0, is_highlights: bool = False) -> None:
         """Populate the review mode with rallies.
 
         Args:
             rallies: List of Rally objects
             fps: Video frames per second for time calculations
+            is_highlights: If True, hide score-related controls
         """
         self._rallies = rallies
         self._fps = fps
+        self._is_highlights = is_highlights
+
+        # Hide score widget in highlights mode
+        if is_highlights:
+            self._score_widget.hide()
+        else:
+            self._score_widget.show()
+
         self._rally_list.set_rallies(rallies)
         if rallies:
             self.set_current_rally(0)
@@ -1175,3 +1184,8 @@ class ReviewModeWidget(QWidget):
     def get_game_completion_info(self) -> tuple[str, list[str]]:
         """Get game completion info for export."""
         return self._final_score, self._winning_team_names
+
+    def hide_game_completion_controls(self) -> None:
+        """Hide game completion controls (for highlights mode)."""
+        self._mark_complete_checkbox.hide()
+        self._final_score_label.hide()
