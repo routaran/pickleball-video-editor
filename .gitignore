@@ -3,6 +3,10 @@
 venv/
 env/
 
+# Development docs and tooling
+docs/
+.claude/
+
 # Build system generated files
 config.mk
 build/
