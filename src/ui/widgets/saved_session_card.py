@@ -179,6 +179,8 @@ class SavedSessionCard(QFrame):
         self._session_info = session_info
         self._init_ui()
         self._apply_styling()
+        # Ensure card has minimum height to display all content
+        self.setMinimumHeight(170)
 
     def _init_ui(self) -> None:
         """Initialize UI components."""

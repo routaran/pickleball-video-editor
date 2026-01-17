@@ -1481,6 +1481,10 @@ class MainWindow(QMainWindow):
         rallies = self.rally_manager.get_rallies()
         self._review_widget.set_rallies(rallies, fps=self.video_fps, is_highlights=self._is_highlights_mode)
 
+        # Set default export path suggestion
+        default_path = str(self.config.video_path.parent / f"{self.config.video_path.stem}.kdenlive")
+        self._review_widget.set_export_path(default_path)
+
         if self._is_highlights_mode:
             # Highlights mode: no game completion info needed
             self._review_widget.set_game_completion_info("", [])
@@ -1553,30 +1557,13 @@ class MainWindow(QMainWindow):
     def _on_review_rally_changed(self, index: int) -> None:
         """Handle rally selection change in review mode.
 
-        Seeks video to the start of the selected rally.
+        Seeks to and auto-plays the selected rally.
 
         Args:
             index: Rally index (0-based)
         """
-        # Check if index is valid
-        if not (0 <= index < self.rally_manager.get_rally_count()):
-            return
-
-        # Get rally
-        rally = self.rally_manager.get_rally(index)
-
-        # Convert start frame to seconds
-        start_seconds = rally.start_frame / self.video_fps
-
-        # Seek to rally start
-        self.video_widget.seek(start_seconds, absolute=True)
-        self.video_widget.pause()
-
-        # Show feedback
-        self.video_widget.show_osd(
-            f"Rally {index + 1}: {rally.score_at_start}",
-            duration=2.0
-        )
+        # Delegate to play rally method which handles seeking, playing, and auto-pause
+        self._on_review_play_rally(index)
 
     @pyqtSlot(int, str, float)
     def _on_review_timing_adjusted(self, index: int, which: str, delta: float) -> None:
@@ -1800,21 +1787,33 @@ class MainWindow(QMainWindow):
                     duration_ms=3000
                 )
 
-        # Show file save dialog for export path
-        default_dir = str(Path.home() / "Videos")
-        default_filename = f"{self.config.video_path.stem}.kdenlive"
-        selected_path_str, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Kdenlive Project",
-            str(Path(default_dir) / default_filename),
-            "Kdenlive Project (*.kdenlive);;All Files (*)"
-        )
+        # Check if export path was preset in review widget
+        preset_path = ""
+        if self._review_widget is not None:
+            preset_path = self._review_widget.get_export_path()
 
-        # Check if user cancelled
-        if not selected_path_str:
-            return
+        if preset_path:
+            # Use preset path
+            selected_path = Path(preset_path)
+            # Ensure .kdenlive extension
+            if selected_path.suffix.lower() != '.kdenlive':
+                selected_path = selected_path.with_suffix('.kdenlive')
+        else:
+            # Show file save dialog for export path
+            default_dir = str(Path.home() / "Videos")
+            default_filename = f"{self.config.video_path.stem}.kdenlive"
+            selected_path_str, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Kdenlive Project",
+                str(Path(default_dir) / default_filename),
+                "Kdenlive Project (*.kdenlive);;All Files (*)"
+            )
 
-        selected_path = Path(selected_path_str)
+            # Check if user cancelled
+            if not selected_path_str:
+                return
+
+            selected_path = Path(selected_path_str)
 
         # Get video resolution from probe
         # We need to re-probe because we only stored fps/duration, not resolution

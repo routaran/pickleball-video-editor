@@ -18,6 +18,7 @@ from the Main Window's "Final Review" button.
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -750,6 +751,7 @@ class ReviewModeWidget(QWidget):
     navigate_previous = pyqtSignal()
     navigate_next = pyqtSignal()
     game_completed_toggled = pyqtSignal(bool)  # Emitted when Mark Game Completed is toggled
+    export_path_changed = pyqtSignal(str)  # Emitted when export path is set
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the review mode widget.
@@ -764,6 +766,7 @@ class ReviewModeWidget(QWidget):
         self._game_completed = False
         self._final_score = ""
         self._winning_team_names: list[str] = []
+        self._export_path: str = ""  # Custom export path, empty means use dialog
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -939,6 +942,52 @@ class ReviewModeWidget(QWidget):
         self._final_score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._final_score_label.hide()
         generate_layout.addWidget(self._final_score_label)
+
+        # Export path section
+        export_path_layout = QHBoxLayout()
+        export_path_layout.setSpacing(SPACE_SM)
+
+        export_label = QLabel("Export to:")
+        export_label.setFont(Fonts.label())
+        export_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        export_path_layout.addWidget(export_label)
+
+        self._export_path_edit = QLineEdit()
+        self._export_path_edit.setPlaceholderText("Click Browse or use default location...")
+        self._export_path_edit.setReadOnly(False)
+        self._export_path_edit.textChanged.connect(self._on_export_path_changed)
+        self._export_path_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {BG_TERTIARY};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {RADIUS_MD}px;
+                padding: {SPACE_SM}px;
+            }}
+            QLineEdit:focus {{
+                border-color: {PRIMARY_ACTION};
+            }}
+        """)
+        export_path_layout.addWidget(self._export_path_edit, stretch=1)
+
+        self._browse_button = QPushButton("Browse")
+        self._browse_button.setFont(Fonts.button_other())
+        self._browse_button.clicked.connect(self._on_browse_clicked)
+        self._browse_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_TERTIARY};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {RADIUS_MD}px;
+                padding: {SPACE_SM}px {SPACE_MD}px;
+            }}
+            QPushButton:hover {{
+                background-color: {BG_BORDER};
+            }}
+        """)
+        export_path_layout.addWidget(self._browse_button)
+
+        generate_layout.addLayout(export_path_layout)
 
         generate_button = QPushButton("GENERATE KDENLIVE PROJECT")
         generate_button.setFont(Fonts.button_rally())
@@ -1189,3 +1238,42 @@ class ReviewModeWidget(QWidget):
         """Hide game completion controls (for highlights mode)."""
         self._mark_complete_checkbox.hide()
         self._final_score_label.hide()
+
+    @pyqtSlot()
+    def _on_browse_clicked(self) -> None:
+        """Handle Browse button click - open file dialog for export path."""
+        from pathlib import Path
+
+        default_dir = str(Path.home() / "Videos")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Select Export Location",
+            default_dir,
+            "Kdenlive Project (*.kdenlive);;All Files (*)"
+        )
+
+        if file_path:
+            self._export_path_edit.setText(file_path)
+
+    @pyqtSlot(str)
+    def _on_export_path_changed(self, path: str) -> None:
+        """Handle export path text changes."""
+        self._export_path = path
+        self.export_path_changed.emit(path)
+
+    def get_export_path(self) -> str:
+        """Get the currently set export path.
+
+        Returns:
+            Export path string, or empty string if not set
+        """
+        return self._export_path
+
+    def set_export_path(self, path: str) -> None:
+        """Set the export path display.
+
+        Args:
+            path: Path to display in the export path field
+        """
+        self._export_path = path
+        self._export_path_edit.setText(path)

@@ -131,6 +131,7 @@ class SetupDialog(QDialog):
         self.setWindowTitle("Pickleball Video Editor")
         self.setModal(True)
         self.setMinimumWidth(700)
+        self.setMinimumHeight(750)
 
         # Configuration result (set when accepted)
         self._config: GameConfig | None = None
@@ -318,6 +319,8 @@ class SetupDialog(QDialog):
             self._session_state = state
             self.video_path_edit.setText(video_path)
             self._populate_from_session(state)
+            # Automatically start editing instead of waiting for user to click button
+            self._on_start_editing()
         else:  # START_FRESH
             # User chose to start fresh - delete session and populate video path
             self._session_manager.delete_session_file(info.session_path)
@@ -488,7 +491,7 @@ class SetupDialog(QDialog):
         self.sessions_scroll.setWidgetResizable(True)
         self.sessions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.sessions_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.sessions_scroll.setMaximumHeight(220)
+        self.sessions_scroll.setMinimumHeight(200)
         self.sessions_container = QWidget()
         self.sessions_layout = QHBoxLayout(self.sessions_container)
         self.sessions_layout.setContentsMargins(0, 0, 0, 0)
@@ -909,6 +912,8 @@ class SetupDialog(QDialog):
                 self._session_state = state
                 # Pre-fill form fields from session
                 self._populate_from_session(state)
+                # Automatically start editing instead of waiting for user to click button
+                self._on_start_editing()
         else:  # START_FRESH
             # Delete the old session
             self._session_manager.delete(video_path)
@@ -921,10 +926,13 @@ class SetupDialog(QDialog):
             state: Loaded session state
         """
         # Set game type
-        if state.game_type == "doubles":
-            self.game_type_combo.setCurrentIndex(0)
-        else:  # singles
-            self.game_type_combo.setCurrentIndex(1)
+        game_type_index_map = {
+            "doubles": 0,
+            "singles": 1,
+            "highlights": 2
+        }
+        game_type_index = game_type_index_map.get(state.game_type, 1)  # default to singles
+        self.game_type_combo.setCurrentIndex(game_type_index)
 
         # Set victory rules
         victory_index_map = {
@@ -1057,9 +1065,11 @@ class SetupDialog(QDialog):
 
     @pyqtSlot()
     def _on_start_editing(self) -> None:
-        """Handle Start Editing button click."""
-        if not self._validate():
-            return
+        """Handle Start Editing button click or auto-start from session resume."""
+        # Skip validation when resuming a session - the session data is authoritative
+        if self._session_state is None:
+            if not self._validate():
+                return
 
         # Collect configuration
         game_type_index = self.game_type_combo.currentIndex()
