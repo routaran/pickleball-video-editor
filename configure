@@ -50,8 +50,8 @@ APP_VERSION="0.1.0"
 # Help Message
 # -----------------------------------------------------------------------------
 show_help() {
+    echo -e "${BOLD}Pickleball Video Editor Configuration Script${RESET}"
     cat << EOF
-${BOLD}Pickleball Video Editor Configuration Script${RESET}
 
 Usage: ./configure [OPTIONS]
 
@@ -319,22 +319,22 @@ success "config.mk generated"
 echo ""
 info "Configuration complete!"
 echo ""
-echo "${BOLD}Configuration Summary:${RESET}"
+echo -e "${BOLD}Configuration Summary:${RESET}"
 echo "  Prefix:            $PREFIX"
 echo "  Python:            $PYTHON_VERSION ($PYTHON_PATH)"
 echo "  Virtual env:       $([ "$USE_VENV" = "yes" ] && echo "$VENV_DIR" || echo "disabled")"
 echo "  Development mode:  $([ "$ENABLE_DEV" = "yes" ] && echo "enabled" || echo "disabled")"
 echo ""
-echo "${BOLD}System Dependencies:${RESET}"
+echo -e "${BOLD}System Dependencies:${RESET}"
 echo "  libmpv:            $MPV_VERSION"
 echo "  ffmpeg:            $FFMPEG_VERSION"
 echo "  ffprobe:           $FFPROBE_VERSION"
 echo "  Qt6:               $QT6_VERSION"
 echo ""
-echo "${BOLD}Next Steps:${RESET}"
-echo "  1. Build the application:  ${GREEN}make${RESET}"
-echo "  2. Run tests:              ${GREEN}make test${RESET}"
-echo "  3. Install system-wide:    ${GREEN}sudo make install${RESET}"
-echo "  4. Run in dev mode:        ${GREEN}make run${RESET}"
+echo -e "${BOLD}Next Steps:${RESET}"
+echo -e "  1. Build the application:  ${GREEN}make${RESET}"
+echo -e "  2. Run tests:              ${GREEN}make test${RESET}"
+echo -e "  3. Install system-wide:    ${GREEN}sudo make install${RESET}"
+echo -e "  4. Run in dev mode:        ${GREEN}make run${RESET}"
 echo ""
-echo "See ${BOLD}make help${RESET} for all available targets."
+echo -e "See ${BOLD}make help${RESET} for all available targets."
