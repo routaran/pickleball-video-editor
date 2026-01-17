@@ -1,295 +1,318 @@
 # Pickleball Video Editor
 
-A desktop application for marking rally timestamps in pickleball videos, calculating scores automatically, and generating Kdenlive project files with rally-only clips and score overlays.
+A desktop application for marking rally timestamps in pickleball game videos, automatically calculating scores, and generating Kdenlive video editing projects with rally-only clips and score overlays.
+
+## What It Does
+
+**Turn hours of raw pickleball footage into polished highlight videos in minutes.**
+
+1. **Mark rallies** - Play your video and mark the start/end of each rally with simple keyboard shortcuts
+2. **Automatic scoring** - The app tracks the score using official pickleball rules (singles and doubles)
+3. **Export to Kdenlive** - Generate a video editing project with only the rallies, complete with score subtitles
+
+No more scrubbing through hours of footage. No more manually typing scores. Just mark, review, and export.
 
 ## Features
 
-- **Rally Marking**: Mark rally start/end points with one-click buttons
-- **Automatic Scoring**: Full pickleball score calculation for Singles and Doubles
-- **Embedded Playback**: Video playback with libmpv (frame-accurate seeking)
-- **Kdenlive Export**: Generate professional Kdenlive XML projects with rally clips
-- **Session Persistence**: Save and resume editing sessions automatically
-- **Final Review Mode**: Review rallies, adjust timings, edit scores before export
-
-## Quick Start
-
-```bash
-# Install system dependencies (Arch/Manjaro)
-sudo pacman -S mpv ffmpeg qt6-base python
-
-# Clone and setup
-git clone <repository-url>
-cd pickleball_editing
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Run the application
-python -m src.main
-```
-
-## System Dependencies
-
-### Manjaro Linux / Arch-based
-
-```bash
-sudo pacman -S mpv ffmpeg qt6-base python
-```
-
-### Ubuntu/Debian
-
-```bash
-sudo apt install libmpv-dev ffmpeg libqt6-dev python3.13
-```
-
-### Requirements
-
-- `libmpv` (version 0.35+)
-- `ffmpeg` (for video probing)
-- Qt6 libraries
-- Python 3.13+
-
-**Note:** The application forces X11/XCB mode for video playback compatibility. Wayland users will run through XWayland automatically.
+- **Embedded video player** with frame-accurate seeking and playback speed control (0.5x, 1x, 2x)
+- **Singles and Doubles scoring** with automatic side-out detection and server rotation
+- **Highlights mode** for creating cuts without score tracking
+- **Session auto-save** - Resume editing anytime, even if you close the app
+- **Review mode** - Adjust rally timing and correct scores before export
+- **Kdenlive XML export** with sequential rally clips and ASS subtitle overlays
+- **Configurable keyboard shortcuts** and skip durations
+- **Player/team names** displayed in intro subtitles
 
 ## Installation
 
-1. **Clone the repository:**
-   ```bash
-   git clone <repository-url>
-   cd pickleball_editing
-   ```
+### System Requirements
 
-2. **Create a virtual environment:**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate
-   ```
+| Requirement | Version |
+|-------------|---------|
+| Linux | Manjaro/Arch, Ubuntu/Debian, Fedora |
+| Python | 3.13+ |
+| libmpv | 0.35+ |
+| ffmpeg | Any recent version |
+| Qt6 | 6.6+ |
 
-3. **Install Python dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Install System Dependencies
 
-   Or for development with testing tools:
-   ```bash
-   pip install -e ".[dev]"
-   ```
+**Arch/Manjaro:**
+```bash
+sudo pacman -S mpv ffmpeg qt6-base python
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt install libmpv-dev ffmpeg qt6-base-dev python3.13 python3.13-venv
+```
+
+**Fedora:**
+```bash
+sudo dnf install mpv-devel ffmpeg qt6-qtbase-devel python3.13
+```
+
+### Build from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/pickleball-video-editor.git
+cd pickleball-video-editor
+
+# Configure (checks dependencies, creates virtual environment, installs packages)
+./configure
+
+# Build the executable
+make
+
+# Run tests (optional)
+make test
+
+# Install system-wide
+sudo make install
+
+# Or install to your home directory
+make install PREFIX=~/.local
+```
+
+### Development Setup
+
+```bash
+# Configure with development tools (pytest, ruff, mypy, black)
+./configure --enable-dev
+
+# Run in development mode (without building)
+make run
+
+# Run linters
+make lint
+
+# Format code
+make format
+```
 
 ## Usage
 
-### Running the Application
+### Quick Start
 
-```bash
-# From project root with venv activated
-python -m src.main
+1. **Launch the application**
+   ```bash
+   pickleball-editor
+   # Or in development mode:
+   make run
+   ```
 
-# Or using the entry point (after pip install -e .)
-pickleball-editor
-```
-
-### Editing Workflow
-
-1. **Setup Dialog**
-   - Select your pickleball video file
-   - Choose game type: Singles or Doubles
+2. **Create a new session**
+   - Click "Browse" to select your video file
+   - Choose game type: Singles, Doubles, or Highlights
    - Select victory rules: Game to 11, Game to 9, or Timed
-   - Enter player names
-   - If a previous session exists, choose to Resume or Start Fresh
+   - Enter player/team names (optional)
+   - Click "Start Editing"
 
-2. **Rally Marking (Main Window)**
-   - Use playback controls to navigate to rally start
-   - Click **Rally Start** to mark the beginning
-   - Navigate to rally end
-   - Click **Server Wins** or **Receiver Wins** to complete the rally
-   - Score updates automatically based on pickleball rules
-   - Use **Undo** to correct mistakes
+3. **Mark rallies**
+   - Press **C** to mark rally start
+   - Press **S** if server wins, **R** if receiver wins
+   - Repeat for all rallies
+   - Use **U** to undo mistakes
 
-3. **Interventions**
-   - **Edit Score**: Manually correct any scoring errors
-   - **Force Side-Out**: Fix serving errors
-   - **Add Comment**: Add notes at specific timestamps
-   - **Time Expired**: End timed games manually
+4. **Review and export**
+   - Click "Final Review" to verify rally timings
+   - Adjust timing with +/- buttons if needed
+   - Click "Generate Kdenlive" to export
 
-4. **Final Review Mode**
-   - Click **Final Review** to enter review mode
-   - Navigate through all rallies using Previous/Next
-   - Adjust timing with +/- 0.1s buttons
-   - Edit scores with optional cascade to later rallies
-   - Click **Generate Kdenlive** to export
-
-5. **Export**
-   - Generates `{video}_rallies.kdenlive` project file
-   - Generates `{video}_rallies.kdenlive.ass` subtitle file (ASS format)
-   - Files saved to `~/Videos/pickleball/`
-
-### Playback Controls
-
-| Control | Action |
-|---------|--------|
-| ◀◀ | Skip back 5 seconds |
-| ◀ | Skip back 1 second |
-| ▶/⏸ | Play/Pause toggle |
-| ▶ | Skip forward 1 second |
-| ▶▶ | Skip forward 5 seconds |
-| Speed | 0.5x / 1x / 2x playback |
+5. **Open in Kdenlive**
+   - Find your project in `~/Videos/pickleball/`
+   - Open the `.kdenlive` file
+   - Your rally clips and score subtitles are ready
 
 ### Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| Space | Pause/unpause video |
-| Left Arrow | Seek back 5 seconds |
-| Right Arrow | Seek forward 5 seconds |
-| C | Rally Start |
-| S | Server Wins |
-| R | Receiver Wins |
-| U | Undo (also pauses video) |
+| **C** | Mark rally start |
+| **S** | Server wins (mark rally end) |
+| **R** | Receiver wins (mark rally end) |
+| **U** | Undo last action |
+| **Space** | Play/Pause |
+| **Left/Right** | Skip backward/forward |
+| **Up/Down** | Large skip backward/forward |
 
-### Session Management
+All shortcuts are configurable in Settings.
 
-Sessions are automatically saved to `~/.local/share/pickleball-editor/sessions/`. When you select a video with an existing session, you'll be prompted to resume or start fresh.
+### Playback Controls
 
-- **Save Session**: Manually save current progress
-- **Auto-save prompt**: Asked before closing with unsaved changes
+| Control | Action |
+|---------|--------|
+| Skip -5s | Jump back 5 seconds |
+| Skip -1s | Jump back 1 second |
+| Play/Pause | Toggle playback |
+| Skip +1s | Jump forward 1 second |
+| Skip +5s | Jump forward 5 seconds |
+| Speed | 0.5x / 1x / 2x playback |
 
-## Output Files
+### Scoring Rules
 
-### Kdenlive Project (.kdenlive)
+**Singles (X-Y format):**
+- Server's score listed first
+- Side-out occurs when server loses rally
+- Example: `5-3` (server has 5, receiver has 3)
 
-The generated project file includes:
-- Rally clips extracted from the original video
-- Score overlay subtitles (ASS format)
-- Proper timeline structure for Kdenlive 25.x
+**Doubles (X-Y-Z format):**
+- Format: Serving score - Receiving score - Server number
+- Game starts at `0-0-2` (serving team begins as Server 2)
+- Only serving team can score points
+- First fault by Server 1 causes immediate side-out
+- Example: `7-4-1` (serving team has 7, receiving has 4, Server 1 serving)
 
-**Rally Timing:** Rally clips include padding for smooth transitions:
-- Cuts placed **1 second BEFORE** the marked rally start
-- Cuts placed **1 second AFTER** the marked rally end
+**Victory Rules:**
+- **Game to 11**: First to 11 points, win by 2
+- **Game to 9**: First to 9 points, win by 2
+- **Timed**: Higher score when time expires
 
-### ASS Subtitles (.ass)
+### Interventions
 
-Advanced SubStation Alpha (ASS) format subtitles showing the score at each rally with styling:
+During editing, you can manually correct the game state:
+
+- **Edit Score** - Fix any scoring errors
+- **Force Side-Out** - Manually trigger a side-out
+- **Add Comment** - Add timestamped notes (exceptional plays, referee calls)
+- **Time Expired** - End timed games manually
+- **Mark Game Completed** - Record final score with winner
+
+### Output Files
+
+After export, find your files in `~/Videos/pickleball/`:
+
+| File | Description |
+|------|-------------|
+| `{video}_rallies.kdenlive` | Kdenlive project with rally clips |
+| `{video}_rallies.kdenlive.ass` | Score subtitles (ASS format) |
+
+**Rally Timing:**
+- Clips start 0.5 seconds before marked rally start
+- Clips end 1.0 second after marked rally end
+
+## Configuration
+
+Access settings via the Settings button:
+
+| Tab | Options |
+|-----|---------|
+| **Shortcuts** | Customize keyboard shortcuts for rally marking |
+| **Skip Durations** | Configure playback skip amounts |
+| **Window Size** | Set min/max window dimensions |
+
+**File Locations:**
+- Settings: `~/.config/pickleball-editor/config.json`
+- Sessions: `~/.local/share/pickleball-editor/sessions/`
+
+## Build System
+
+This project uses a GNU-style build system:
+
+```bash
+./configure [OPTIONS]    # Configure build environment
+make                     # Build executable
+make install             # Install to PREFIX
+make uninstall           # Remove installed files
+make clean               # Remove build artifacts
+make distclean           # Full reset
+make test                # Run tests
+make lint                # Run linters
+make help                # Show all targets
 ```
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, ...
-Style: Default,IBM Plex Sans,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,5,10,10,10,1
 
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:00:05.50,Default,,0,0,0,,0-0-2
-Dialogue: 0,0:00:05.50,0:00:12.30,Default,,0,0,0,,1-0-2
-```
+### Configure Options
+
+| Option | Description |
+|--------|-------------|
+| `--prefix=DIR` | Installation prefix (default: /usr/local) |
+| `--python=CMD` | Python command (default: python3.13) |
+| `--enable-dev` | Install development dependencies |
+| `--disable-venv` | Use system Python |
+| `--help` | Show all options |
 
 ## Project Structure
 
 ```
-pickleball_editing/
+pickleball-video-editor/
 ├── src/
-│   ├── main.py              # Application entry point
+│   ├── main.py              # Entry point
 │   ├── app.py               # QApplication setup
 │   ├── core/                # Business logic
-│   │   ├── models.py        # Data models (Rally, ScoreSnapshot, etc.)
-│   │   ├── score_state.py   # Pickleball scoring state machine
-│   │   ├── rally_manager.py # Rally tracking with undo
-│   │   └── session_manager.py # Session persistence
-│   ├── video/               # Video handling
-│   │   ├── player.py        # MPV wrapper widget
-│   │   └── probe.py         # FFprobe metadata extraction
+│   │   ├── models.py        # Data models
+│   │   ├── score_state.py   # Scoring state machine
+│   │   ├── rally_manager.py # Rally tracking
+│   │   └── session_manager.py
+│   ├── video/               # Video playback
+│   │   ├── player.py        # MPV widget
+│   │   └── probe.py         # FFprobe metadata
 │   ├── ui/                  # GUI components
-│   │   ├── main_window.py   # Main editing interface
-│   │   ├── setup_dialog.py  # Initial configuration
-│   │   ├── review_mode.py   # Final review interface
-│   │   ├── dialogs/         # Modal dialogs
-│   │   ├── widgets/         # Custom widgets
-│   │   └── styles/          # Court Green theme
+│   │   ├── main_window.py
+│   │   ├── setup_dialog.py
+│   │   ├── review_mode.py
+│   │   ├── dialogs/
+│   │   └── widgets/
 │   └── output/              # Export generators
-│       ├── kdenlive_generator.py  # Kdenlive XML
-│       └── subtitle_generator.py  # ASS subtitles
-├── tests/                   # Test suite (54+ tests)
-├── docs/                    # Design documents
-├── requirements.txt         # Python dependencies
-└── pyproject.toml          # Project metadata
+│       ├── kdenlive_generator.py
+│       └── subtitle_generator.py
+├── tests/                   # 200+ unit tests
+├── resources/               # Icons and assets
+├── configure                # Build configuration
+├── Makefile                 # Build system
+└── pickleball-editor.spec   # PyInstaller spec
 ```
 
-## Development
-
-### Running Tests
-
-```bash
-# Run all tests
-./run_tests.sh
-
-# Or with pytest directly
-pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_score_state.py
-```
-
-### Code Quality
-
-```bash
-# Type checking
-mypy src/
-
-# Linting
-ruff check src/
-
-# Formatting
-black src/
-```
-
-### Design Documents
-
-See the `docs/` directory for detailed specifications:
-- `PRD.md` - Product requirements
-- `UI_SPEC.md` - UI/UX specifications
-- `TECH_STACK.md` - Technology decisions
-- `DETAILED_DESIGN.md` - Architecture details
-
-## Technology Stack
+## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| GUI Framework | PyQt6 |
-| Video Playback | python-mpv (libmpv) |
-| Video Metadata | FFprobe |
-| XML Generation | Standard library |
-| Persistence | JSON |
-| Testing | pytest |
+| GUI | PyQt6 |
+| Video | python-mpv (libmpv) |
+| Metadata | FFprobe |
+| Export | lxml (MLT XML) |
+| Build | PyInstaller |
+| Tests | pytest |
 
-## Pickleball Scoring Rules
+## Development
 
-The application implements official pickleball scoring:
+```bash
+# Run tests
+make test
 
-### Singles
-- Server's score is called first, then receiver's
-- Side-out on receiver win (serve switches)
-- Score format: `X-Y` (e.g., "5-3")
+# Run with coverage
+make test-coverage
 
-### Doubles
-- Game starts at 0-0-2 (server 2)
-- First fault causes immediate side-out
-- Server 1 → Server 2 → Side-out rotation
-- Score format: `X-Y-Z` (e.g., "7-4-1")
+# Type checking
+make lint
 
-### Win Conditions
-- **Standard**: First to 11 (or 9), win by 2
-- **Timed**: Higher score when time expires
+# Format code
+make format
+
+# Run specific tests
+.venv/bin/pytest tests/test_score_state.py -v
+```
 
 ## Known Limitations
 
-- Requires manual installation of system dependencies
-- Video playback requires X11 (Wayland support via XWayland)
-- Large videos (4K+) may have slower seeking
-
-## License
-
-MIT
+- Linux only (tested on Manjaro/Arch)
+- Requires X11 for video playback (Wayland uses XWayland)
+- Large 4K videos may have slower seeking
 
 ## Contributing
 
-This project is in active development. See `TODO.md` for current tasks and open issues.
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Run tests and linting (`make test && make lint`)
+4. Commit your changes
+5. Open a Pull Request
 
----
+## License
 
-*Built with PyQt6 and libmpv for the pickleball community*
+[MIT License](https://mit-license.org/)
+
+## Acknowledgments
+
+- [MPV](https://mpv.io/) - Video player
+- [Kdenlive](https://kdenlive.org/) - Video editor
+- [PyQt6](https://riverbankcomputing.com/software/pyqt/) - GUI framework
