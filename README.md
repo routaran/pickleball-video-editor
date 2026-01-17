@@ -56,7 +56,7 @@ sudo dnf install mpv-devel ffmpeg qt6-qtbase-devel python3.13
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/pickleball-video-editor.git
+git clone https://github.com/routaran/pickleball-video-editor.git
 cd pickleball-video-editor
 
 # Configure (checks dependencies, creates virtual environment, installs packages)
