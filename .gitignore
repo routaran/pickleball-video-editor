@@ -20,3 +20,12 @@ proxy/
 # OS files
 .DS_Store
 Thumbs.db
+
+# PyInstaller build artifacts
+app
+app.spec
+build/
+dist/
+
+# Debug/temporary files
+DEBUG_LOCALE.txt
