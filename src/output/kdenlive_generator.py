@@ -117,7 +117,7 @@ class KdenliveGenerator:
 
         # Set default output directory
         if output_dir is None:
-            self.output_dir = Path("/home/rkalluri/Videos")
+            self.output_dir = Path.home() / "Videos"
         else:
             self.output_dir = Path(output_dir)
 
@@ -134,14 +134,20 @@ class KdenliveGenerator:
         """
         return frames_to_timecode(frame, self.fps)
 
-    def generate(self) -> tuple[Path, Path]:
+    def generate(self, output_path: Path | None = None) -> tuple[Path, Path]:
         """Generate Kdenlive project and ASS subtitle files.
 
         Creates:
-        1. {video_name}_rallies.kdenlive - Kdenlive project file
-        2. {video_name}_rallies.kdenlive.ass - ASS subtitle file
+        1. {video_name}.kdenlive - Kdenlive project file (or custom path if provided)
+        2. {video_name}.kdenlive.ass - ASS subtitle file (companion to project)
 
-        The files are written to the output directory (default: ~/Videos/pickleball/).
+        The files are written to the specified output_path or to the output directory
+        with default naming (default: ~/Videos/{video_name}.kdenlive).
+
+        Args:
+            output_path: Optional custom path for the .kdenlive file. If provided,
+                        the .ass file will be created alongside it. If None, uses
+                        default path: output_dir/{video_name}.kdenlive
 
         Returns:
             Tuple of (kdenlive_path, ass_path)
@@ -150,14 +156,22 @@ class KdenliveGenerator:
             ValueError: If segments are invalid or video info cannot be extracted
             OSError: If files cannot be written
         """
-        # Ensure output directory exists
-        if not self.output_dir.exists():
-            self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Determine output path
+        if output_path is not None:
+            # Use provided path, ensure .kdenlive extension
+            kdenlive_path = output_path if output_path.suffix == ".kdenlive" else output_path.with_suffix(".kdenlive")
+            # Ensure parent directory exists
+            if not kdenlive_path.parent.exists():
+                kdenlive_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            # Use default path: output_dir/{video_name}.kdenlive
+            if not self.output_dir.exists():
+                self.output_dir.mkdir(parents=True, exist_ok=True)
+            video_basename = self.video_path.stem
+            kdenlive_path = self.output_dir / f"{video_basename}.kdenlive"
 
-        # Generate output filenames
-        video_basename = self.video_path.stem
-        kdenlive_path = self.output_dir / f"{video_basename}_rallies.kdenlive"
-        ass_path = self.output_dir / f"{video_basename}_rallies.kdenlive.ass"
+        # ASS file is always alongside the kdenlive file
+        ass_path = kdenlive_path.with_suffix(".kdenlive.ass")
 
         # Generate ASS file first (needed for XML reference)
         self._write_ass_file(ass_path)

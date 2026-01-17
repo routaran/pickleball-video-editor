@@ -30,6 +30,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QCloseEvent, QDesktopServices, QKeySequence, QResizeEvent, QShowEvent, QShortcut
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -1799,6 +1800,22 @@ class MainWindow(QMainWindow):
                     duration_ms=3000
                 )
 
+        # Show file save dialog for export path
+        default_dir = str(Path.home() / "Videos")
+        default_filename = f"{self.config.video_path.stem}.kdenlive"
+        selected_path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Kdenlive Project",
+            str(Path(default_dir) / default_filename),
+            "Kdenlive Project (*.kdenlive);;All Files (*)"
+        )
+
+        # Check if user cancelled
+        if not selected_path_str:
+            return
+
+        selected_path = Path(selected_path_str)
+
         # Get video resolution from probe
         # We need to re-probe because we only stored fps/duration, not resolution
         try:
@@ -1838,9 +1855,9 @@ class MainWindow(QMainWindow):
             game_completion=game_completion_info
         )
 
-        # Generate files
+        # Generate files with selected path
         try:
-            kdenlive_path, srt_path = generator.generate()
+            kdenlive_path, srt_path = generator.generate(output_path=selected_path)
 
             # Check if session exists
             session_exists = self._session_manager.find_existing(

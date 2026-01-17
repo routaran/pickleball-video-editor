@@ -83,16 +83,19 @@ class AppConfig:
         Get the absolute path to the theme stylesheet.
 
         Returns:
-            Path object pointing to src/ui/styles/theme.qss
+            Path object pointing to theme.qss
 
-        The path is computed relative to this file's location to ensure
-        it works regardless of the current working directory.
+        Handles both development mode and PyInstaller bundle mode.
         """
-        # Get the src/ directory (parent of this file)
-        src_dir = Path(__file__).parent
-
-        # Navigate to src/ui/styles/theme.qss
-        return src_dir / "ui" / "styles" / "theme.qss"
+        # Check if running as PyInstaller bundle
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            # Running as bundle - look in _MEIPASS/src/ui/styles/
+            base_path = Path(sys._MEIPASS)
+            return base_path / "src" / "ui" / "styles" / "theme.qss"
+        else:
+            # Development mode - relative to this file
+            src_dir = Path(__file__).parent
+            return src_dir / "ui" / "styles" / "theme.qss"
 
 
 def create_application() -> tuple[QApplication, AppConfig]:

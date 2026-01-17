@@ -40,6 +40,8 @@ a = Analysis(
     datas=[
         # Include resources directory if it exists
         (str(resources_dir), 'resources') if resources_dir.exists() else None,
+        # Include stylesheets
+        (str(src_dir / 'ui' / 'styles' / 'theme.qss'), 'src/ui/styles'),
     ],
 
     # Hidden imports (modules not automatically detected)
