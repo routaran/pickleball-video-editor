@@ -1,0 +1,37 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Pickleball Video Editor
+GenericName=Sports Video Editor
+Comment=Mark rally timestamps, calculate scores, and generate Kdenlive projects for pickleball videos
+Categories=AudioVideo;Video;AudioVideoEditing;Qt;
+
+# Executable
+Exec=pickleball-editor %F
+TryExec=pickleball-editor
+
+# Icon (update this path when icon is added to resources)
+# Icon=pickleball-editor
+Icon=video-editor
+
+# Terminal
+Terminal=false
+
+# MIME types
+MimeType=video/mp4;video/x-matroska;video/quicktime;video/x-msvideo;
+
+# Additional metadata
+Keywords=video;editing;pickleball;sports;rally;kdenlive;
+StartupNotify=true
+StartupWMClass=pickleball-editor
+
+# Actions for right-click menu
+Actions=NewProject;OpenRecent;
+
+[Desktop Action NewProject]
+Name=New Project
+Exec=pickleball-editor --new
+
+[Desktop Action OpenRecent]
+Name=Open Recent Project
+Exec=pickleball-editor --recent
