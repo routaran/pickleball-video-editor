@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Test script for VideoWidget MPV embedding.
+"""Manual test script for VideoWidget MPV embedding.
 
 Usage:
-    python src/video/test_player.py <video_file>
+    python tests/test_player.py <video_file>
 
 This script creates a simple window with the VideoWidget embedded and
 basic playback controls to verify that:
 - MPV embedding works correctly in PyQt6
 - Signals are emitted properly
 - Frame stepping and seeking work
+
+Note: This is a manual test utility, not a pytest test suite.
 """
 
 import sys
@@ -24,14 +26,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.video.player import VideoWidget
 
 
-class TestWindow(QMainWindow):
-    """Simple test window for VideoWidget."""
+class PlayerDemoWindow(QMainWindow):
+    """Demo window for testing VideoWidget (not a pytest test class)."""
 
     def __init__(self) -> None:
         """Initialize test window."""
@@ -140,7 +142,7 @@ if __name__ == "__main__":
     os.environ["LC_NUMERIC"] = "C"
     locale.setlocale(locale.LC_NUMERIC, "C")
 
-    win = TestWindow()
+    win = PlayerDemoWindow()
     win.show()
 
     # Load test video if provided

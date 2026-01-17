@@ -160,31 +160,28 @@ pyz = PYZ(
 )
 
 # -----------------------------------------------------------------------------
-# EXE - Executable
+# EXE - Executable (directory bundle mode)
 # -----------------------------------------------------------------------------
 exe = EXE(
     pyz,
     a.scripts,
     [],
-    exclude_binaries=True,
+    exclude_binaries=True,  # Binaries go in COLLECT
     name=app_name,
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,  # Strip symbols to reduce size
-    upx=True,    # Enable UPX compression
-    console=False,  # GUI application (no console window)
+    strip=True,      # Strip symbols to reduce size
+    upx=True,        # Enable UPX compression
+    console=False,   # GUI application (no console window)
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-
-    # Application icon (if available)
-    # icon='resources/icon.ico',  # Uncomment when icon is added
 )
 
 # -----------------------------------------------------------------------------
-# COLLECT - Bundle everything together
+# COLLECT - Bundle all files into a directory
 # -----------------------------------------------------------------------------
 coll = COLLECT(
     exe,
@@ -196,30 +193,3 @@ coll = COLLECT(
     upx_exclude=[],
     name=app_name,
 )
-
-# -----------------------------------------------------------------------------
-# Platform-specific configuration
-# -----------------------------------------------------------------------------
-if sys.platform == 'darwin':
-    # macOS: Create .app bundle
-    app = BUNDLE(
-        coll,
-        name=f'{app_name}.app',
-        icon=None,  # Add icon path when available
-        bundle_identifier=f'com.pickleballeditor.{app_name}',
-        version=app_version,
-        info_plist={
-            'CFBundleName': 'Pickleball Video Editor',
-            'CFBundleDisplayName': 'Pickleball Video Editor',
-            'CFBundleVersion': app_version,
-            'CFBundleShortVersionString': app_version,
-            'NSHighResolutionCapable': 'True',
-            'LSMinimumSystemVersion': '10.15.0',
-        },
-    )
-elif sys.platform == 'win32':
-    # Windows: Additional configuration could go here
-    pass
-else:
-    # Linux: No additional bundling needed
-    pass

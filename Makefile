@@ -68,15 +68,21 @@ build: check-config
 # -----------------------------------------------------------------------------
 # Install Target
 # -----------------------------------------------------------------------------
+# Application is installed as:
+#   $(DATADIR)/$(APP_NAME)/     - Application files (directory bundle)
+#   $(BINDIR)/$(APP_NAME)       - Symlink to the executable
+#   $(DESKTOPDIR)/$(APP_NAME).desktop - Desktop entry (optional)
+# -----------------------------------------------------------------------------
 install: check-config build
 	@echo "==> Installing $(APP_NAME) to $(DESTDIR)$(PREFIX)..."
+	@# Install application bundle to share directory
+	install -d $(DESTDIR)$(DATADIR)/$(APP_NAME)
+	cp -r $(DIST_DIR)/$(APP_NAME)/* $(DESTDIR)$(DATADIR)/$(APP_NAME)/
+	chmod 755 $(DESTDIR)$(DATADIR)/$(APP_NAME)/$(APP_NAME)
+	@# Create symlink in bin directory
 	install -d $(DESTDIR)$(BINDIR)
-	install -m 755 $(DIST_DIR)/$(APP_NAME) $(DESTDIR)$(BINDIR)/$(APP_NAME)
-	@if [ -d "$(RESOURCES_DIR)" ]; then \
-		echo "==> Installing resources to $(DESTDIR)$(DATADIR)/$(APP_NAME)..."; \
-		install -d $(DESTDIR)$(DATADIR)/$(APP_NAME); \
-		cp -r $(RESOURCES_DIR)/* $(DESTDIR)$(DATADIR)/$(APP_NAME)/; \
-	fi
+	ln -sf $(DATADIR)/$(APP_NAME)/$(APP_NAME) $(DESTDIR)$(BINDIR)/$(APP_NAME)
+	@# Install desktop entry if available
 	@if [ -f "$(APP_NAME).desktop" ]; then \
 		echo "==> Installing desktop entry..."; \
 		install -d $(DESTDIR)$(DESKTOPDIR); \
@@ -84,6 +90,7 @@ install: check-config build
 	fi
 	@echo "✓ Installation complete"
 	@echo ""
+	@echo "Application installed to: $(DESTDIR)$(DATADIR)/$(APP_NAME)/"
 	@echo "Run with: $(APP_NAME)"
 
 # -----------------------------------------------------------------------------
