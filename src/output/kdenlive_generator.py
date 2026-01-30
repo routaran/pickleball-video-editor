@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.models import GameCompletionInfo
-from src.video.probe import probe_video, frames_to_timecode
+from src.video.probe import VideoInfo, probe_video, frames_to_timecode
 
 
 __all__ = ["KdenliveGenerator"]
@@ -121,6 +121,9 @@ class KdenliveGenerator:
         else:
             self.output_dir = Path(output_dir)
 
+        # Cache video info to avoid redundant probe calls
+        self._video_info: VideoInfo | None = None
+
     def frames_to_timecode(self, frame: int) -> str:
         """Convert frame to MLT timecode (HH:MM:SS.mmm).
 
@@ -133,6 +136,17 @@ class KdenliveGenerator:
             MLT timecode string (e.g., "00:01:23.456")
         """
         return frames_to_timecode(frame, self.fps)
+
+    @property
+    def video_info(self) -> VideoInfo:
+        """Cached video info to avoid redundant probe calls.
+
+        Returns:
+            VideoInfo from probing the source video file
+        """
+        if self._video_info is None:
+            self._video_info = probe_video(self.video_path)
+        return self._video_info
 
     def generate(self, output_path: Path | None = None) -> tuple[Path, Path]:
         """Generate Kdenlive project and ASS subtitle files.
@@ -371,6 +385,47 @@ class KdenliveGenerator:
         seconds = float(parts[2])
         return hours * 3600 + minutes * 60 + seconds
 
+    def _timecode_to_frames(self, timecode: str) -> int:
+        """Convert MLT timecode (HH:MM:SS.mmm) back to frame number.
+
+        This is the inverse of frames_to_timecode() for consistent duration
+        calculation. Used to ensure AVSplit group positions match the actual
+        clip positions after timecode rounding.
+
+        Args:
+            timecode: MLT timecode string (e.g., "00:01:23.456")
+
+        Returns:
+            Frame number (rounded to nearest frame)
+        """
+        total_seconds = self._timecode_to_seconds(timecode)
+        return round(total_seconds * self.fps)
+
+    def _get_segment_out_frame(self, seg: dict[str, Any], seg_index: int) -> int:
+        """Get the out frame for a segment, including extension for last segment.
+
+        Centralizes the game completion extension logic that was duplicated
+        across _generate_entries(), _generate_avsplit_groups(), and
+        _calculate_timeline_length().
+
+        Args:
+            seg: Segment dict with "in" and "out" keys
+            seg_index: Index of this segment (for checking if last)
+
+        Returns:
+            Out frame, extended if this is the last segment and game is completed
+        """
+        out_frame = seg["out"]
+
+        is_last = (seg_index == len(self.segments) - 1)
+        if is_last and self.game_completion is not None and self.game_completion.is_completed:
+            extension_frames = int(self.game_completion.extension_seconds * self.fps)
+            max_frames = self.video_info.frame_count or int(self.video_info.duration * self.fps)
+            max_extension = max_frames - seg["out"]
+            out_frame += min(extension_frames, max_extension)
+
+        return out_frame
+
     def _build_mlt_xml(self, subtitle_path: Path) -> str:
         """Build the MLT XML document.
 
@@ -391,14 +446,11 @@ class KdenliveGenerator:
         Raises:
             ValueError: If video cannot be probed or segments are invalid
         """
-        # Probe video for metadata
-        video_info = probe_video(self.video_path)
-
         # Calculate timeline properties
         timeline_frames = self._calculate_timeline_length()
         timeline_duration_tc = self.frames_to_timecode(timeline_frames)
         source_duration_tc = self.frames_to_timecode(
-            video_info.frame_count or int(video_info.duration * self.fps)
+            self.video_info.frame_count or int(self.video_info.duration * self.fps)
         )
 
         # Generate UUIDs and IDs
@@ -502,7 +554,7 @@ class KdenliveGenerator:
   </filter>
  </tractor>
  <chain id="chain0" out="{source_duration_tc}">
-  <property name="length">{video_info.frame_count or int(video_info.duration * self.fps)}</property>
+  <property name="length">{self.video_info.frame_count or int(self.video_info.duration * self.fps)}</property>
   <property name="eof">pause</property>
   <property name="resource">{video_path_escaped}</property>
   <property name="mlt_service">avformat-novalidate</property>
@@ -553,7 +605,7 @@ class KdenliveGenerator:
   </filter>
  </tractor>
  <chain id="chain1" out="{source_duration_tc}">
-  <property name="length">{video_info.frame_count or int(video_info.duration * self.fps)}</property>
+  <property name="length">{self.video_info.frame_count or int(self.video_info.duration * self.fps)}</property>
   <property name="eof">pause</property>
   <property name="resource">{video_path_escaped}</property>
   <property name="mlt_service">avformat-novalidate</property>
@@ -590,7 +642,7 @@ class KdenliveGenerator:
   <track hide="audio" producer="playlist7"/>
  </tractor>
  <chain id="chain2" out="{source_duration_tc}">
-  <property name="length">{video_info.frame_count or int(video_info.duration * self.fps)}</property>
+  <property name="length">{self.video_info.frame_count or int(self.video_info.duration * self.fps)}</property>
   <property name="eof">pause</property>
   <property name="resource">{video_path_escaped}</property>
   <property name="mlt_service">avformat-novalidate</property>
@@ -748,25 +800,12 @@ class KdenliveGenerator:
         Returns:
             XML string with entry elements (indented properly)
         """
-        # Probe video to get frame count for bounds checking
-        video_info = probe_video(self.video_path)
-        max_frames = video_info.frame_count or int(video_info.duration * self.fps)
-
         entries: list[str] = []
 
         for i, seg in enumerate(self.segments):
             in_tc = self.frames_to_timecode(seg["in"])
-
-            # For the last segment, add extension if game is completed
-            is_last = (i == len(self.segments) - 1)
-            if is_last and self.game_completion is not None and self.game_completion.is_completed:
-                extension_frames = int(self.game_completion.extension_seconds * self.fps)
-                # BUG FIX: Clamp extension to avoid exceeding video duration
-                max_extension = max_frames - seg["out"]
-                safe_extension = min(extension_frames, max_extension)
-                out_tc = self.frames_to_timecode(seg["out"] + safe_extension)
-            else:
-                out_tc = self.frames_to_timecode(seg["out"])
+            out_frame = self._get_segment_out_frame(seg, i)
+            out_tc = self.frames_to_timecode(out_frame)
 
             entries.append(f'''  <entry in="{in_tc}" out="{out_tc}" producer="{chain_id}">
    <property name="kdenlive:id">{kdenlive_id}</property>
@@ -782,30 +821,25 @@ class KdenliveGenerator:
         - Track 2 = video track (tractor2/playlist4)
         - TIMELINE_FRAME = cumulative frame position on OUTPUT timeline
 
-        If the game is completed, the last segment's duration includes the
-        extension frames for the final score display.
+        CRITICAL: Duration calculation must match _generate_entries() exactly.
+        MLT uses timecode strings (rounded to milliseconds) to determine clip
+        boundaries. Raw frame subtraction (out - in) causes cumulative drift
+        because timecode rounding is not accounted for. We solve this by
+        converting frames to timecodes and back, ensuring identical rounding.
 
         Returns:
             JSON string with AVSplit groups
         """
-        # Probe video to get frame count for bounds checking
-        video_info = probe_video(self.video_path)
-        max_frames = video_info.frame_count or int(video_info.duration * self.fps)
-
         groups = []
         current_frame = 0
 
         for i, seg in enumerate(self.segments):
-            duration_frames = seg["out"] - seg["in"]
-
-            # For the last segment, add extension if game is completed
-            is_last = (i == len(self.segments) - 1)
-            if is_last and self.game_completion is not None and self.game_completion.is_completed:
-                extension_frames = int(self.game_completion.extension_seconds * self.fps)
-                # BUG FIX: Clamp extension to avoid exceeding video duration
-                max_extension = max_frames - seg["out"]
-                safe_extension = min(extension_frames, max_extension)
-                duration_frames += safe_extension
+            # KEY FIX: Calculate duration via timecode round-trip
+            # This matches how _generate_entries() calculates clip boundaries
+            in_tc = self.frames_to_timecode(seg["in"])
+            out_frame = self._get_segment_out_frame(seg, i)
+            out_tc = self.frames_to_timecode(out_frame)
+            duration_frames = self._timecode_to_frames(out_tc) - self._timecode_to_frames(in_tc)
 
             # Create AVSplit group for this clip pair
             group = {
@@ -825,29 +859,23 @@ class KdenliveGenerator:
         """Calculate total timeline length in frames.
 
         Sums the duration of all rally segments to get the total output
-        timeline length (rallies placed back-to-back). If the game is
-        completed, adds extension frames to the end.
+        timeline length (rallies placed back-to-back). Uses timecode round-trip
+        for consistency with _generate_entries() and _generate_avsplit_groups().
 
         Returns:
             Total frames in the output timeline
         """
-        base_length = sum(seg["out"] - seg["in"] for seg in self.segments)
+        total_frames = 0
 
-        # Add extension for game completion
-        if self.game_completion is not None and self.game_completion.is_completed:
-            # Probe video to get frame count for bounds checking
-            video_info = probe_video(self.video_path)
-            max_frames = video_info.frame_count or int(video_info.duration * self.fps)
+        for i, seg in enumerate(self.segments):
+            # Use timecode round-trip for consistent duration calculation
+            in_tc = self.frames_to_timecode(seg["in"])
+            out_frame = self._get_segment_out_frame(seg, i)
+            out_tc = self.frames_to_timecode(out_frame)
+            duration_frames = self._timecode_to_frames(out_tc) - self._timecode_to_frames(in_tc)
+            total_frames += duration_frames
 
-            extension_frames = int(self.game_completion.extension_seconds * self.fps)
-            # BUG FIX: Clamp extension to avoid exceeding video duration
-            if self.segments:
-                last_seg_out = self.segments[-1]["out"]
-                max_extension = max_frames - last_seg_out
-                safe_extension = min(extension_frames, max_extension)
-                return base_length + safe_extension
-
-        return base_length
+        return total_frames
 
     def _calculate_aspect_ratio(self, width: int, height: int) -> tuple[int, int]:
         """Calculate simplified aspect ratio.
