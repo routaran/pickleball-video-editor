@@ -191,7 +191,7 @@ class KdenliveGenerator:
         self._write_ass_file(ass_path)
 
         # Generate Kdenlive XML
-        xml_content = self._build_mlt_xml(ass_path)
+        xml_content = self._build_mlt_xml(ass_path, kdenlive_path)
 
         # Write Kdenlive project file
         kdenlive_path.write_text(xml_content, encoding="utf-8")
@@ -426,7 +426,7 @@ class KdenliveGenerator:
 
         return out_frame
 
-    def _build_mlt_xml(self, subtitle_path: Path) -> str:
+    def _build_mlt_xml(self, subtitle_path: Path, kdenlive_path: Path) -> str:
         """Build the MLT XML document.
 
         Creates a complete Kdenlive project file with:
@@ -439,6 +439,7 @@ class KdenliveGenerator:
 
         Args:
             subtitle_path: Path to the ASS subtitle file
+            kdenlive_path: Path where the .kdenlive file will be saved
 
         Returns:
             Complete MLT XML as string
@@ -476,7 +477,8 @@ class KdenliveGenerator:
         # XML-escape file paths to handle special characters
         video_path_escaped = xml_escape(str(self.video_path))
         video_name_escaped = xml_escape(self.video_path.name)
-        video_parent_escaped = xml_escape(str(self.video_path.parent))
+        # Root should be the directory containing the .kdenlive file (not the video)
+        project_root_escaped = xml_escape(str(kdenlive_path.parent.absolute()))
 
         # Use RELATIVE path for subtitle (Kdenlive's behavior)
         subtitle_filename = subtitle_path.name
@@ -493,7 +495,7 @@ class KdenliveGenerator:
 
         # Build XML document
         xml = f'''<?xml version="1.0" encoding="utf-8"?>
-<mlt LC_NUMERIC="C" producer="main_bin" version="7.36.1" root="{video_parent_escaped}">
+<mlt LC_NUMERIC="C" producer="main_bin" version="7.36.1" root="{project_root_escaped}">
  <profile
    description="HD {height}p {int(self.fps)} fps"
    width="{width}"
@@ -821,11 +823,8 @@ class KdenliveGenerator:
         - Track 2 = video track (tractor2/playlist4)
         - TIMELINE_FRAME = cumulative frame position on OUTPUT timeline
 
-        CRITICAL: Duration calculation must match _generate_entries() exactly.
-        MLT uses timecode strings (rounded to milliseconds) to determine clip
-        boundaries. Raw frame subtraction (out - in) causes cumulative drift
-        because timecode rounding is not accounted for. We solve this by
-        converting frames to timecodes and back, ensuring identical rounding.
+        CRITICAL: MLT out points are INCLUSIVE, so clip duration = out - in + 1.
+        This +1 is essential for correct cumulative frame positions.
 
         Returns:
             JSON string with AVSplit groups
@@ -834,14 +833,7 @@ class KdenliveGenerator:
         current_frame = 0
 
         for i, seg in enumerate(self.segments):
-            # KEY FIX: Calculate duration via timecode round-trip
-            # This matches how _generate_entries() calculates clip boundaries
-            in_tc = self.frames_to_timecode(seg["in"])
-            out_frame = self._get_segment_out_frame(seg, i)
-            out_tc = self.frames_to_timecode(out_frame)
-            duration_frames = self._timecode_to_frames(out_tc) - self._timecode_to_frames(in_tc)
-
-            # Create AVSplit group for this clip pair
+            # Create AVSplit group for this clip pair at current timeline position
             group = {
                 "type": "AVSplit",
                 "children": [
@@ -851,6 +843,10 @@ class KdenliveGenerator:
             }
             groups.append(group)
 
+            # Calculate duration for next position
+            # KEY FIX: MLT out points are INCLUSIVE, so duration = out - in + 1
+            out_frame = self._get_segment_out_frame(seg, i)
+            duration_frames = out_frame - seg["in"] + 1
             current_frame += duration_frames
 
         return json.dumps(groups, indent=4)
