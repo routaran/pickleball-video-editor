@@ -260,6 +260,55 @@ class TestRallyManager:
         # 15.0 + 1.0 = 16.0s * 30fps = 480 frames
         assert rally.end_frame == 480
 
+    def test_get_last_rally_end_position_empty(self):
+        """Test get_last_rally_end_position returns None for empty list."""
+        manager = RallyManager(fps=60.0)
+
+        result = manager.get_last_rally_end_position()
+
+        assert result is None
+
+    def test_get_last_rally_end_position_single(self):
+        """Test get_last_rally_end_position returns correct position for single rally."""
+        manager = RallyManager(fps=60.0)
+        snapshot = ScoreSnapshot(score=(0, 0), serving_team=0, server_number=2)
+
+        manager.start_rally(10.0, snapshot)
+        manager.end_rally(15.0, "server", "0-0-2", snapshot)
+
+        result = manager.get_last_rally_end_position()
+
+        assert result is not None
+        end_frame, end_seconds = result
+        # 15.0 + 1.0 padding = 16.0s = 960 frames
+        assert end_frame == 960
+        assert end_seconds == 16.0
+
+    def test_get_last_rally_end_position_multiple(self):
+        """Test get_last_rally_end_position returns last rally's position when multiple rallies exist."""
+        manager = RallyManager(fps=60.0)
+        snapshot = ScoreSnapshot(score=(0, 0), serving_team=0, server_number=2)
+
+        # Rally 1
+        manager.start_rally(10.0, snapshot)
+        manager.end_rally(15.0, "server", "0-0-2", snapshot)
+
+        # Rally 2
+        manager.start_rally(20.0, snapshot)
+        manager.end_rally(25.0, "receiver", "1-0-2", snapshot)
+
+        # Rally 3
+        manager.start_rally(30.0, snapshot)
+        manager.end_rally(35.0, "server", "2-0-2", snapshot)
+
+        result = manager.get_last_rally_end_position()
+
+        assert result is not None
+        end_frame, end_seconds = result
+        # 35.0 + 1.0 padding = 36.0s = 2160 frames
+        assert end_frame == 2160
+        assert end_seconds == 36.0
+
 
 class TestRallyModel:
     """Test Rally dataclass behavior."""

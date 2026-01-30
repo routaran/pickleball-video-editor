@@ -199,6 +199,21 @@ class RallyManager:
         """
         return self.rallies[index]
 
+    def get_last_rally_end_position(self) -> tuple[int, float] | None:
+        """Get the end frame and timestamp of the last completed rally.
+
+        Returns:
+            Tuple of (end_frame, end_seconds) for the last rally,
+            or None if no rallies exist.
+        """
+        if not self.rallies:
+            return None
+
+        last_rally = self.rallies[-1]
+        end_frame = last_rally.end_frame
+        end_seconds = self._frame_to_time(end_frame)
+        return (end_frame, end_seconds)
+
     def update_rally_timing(
         self,
         index: int,

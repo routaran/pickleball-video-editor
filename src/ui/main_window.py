@@ -80,6 +80,7 @@ from src.ui.widgets import (
     BUTTON_TYPE_RECEIVER_WINS,
     BUTTON_TYPE_SERVER_WINS,
     BUTTON_TYPE_UNDO,
+    ClipTimelineWidget,
     PlaybackControls,
     RallyButton,
     StatusOverlay,
@@ -460,14 +461,21 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(button_layout)
 
-        # Rally/Clip counter
+        # Rally/Clip counter or timeline
         if self._is_highlights_mode:
-            self.rally_counter_label = QLabel("Clips: 0")
+            # Visual clip timeline for highlights mode
+            self.clip_timeline = ClipTimelineWidget()
+            self.clip_timeline.clip_clicked.connect(self._on_clip_clicked)
+            self.clip_timeline.clip_play_requested.connect(self._on_clip_play_requested)
+            layout.addWidget(self.clip_timeline)
+            self.rally_counter_label = None  # Not used in highlights mode
         else:
+            # Simple counter for normal mode
             self.rally_counter_label = QLabel("Rally: 0")
-        self.rally_counter_label.setObjectName("rally_counter")
-        self.rally_counter_label.setFont(Fonts.body(14, 500))
-        layout.addWidget(self.rally_counter_label)
+            self.rally_counter_label.setObjectName("rally_counter")
+            self.rally_counter_label.setFont(Fonts.body(14, 500))
+            layout.addWidget(self.rally_counter_label)
+            self.clip_timeline = None  # Not used in normal mode
 
         return panel
 
@@ -762,14 +770,28 @@ class MainWindow(QMainWindow):
         # If restoring session, seek to last position after MPV has loaded
         # Use a timer because MPV needs time to initialize before seeking works
         if self._restore_position is not None:
-            restore_pos = self._restore_position
+            # Try to get the last rally end position (last cut location)
+            last_cut_info = self.rally_manager.get_last_rally_end_position()
+
+            if last_cut_info is not None:
+                # Resume at end of last rally (last cut)
+                end_frame, restore_pos = last_cut_info
+                rally_count = self.rally_manager.get_rally_count()
+                if self._is_highlights_mode:
+                    toast_msg = f"Resumed at last cut (Clip {rally_count} end) - paused"
+                else:
+                    toast_msg = f"Resumed at last cut (Rally {rally_count} end) - paused"
+            else:
+                # No rallies - fall back to saved position
+                restore_pos = self._restore_position
+                toast_msg = f"Resumed session at {restore_pos:.1f}s - paused"
+
             def _do_restore_seek() -> None:
                 self.video_widget.seek(restore_pos, absolute=True)
-                ToastManager.show_success(
-                    self,
-                    f"Resumed session at {restore_pos:.1f}s",
-                    duration_ms=3000
-                )
+                # Ensure video is paused so user can see where they left off
+                self.video_widget.pause()
+                ToastManager.show_success(self, toast_msg, duration_ms=3000)
+
             # Wait 500ms for MPV to initialize before seeking
             QTimer.singleShot(500, _do_restore_seek)
         else:
@@ -1015,12 +1037,23 @@ class MainWindow(QMainWindow):
         # Update button states
         self._update_button_states()
 
-        # Update rally/clip counter
+        # Update rally/clip counter or timeline
         rally_count = self.rally_manager.get_rally_count()
         if self._is_highlights_mode:
-            self.rally_counter_label.setText(f"Clips: {rally_count}")
+            # Update clip timeline
+            if self.clip_timeline is not None:
+                self.clip_timeline.set_clips(
+                    self.rally_manager.get_rallies(),
+                    self.rally_manager.fps
+                )
+                # Show in-progress indicator when rally is in progress
+                self.clip_timeline.set_in_progress(
+                    in_rally,
+                    next_index=rally_count + 1
+                )
         else:
-            self.rally_counter_label.setText(f"Rally: {rally_count}")
+            if self.rally_counter_label is not None:
+                self.rally_counter_label.setText(f"Rally: {rally_count}")
 
     def _update_button_states(self) -> None:
         """Update rally button active/disabled states.
@@ -1124,12 +1157,17 @@ class MainWindow(QMainWindow):
     def _on_video_position_changed(self, position: float) -> None:
         """Handle video position changes.
 
-        Updates the playback controls timecode display.
+        Updates the playback controls timecode display and clip timeline
+        highlighting (in highlights mode).
 
         Args:
             position: Current position in seconds
         """
         self.playback_controls.set_time(position, self.video_duration)
+
+        # Update clip timeline highlighting (highlights mode only)
+        if self._is_highlights_mode and self.clip_timeline is not None:
+            self.clip_timeline.update_position(position)
 
     @pyqtSlot(float)
     def _on_video_duration_changed(self, duration: float) -> None:
@@ -1139,6 +1177,63 @@ class MainWindow(QMainWindow):
             duration: Video duration in seconds
         """
         self.video_duration = duration
+
+    # Clip timeline handlers (highlights mode)
+
+    @pyqtSlot(int)
+    def _on_clip_clicked(self, index: int) -> None:
+        """Handle single click on a clip cell in the timeline.
+
+        Seeks video to the clip's start time.
+
+        Args:
+            index: 0-based clip index
+        """
+        rallies = self.rally_manager.get_rallies()
+        if not (0 <= index < len(rallies)):
+            return
+
+        rally = rallies[index]
+        start_sec = rally.start_frame / self.rally_manager.fps
+        self.video_widget.seek(start_sec, absolute=True)
+        self.video_widget.show_osd(f"Clip {index + 1}", duration=1.5)
+
+    @pyqtSlot(int)
+    def _on_clip_play_requested(self, index: int) -> None:
+        """Handle double-click on a clip cell in the timeline.
+
+        Plays the clip from start to end, then auto-pauses.
+
+        Args:
+            index: 0-based clip index
+        """
+        rallies = self.rally_manager.get_rallies()
+        if not (0 <= index < len(rallies)):
+            return
+
+        rally = rallies[index]
+        start_sec = rally.start_frame / self.rally_manager.fps
+        end_sec = rally.end_frame / self.rally_manager.fps
+        duration_ms = int((end_sec - start_sec) * 1000)
+
+        # Seek to start
+        self.video_widget.seek(start_sec, absolute=True)
+
+        # Start playback
+        self.video_widget.play()
+
+        # Set up timer to pause at end (reuse review mode timer pattern)
+        if self._rally_playback_timer is not None:
+            self._rally_playback_timer.stop()
+            self._rally_playback_timer.deleteLater()
+
+        self._rally_playback_timer = QTimer(self)
+        self._rally_playback_timer.setSingleShot(True)
+        self._rally_playback_timer.timeout.connect(lambda: self.video_widget.pause())
+        self._rally_playback_timer.start(duration_ms)
+
+        # Show feedback
+        self.video_widget.show_osd(f"Playing Clip {index + 1}", duration=2.0)
 
     # Toolbar button handlers (stubs for future implementation)
 

@@ -8,8 +8,10 @@ This package contains reusable UI widgets:
 - ToastManager: Toast notification manager with convenience methods
 - PlaybackControls: Video transport controls with speed toggles
 - SavedSessionCard: Card displaying saved session metadata
+- ClipTimelineWidget: Visual clip timeline with clickable cells
 """
 
+from src.ui.widgets.clip_timeline import ClipTimelineWidget
 from src.ui.widgets.playback_controls import PlaybackControls
 from src.ui.widgets.rally_button import (
     BUTTON_TYPE_RALLY_START,
@@ -40,4 +42,6 @@ __all__ = [
     # Saved session card
     "SavedSessionCard",
     "SavedSessionInfo",
+    # Clip timeline
+    "ClipTimelineWidget",
 ]
