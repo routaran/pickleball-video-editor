@@ -461,21 +461,11 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(button_layout)
 
-        # Rally/Clip counter or timeline
-        if self._is_highlights_mode:
-            # Visual clip timeline for highlights mode
-            self.clip_timeline = ClipTimelineWidget()
-            self.clip_timeline.clip_clicked.connect(self._on_clip_clicked)
-            self.clip_timeline.clip_play_requested.connect(self._on_clip_play_requested)
-            layout.addWidget(self.clip_timeline)
-            self.rally_counter_label = None  # Not used in highlights mode
-        else:
-            # Simple counter for normal mode
-            self.rally_counter_label = QLabel("Rally: 0")
-            self.rally_counter_label.setObjectName("rally_counter")
-            self.rally_counter_label.setFont(Fonts.body(14, 500))
-            layout.addWidget(self.rally_counter_label)
-            self.clip_timeline = None  # Not used in normal mode
+        # Visual clip timeline for ALL match types
+        self.clip_timeline = ClipTimelineWidget()
+        self.clip_timeline.clip_clicked.connect(self._on_clip_clicked)
+        self.clip_timeline.clip_play_requested.connect(self._on_clip_play_requested)
+        layout.addWidget(self.clip_timeline)
 
         return panel
 
@@ -1037,23 +1027,25 @@ class MainWindow(QMainWindow):
         # Update button states
         self._update_button_states()
 
-        # Update rally/clip counter or timeline
+        # Update clip timeline for ALL match types
         rally_count = self.rally_manager.get_rally_count()
-        if self._is_highlights_mode:
-            # Update clip timeline
-            if self.clip_timeline is not None:
-                self.clip_timeline.set_clips(
-                    self.rally_manager.get_rallies(),
-                    self.rally_manager.fps
-                )
-                # Show in-progress indicator when rally is in progress
-                self.clip_timeline.set_in_progress(
-                    in_rally,
-                    next_index=rally_count + 1
-                )
-        else:
-            if self.rally_counter_label is not None:
-                self.rally_counter_label.setText(f"Rally: {rally_count}")
+        if self.clip_timeline is not None:
+            self.clip_timeline.set_clips(
+                self.rally_manager.get_rallies(),
+                self.rally_manager.fps,
+                game_type=self.config.game_type,
+            )
+
+            # Generate in-progress label based on game type
+            if in_rally:
+                if self._is_highlights_mode:
+                    in_progress_label = str(rally_count + 1)
+                else:
+                    # Singles/doubles: show current score as in-progress label
+                    in_progress_label = self.score_state.get_score_string()
+                self.clip_timeline.set_in_progress(True, label=in_progress_label)
+            else:
+                self.clip_timeline.set_in_progress(False)
 
     def _update_button_states(self) -> None:
         """Update rally button active/disabled states.
@@ -1165,8 +1157,8 @@ class MainWindow(QMainWindow):
         """
         self.playback_controls.set_time(position, self.video_duration)
 
-        # Update clip timeline highlighting (highlights mode only)
-        if self._is_highlights_mode and self.clip_timeline is not None:
+        # Update clip timeline highlighting for ALL match types
+        if self.clip_timeline is not None:
             self.clip_timeline.update_position(position)
 
     @pyqtSlot(float)
@@ -1178,7 +1170,7 @@ class MainWindow(QMainWindow):
         """
         self.video_duration = duration
 
-    # Clip timeline handlers (highlights mode)
+    # Clip timeline handlers (all match types)
 
     @pyqtSlot(int)
     def _on_clip_clicked(self, index: int) -> None:
@@ -1196,7 +1188,13 @@ class MainWindow(QMainWindow):
         rally = rallies[index]
         start_sec = rally.start_frame / self.rally_manager.fps
         self.video_widget.seek(start_sec, absolute=True)
-        self.video_widget.show_osd(f"Clip {index + 1}", duration=1.5)
+
+        # Appropriate OSD label for match type
+        if self._is_highlights_mode:
+            osd_label = f"Clip {index + 1}"
+        else:
+            osd_label = f"Rally {index + 1} ({rally.score_at_start})"
+        self.video_widget.show_osd(osd_label, duration=1.5)
 
     @pyqtSlot(int)
     def _on_clip_play_requested(self, index: int) -> None:
@@ -1232,8 +1230,11 @@ class MainWindow(QMainWindow):
         self._rally_playback_timer.timeout.connect(lambda: self.video_widget.pause())
         self._rally_playback_timer.start(duration_ms)
 
-        # Show feedback
-        self.video_widget.show_osd(f"Playing Clip {index + 1}", duration=2.0)
+        # Show feedback with appropriate label for match type
+        if self._is_highlights_mode:
+            self.video_widget.show_osd(f"Playing Clip {index + 1}", duration=2.0)
+        else:
+            self.video_widget.show_osd(f"Playing Rally {index + 1}", duration=2.0)
 
     # Toolbar button handlers (stubs for future implementation)
 

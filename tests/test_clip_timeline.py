@@ -7,7 +7,13 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from src.core.models import Rally
-from src.ui.widgets.clip_timeline import ClipTimelineWidget, _ClipCell, _format_time
+from src.ui.widgets.clip_timeline import (
+    ClipTimelineWidget,
+    _ClipCell,
+    _format_time,
+    _calculate_cell_width,
+    CELL_WIDTH,
+)
 
 
 # Ensure QApplication exists for widget tests
@@ -30,11 +36,31 @@ def timeline(qapp):
 
 @pytest.fixture
 def sample_rallies():
-    """Create sample Rally objects for testing."""
+    """Create sample Rally objects for testing (highlights mode - no scores used)."""
+    return [
+        Rally(start_frame=0, end_frame=120, score_at_start="", winner=""),
+        Rally(start_frame=180, end_frame=300, score_at_start="", winner=""),
+        Rally(start_frame=360, end_frame=480, score_at_start="", winner=""),
+    ]
+
+
+@pytest.fixture
+def singles_rallies():
+    """Create sample Rally objects with singles scores."""
     return [
         Rally(start_frame=0, end_frame=120, score_at_start="0-0", winner="server"),
         Rally(start_frame=180, end_frame=300, score_at_start="1-0", winner="receiver"),
-        Rally(start_frame=360, end_frame=480, score_at_start="1-0", winner="server"),
+        Rally(start_frame=360, end_frame=480, score_at_start="1-1", winner="server"),
+    ]
+
+
+@pytest.fixture
+def doubles_rallies():
+    """Create sample Rally objects with doubles scores."""
+    return [
+        Rally(start_frame=0, end_frame=120, score_at_start="0-0-2", winner="server"),
+        Rally(start_frame=180, end_frame=300, score_at_start="1-0-2", winner="receiver"),
+        Rally(start_frame=360, end_frame=480, score_at_start="1-0-1", winner="server"),
     ]
 
 
@@ -161,7 +187,7 @@ class TestClipTimelineWidget:
         assert timeline._in_progress_cell is None
 
         # Enable in-progress
-        timeline.set_in_progress(True, next_index=4)
+        timeline.set_in_progress(True, label="4")
         assert timeline._in_progress_cell is not None
 
     def test_set_in_progress_hides_indicator(self, timeline, sample_rallies):
@@ -169,7 +195,7 @@ class TestClipTimelineWidget:
         timeline.set_clips(sample_rallies, fps=60.0)
 
         # Enable then disable
-        timeline.set_in_progress(True, next_index=4)
+        timeline.set_in_progress(True, label="4")
         timeline.set_in_progress(False)
         assert timeline._in_progress_cell is None
 
@@ -223,22 +249,26 @@ class TestClipTimelineWidget:
 class TestClipCell:
     """Tests for _ClipCell."""
 
-    def test_cell_displays_correct_number(self, qapp):
-        """Test that cell displays 1-based index."""
-        cell = _ClipCell(0, 0.0, 2.0)
+    def test_cell_displays_correct_label(self, qapp):
+        """Test that cell displays the provided label."""
+        cell = _ClipCell(0, 0.0, 2.0, "1")
         assert cell.text() == "1"
 
-        cell2 = _ClipCell(4, 10.0, 12.0)
+        cell2 = _ClipCell(4, 10.0, 12.0, "5")
         assert cell2.text() == "5"
+
+        # Score labels
+        cell3 = _ClipCell(0, 0.0, 2.0, "5-3")
+        assert cell3.text() == "5-3"
 
     def test_cell_has_tooltip(self, qapp):
         """Test that cell has time range tooltip."""
-        cell = _ClipCell(0, 45.0, 48.0)
+        cell = _ClipCell(0, 45.0, 48.0, "1")
         assert "0:45 - 0:48" in cell.toolTip()
 
     def test_cell_active_state(self, qapp):
         """Test cell active state toggling."""
-        cell = _ClipCell(0, 0.0, 2.0)
+        cell = _ClipCell(0, 0.0, 2.0, "1")
 
         assert not cell.is_active()
 
@@ -247,3 +277,80 @@ class TestClipCell:
 
         cell.set_active(False)
         assert not cell.is_active()
+
+
+class TestCellWidthCalculation:
+    """Tests for dynamic cell width calculation."""
+
+    def test_short_labels_use_default_width(self):
+        """Test 1-2 char labels use CELL_WIDTH."""
+        assert _calculate_cell_width("1") == CELL_WIDTH
+        assert _calculate_cell_width("12") == CELL_WIDTH
+
+    def test_medium_labels_use_36px(self):
+        """Test 3-4 char labels use 36px."""
+        assert _calculate_cell_width("0-0") == 36
+        assert _calculate_cell_width("11-9") == 36
+
+    def test_long_labels_use_48px(self):
+        """Test 5-6 char labels use 48px."""
+        assert _calculate_cell_width("0-0-2") == 48
+        assert _calculate_cell_width("11-9-2") == 48
+
+    def test_very_long_labels_use_56px(self):
+        """Test 7+ char labels use 56px."""
+        assert _calculate_cell_width("11-11-2") == 56
+
+
+class TestClipTimelineWithScores:
+    """Tests for ClipTimelineWidget with score display."""
+
+    def test_highlights_mode_shows_sequential_numbers(self, timeline, sample_rallies):
+        """Test that highlights mode displays 1, 2, 3..."""
+        timeline.set_clips(sample_rallies, fps=60.0, game_type="highlights")
+        assert timeline._cells[0].text() == "1"
+        assert timeline._cells[1].text() == "2"
+        assert timeline._cells[2].text() == "3"
+
+    def test_singles_mode_shows_scores(self, timeline, singles_rallies):
+        """Test that singles mode displays score strings."""
+        timeline.set_clips(singles_rallies, fps=60.0, game_type="singles")
+        assert timeline._cells[0].text() == "0-0"
+        assert timeline._cells[1].text() == "1-0"
+        assert timeline._cells[2].text() == "1-1"
+
+    def test_doubles_mode_shows_scores(self, timeline, doubles_rallies):
+        """Test that doubles mode displays score strings with server number."""
+        timeline.set_clips(doubles_rallies, fps=60.0, game_type="doubles")
+        assert timeline._cells[0].text() == "0-0-2"
+        assert timeline._cells[1].text() == "1-0-2"
+        assert timeline._cells[2].text() == "1-0-1"
+
+    def test_cell_width_varies_by_label_length(self, timeline, singles_rallies, doubles_rallies):
+        """Test that cell width adjusts based on label length."""
+        # Singles scores (3-4 chars) get medium width
+        timeline.set_clips(singles_rallies, fps=60.0, game_type="singles")
+        assert timeline._cells[0].width() == 36  # "0-0" = 3 chars
+
+        # Doubles scores (5-6 chars) get larger width
+        timeline.set_clips(doubles_rallies, fps=60.0, game_type="doubles")
+        assert timeline._cells[0].width() == 48  # "0-0-2" = 5 chars
+
+    def test_fallback_to_index_when_no_score(self, timeline):
+        """Test fallback to sequential number when score_at_start is empty."""
+        rallies = [Rally(start_frame=0, end_frame=120, score_at_start="", winner="server")]
+        timeline.set_clips(rallies, fps=60.0, game_type="singles")
+        assert timeline._cells[0].text() == "1"  # Fallback to index
+
+    def test_tooltips_still_show_time_range(self, timeline, singles_rallies):
+        """Test that tooltips show time range regardless of game_type."""
+        timeline.set_clips(singles_rallies, fps=60.0, game_type="singles")
+        # First clip: 0-2 seconds
+        assert "0:00 - 0:02" in timeline._cells[0].toolTip()
+
+    def test_in_progress_with_score_label(self, timeline, singles_rallies):
+        """Test in-progress indicator with score label."""
+        timeline.set_clips(singles_rallies, fps=60.0, game_type="singles")
+        timeline.set_in_progress(True, label="2-1")
+        assert timeline._in_progress_cell is not None
+        assert timeline._in_progress_cell._label == "2-1"

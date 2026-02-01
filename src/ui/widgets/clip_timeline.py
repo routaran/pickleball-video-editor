@@ -1,17 +1,20 @@
-"""Visual clip timeline widget with clickable numbered cells.
+"""Visual clip timeline widget with clickable cells.
 
 This module provides a visual timeline showing clickable clip cells that
 highlight when the current playback position is within that clip's time range.
-Replaces the simple "Clips: N" counter in highlights mode.
+Used for all match types (highlights, singles, doubles).
 
 Features:
-- Numbered cells (1, 2, 3...) for each clip
+- Highlights mode: Sequential numbers (1, 2, 3...)
+- Singles mode: Score labels ("0-0", "5-3", "11-9")
+- Doubles mode: Score labels with server number ("0-0-2", "5-3-1")
 - Active cell highlighting with green glow when playback is inside clip
 - Single click to seek to clip start
 - Double click to play clip from start to end
 - Hover tooltip showing time range (e.g., "0:45 - 0:48")
 - In-progress indicator (pulsing amber) when clip is started but not ended
 - Horizontal scrolling for many clips with auto-scroll to active clip
+- Dynamic cell width based on label length
 """
 
 from PyQt6.QtCore import (
@@ -23,7 +26,7 @@ from PyQt6.QtCore import (
     pyqtProperty,
     pyqtSignal,
 )
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QPainter, QPaintEvent, QPen
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -89,6 +92,32 @@ def _format_time(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+def _calculate_cell_width(label: str) -> int:
+    """Calculate cell width based on label length.
+
+    Width tiers:
+    - 1-2 chars (highlights "1", "12"): 28px (CELL_WIDTH)
+    - 3-4 chars (singles "5-3", "11-9"): 36px
+    - 5-6 chars (doubles "5-3-1", "11-9-2"): 48px
+    - 7+ chars (edge cases "11-11-2"): 56px
+
+    Args:
+        label: The text label to display
+
+    Returns:
+        Width in pixels for the cell
+    """
+    length = len(label)
+    if length <= 2:
+        return CELL_WIDTH  # 28px
+    elif length <= 4:
+        return 36
+    elif length <= 6:
+        return 48
+    else:
+        return 56
+
+
 class _ClipCell(QPushButton):
     """Individual clickable cell in the clip timeline."""
 
@@ -97,6 +126,7 @@ class _ClipCell(QPushButton):
         index: int,
         start_seconds: float,
         end_seconds: float,
+        label: str,
         parent: QWidget | None = None,
     ) -> None:
         """Initialize a clip cell.
@@ -105,16 +135,18 @@ class _ClipCell(QPushButton):
             index: 0-based clip index
             start_seconds: Clip start time in seconds
             end_seconds: Clip end time in seconds
+            label: Text to display ("1", "5-3", "5-3-1", etc.)
             parent: Parent widget
         """
-        super().__init__(str(index + 1), parent)
+        super().__init__(label, parent)
         self._index = index
         self._start_seconds = start_seconds
         self._end_seconds = end_seconds
         self._is_active = False
 
-        # Set fixed size
-        self.setFixedSize(CELL_WIDTH, CELL_HEIGHT)
+        # Dynamic width based on label length
+        cell_width = _calculate_cell_width(label)
+        self.setFixedSize(cell_width, CELL_HEIGHT)
 
         # Set cursor
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -194,19 +226,20 @@ class _ClipCell(QPushButton):
 class _InProgressCell(QWidget):
     """Pulsing amber cell indicating a clip in progress."""
 
-    def __init__(self, next_index: int, parent: QWidget | None = None) -> None:
+    def __init__(self, label: str, parent: QWidget | None = None) -> None:
         """Initialize the in-progress cell.
 
         Args:
-            next_index: The next clip number (1-based)
+            label: Text to display ("4", "5-3", etc.)
             parent: Parent widget
         """
         super().__init__(parent)
-        self._next_index = next_index
+        self._label = label
         self._pulse_opacity = 1.0
 
-        # Set fixed size
-        self.setFixedSize(CELL_WIDTH, CELL_HEIGHT)
+        # Dynamic width based on label length
+        cell_width = _calculate_cell_width(label)
+        self.setFixedSize(cell_width, CELL_HEIGHT)
 
         # Setup pulse animation
         self._pulse_animation = QPropertyAnimation(self, b"pulse_opacity")
@@ -219,14 +252,19 @@ class _InProgressCell(QWidget):
         # Start animation
         self._pulse_animation.start()
 
-    def set_index(self, index: int) -> None:
-        """Update the displayed index.
+    def set_label(self, label: str) -> None:
+        """Update the displayed label.
 
         Args:
-            index: Next clip number (1-based)
+            label: New label to display
         """
-        self._next_index = index
-        self.update()
+        if self._label != label:
+            self._label = label
+            # Update width if label length category changed
+            new_width = _calculate_cell_width(label)
+            if self.width() != new_width:
+                self.setFixedSize(new_width, CELL_HEIGHT)
+            self.update()
 
     @pyqtProperty(float)
     def pulse_opacity(self) -> float:
@@ -239,7 +277,7 @@ class _InProgressCell(QWidget):
         self._pulse_opacity = value
         self.update()
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: QPaintEvent) -> None:
         """Custom paint for pulsing effect."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -270,7 +308,7 @@ class _InProgressCell(QWidget):
         font = QFont("IBM Plex Sans", CELL_FONT_SIZE)
         font.setWeight(QFont.Weight.Medium)
         painter.setFont(font)
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(self._next_index))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._label)
 
 
 class ClipTimelineWidget(QFrame):
@@ -309,6 +347,7 @@ class ClipTimelineWidget(QFrame):
         self._active_index: int | None = None
         self._in_progress = False
         self._in_progress_cell: _InProgressCell | None = None
+        self._game_type: str = "highlights"  # Default game type
 
         # Double-click detection
         self._click_timer: QTimer | None = None
@@ -411,28 +450,42 @@ class ClipTimelineWidget(QFrame):
                     widget.deleteLater()
                 # Spacer items are automatically cleaned up
 
-    def set_clips(self, rallies: list[Rally], fps: float) -> None:
+    def set_clips(
+        self,
+        rallies: list[Rally],
+        fps: float,
+        game_type: str = "highlights",
+    ) -> None:
         """Rebuild cells from rally list.
 
         Args:
             rallies: List of Rally objects
             fps: Video frames per second for time conversion
+            game_type: Match type ("highlights", "singles", or "doubles")
         """
+        # Store game_type for in-progress cell label generation
+        self._game_type = game_type
+
         # Clear entire layout (cells, in-progress indicator, and stretches)
         self._clear_layout()
         self._cells.clear()
         self._in_progress_cell = None
 
-        # Convert rallies to time ranges
+        # Convert rallies to time ranges and create cells
         self._clips = []
-        for rally in rallies:
+        for i, rally in enumerate(rallies):
             start_sec = rally.start_frame / fps
             end_sec = rally.end_frame / fps
             self._clips.append((start_sec, end_sec))
 
-        # Create new cells
-        for i, (start_sec, end_sec) in enumerate(self._clips):
-            cell = _ClipCell(i, start_sec, end_sec, self._cell_container)
+            # Generate label based on game_type
+            if game_type == "highlights":
+                label = str(i + 1)
+            else:
+                # Singles or doubles - use score_at_start (fallback to index if empty)
+                label = rally.score_at_start if rally.score_at_start else str(i + 1)
+
+            cell = _ClipCell(i, start_sec, end_sec, label, self._cell_container)
             cell.clicked.connect(lambda checked, idx=i: self._on_cell_clicked(idx))
             self._cell_layout.addWidget(cell)
             self._cells.append(cell)
@@ -450,38 +503,38 @@ class ClipTimelineWidget(QFrame):
         # Update empty state
         self._update_empty_state()
 
-    def set_in_progress(self, in_progress: bool, next_index: int = 0) -> None:
+    def set_in_progress(self, in_progress: bool, label: str = "") -> None:
         """Show/hide pulsing in-progress indicator.
 
         Args:
             in_progress: True to show indicator, False to hide
-            next_index: The next clip number (1-based) to display
+            label: Label to display (e.g., "4" for highlights, "5-3" for singles)
         """
         if self._in_progress == in_progress:
-            # Just update index if already showing
+            # Just update label if already showing
             if in_progress and self._in_progress_cell is not None:
-                self._in_progress_cell.set_index(next_index)
+                self._in_progress_cell.set_label(label)
             return
 
         self._in_progress = in_progress
 
         if in_progress:
-            self._add_in_progress_cell(next_index)
+            self._add_in_progress_cell(label)
         else:
             self._remove_in_progress_cell()
 
         self._update_empty_state()
 
-    def _add_in_progress_cell(self, next_index: int = 0) -> None:
+    def _add_in_progress_cell(self, label: str = "") -> None:
         """Add the in-progress cell to the layout."""
         if self._in_progress_cell is not None:
             return
 
-        # Calculate next index if not provided
-        if next_index == 0:
-            next_index = len(self._clips) + 1
+        # Default label if not provided
+        if not label:
+            label = str(len(self._clips) + 1)
 
-        self._in_progress_cell = _InProgressCell(next_index, self._cell_container)
+        self._in_progress_cell = _InProgressCell(label, self._cell_container)
 
         # Insert before the stretch (last item)
         count = self._cell_layout.count()
@@ -549,7 +602,8 @@ class ClipTimelineWidget(QFrame):
             return
 
         cell = self._cells[index]
-        self._scroll_area.ensureWidgetVisible(cell, xMargin=CELL_WIDTH, yMargin=0)
+        # Use actual cell width for proper margin with variable-width cells
+        self._scroll_area.ensureWidgetVisible(cell, xMargin=cell.width(), yMargin=0)
 
     def _on_cell_clicked(self, index: int) -> None:
         """Handle cell click with double-click detection.
