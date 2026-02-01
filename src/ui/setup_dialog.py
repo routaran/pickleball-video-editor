@@ -525,19 +525,19 @@ class SetupDialog(QDialog):
         self.team1_group = QGroupBox("TEAM 1 (First Server)")
         self.team1_player1_label = QLabel("Player 1")
         self.team1_player1_edit = QLineEdit()
-        self.team1_player1_edit.setPlaceholderText("Optional - can add later")
+        self.team1_player1_edit.setPlaceholderText("Optional - Serving player")
         self.team1_player2_label = QLabel("Player 2")
         self.team1_player2_edit = QLineEdit()
-        self.team1_player2_edit.setPlaceholderText("Optional - can add later")
+        self.team1_player2_edit.setPlaceholderText("Optional - Non-serving player")
 
         # Team 2 section
         self.team2_group = QGroupBox("TEAM 2")
         self.team2_player1_label = QLabel("Player 1")
         self.team2_player1_edit = QLineEdit()
-        self.team2_player1_edit.setPlaceholderText("Optional - can add later")
+        self.team2_player1_edit.setPlaceholderText("Optional - Receiving player")
         self.team2_player2_label = QLabel("Player 2")
         self.team2_player2_edit = QLineEdit()
-        self.team2_player2_edit.setPlaceholderText("Optional - can add later")
+        self.team2_player2_edit.setPlaceholderText("Optional - Non-receiving player")
 
         # Dialog buttons
         self.cancel_button = QPushButton("Cancel")
