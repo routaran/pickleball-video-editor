@@ -7,6 +7,8 @@ This package contains reusable dialog windows for:
 - Interventions: EditScoreDialog, ForceSideOutDialog, AddCommentDialog
 - Export completion: ExportCompleteDialog
 - Configuration: ConfigDialog
+- Player names: PlayerNamesDialog
+- New game: NewGameConfirmDialog
 """
 
 from src.ui.dialogs.game_over import GameOverDialog, GameOverResult
@@ -21,6 +23,12 @@ from src.ui.dialogs.force_sideout import ForceSideOutDialog, ForceSideOutResult
 from src.ui.dialogs.add_comment import AddCommentDialog, AddCommentResult
 from src.ui.dialogs.export_complete import ExportCompleteDialog, ExportCompleteResult
 from src.ui.dialogs.config_dialog import ConfigDialog, ConfigDialogResult
+from src.ui.dialogs.player_names import PlayerNamesDialog, PlayerNamesResult
+from src.ui.dialogs.new_game_confirm import (
+    NewGameConfirmDialog,
+    NewGameResult,
+    NewGameSettings,
+)
 
 __all__ = [
     # Game Over Dialog
@@ -48,4 +56,11 @@ __all__ = [
     # Config Dialog
     "ConfigDialog",
     "ConfigDialogResult",
+    # Player Names Dialog
+    "PlayerNamesDialog",
+    "PlayerNamesResult",
+    # New Game Confirm Dialog
+    "NewGameConfirmDialog",
+    "NewGameResult",
+    "NewGameSettings",
 ]

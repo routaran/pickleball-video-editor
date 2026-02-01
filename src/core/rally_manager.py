@@ -432,3 +432,13 @@ class RallyManager:
             Time in seconds
         """
         return frame / self.fps
+
+    def clear_all(self) -> None:
+        """Clear all rallies and undo stack for starting a new game.
+
+        Resets the rally manager to its initial state while preserving fps.
+        """
+        self.rallies.clear()
+        self.action_stack.clear()
+        self._current_rally_start = None
+        self._current_rally_timestamp = None

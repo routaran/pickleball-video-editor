@@ -58,6 +58,9 @@ from src.ui.dialogs import (
     ForceSideOutResult,
     GameOverDialog,
     GameOverResult,
+    NewGameConfirmDialog,
+    NewGameResult,
+    PlayerNamesDialog,
     UnsavedWarningDialog,
     UnsavedWarningResult,
 )
@@ -475,7 +478,8 @@ class MainWindow(QMainWindow):
         Returns:
             Frame containing toolbar buttons
 
-        For highlights mode, hides score-related buttons (Edit Score, Force Side-Out, Time Expired).
+        For highlights mode, hides score-related buttons (Edit Score, Force Side-Out, Time Expired,
+        Player Names, New Game).
         """
         panel = QFrame()
         panel.setObjectName("toolbar_panel")
@@ -491,9 +495,18 @@ class MainWindow(QMainWindow):
         self.btn_add_comment = QPushButton("Add Comment")
         self.btn_time_expired = QPushButton("Time Expired*")
 
+        # NEW: Player Names button
+        self.btn_update_names = QPushButton("Names")
+        self.btn_update_names.setToolTip("Set or update player names")
+
+        # NEW: Start New Game button
+        self.btn_new_game = QPushButton("New Game")
+        self.btn_new_game.setToolTip("Start a new game (clears all rallies)")
+
         # Set object names for styling and prevent focus stealing
         for btn in [self.btn_edit_score, self.btn_force_sideout,
-                    self.btn_add_comment, self.btn_time_expired]:
+                    self.btn_add_comment, self.btn_time_expired,
+                    self.btn_update_names, self.btn_new_game]:
             btn.setObjectName("toolbar_button")
             btn.setFont(Fonts.button_other())
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -503,6 +516,8 @@ class MainWindow(QMainWindow):
             self.btn_edit_score.setVisible(False)
             self.btn_force_sideout.setVisible(False)
             self.btn_time_expired.setVisible(False)
+            self.btn_update_names.setVisible(False)
+            self.btn_new_game.setVisible(False)
         else:
             # Time Expired only for timed games
             if self.config.victory_rule != "timed":
@@ -512,6 +527,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_force_sideout)
         layout.addWidget(self.btn_add_comment)
         layout.addWidget(self.btn_time_expired)
+        layout.addWidget(self.btn_update_names)
+        layout.addWidget(self.btn_new_game)
 
         layout.addStretch()
 
@@ -619,6 +636,8 @@ class MainWindow(QMainWindow):
         self.btn_force_sideout.clicked.connect(self._on_force_sideout)
         self.btn_add_comment.clicked.connect(self._on_add_comment)
         self.btn_time_expired.clicked.connect(self._on_time_expired)
+        self.btn_update_names.clicked.connect(self._on_update_player_names)
+        self.btn_new_game.clicked.connect(self._on_start_new_game)
         self.btn_return_to_menu.clicked.connect(self._on_return_to_menu)
         self.btn_save_session.clicked.connect(self._on_save_session)
         self.btn_final_review.clicked.connect(self._on_final_review)
@@ -1012,9 +1031,14 @@ class MainWindow(QMainWindow):
             score_string = self.score_state.get_score_string()
             server_info = self.score_state.get_server_info()
 
-            # Format server info for display
-            team_name = f"Team {server_info.serving_team + 1}"
-            server_text = f"{team_name} ({server_info.player_name})"
+            # Format server info for display with placeholder for missing names
+            team_label = f"Team {server_info.serving_team + 1}"
+
+            if server_info.player_name:  # Non-empty = name is set
+                server_text = f"{team_label} ({server_info.player_name})"
+            else:  # Empty = name not set, show just team
+                server_text = team_label
+
             if server_info.server_number is not None:
                 server_text += f" #{server_info.server_number}"
 
@@ -1376,6 +1400,103 @@ class MainWindow(QMainWindow):
                     self._on_save_session()
 
         self.return_to_menu_requested.emit()
+
+    @pyqtSlot()
+    def _on_update_player_names(self) -> None:
+        """Handle Update Player Names button click.
+
+        Opens the PlayerNamesDialog to set or update player names.
+        Updates both config and score_state when names are changed.
+        """
+        dialog = PlayerNamesDialog(
+            game_type=self.config.game_type,
+            current_team1=self.config.team1_players,
+            current_team2=self.config.team2_players,
+            parent=self
+        )
+
+        if dialog.exec():
+            result = dialog.get_result()
+            if result is not None:
+                # Update config
+                self.config.team1_players = result.team1_players
+                self.config.team2_players = result.team2_players
+
+                # Update ScoreState
+                if self.score_state is not None:
+                    self.score_state.set_player_names({
+                        "team1": result.team1_players,
+                        "team2": result.team2_players,
+                    })
+
+                self._dirty = True
+                self._update_display()
+
+                # Refresh review widget if active
+                if self._in_review_mode and self._review_widget is not None:
+                    self._refresh_review_widget_names()
+
+                ToastManager.show_success(self, "Player names updated", duration_ms=3000)
+
+    def _refresh_review_widget_names(self) -> None:
+        """Update review widget with new player names.
+
+        Refreshes the rally list display when player names are updated
+        while in review mode.
+        """
+        if self._review_widget is not None:
+            # Re-populate rallies to refresh any player name displays
+            rallies = self.rally_manager.get_rallies()
+            self._review_widget.set_rallies(rallies, fps=self.video_fps, is_highlights=self._is_highlights_mode)
+
+            # Update game completion info if applicable
+            if not self._is_highlights_mode:
+                final_score = self._calculate_final_score()
+                winning_team_names = self._get_winning_team_names()
+                self._review_widget.set_game_completion_info(final_score, winning_team_names)
+
+    @pyqtSlot()
+    def _on_start_new_game(self) -> None:
+        """Handle Start New Game button click.
+
+        Shows confirmation dialog, then clears all rallies and resets score.
+        Optionally allows changing game settings (game type, victory rule).
+        """
+        rally_count = self.rally_manager.get_rally_count()
+
+        dialog = NewGameConfirmDialog(
+            current_game_type=self.config.game_type,
+            current_victory_rule=self.config.victory_rule,
+            rally_count=rally_count,
+            parent=self
+        )
+
+        if dialog.exec():
+            result, new_settings = dialog.get_result()
+
+            if result == NewGameResult.START_NEW:
+                # Clear all rallies
+                self.rally_manager.clear_all()
+
+                # Update game settings if changed
+                if new_settings is not None:
+                    self.config.game_type = new_settings.game_type
+                    self.config.victory_rule = new_settings.victory_rule
+
+                # Full reset of score state (preserves player names)
+                if self.score_state is not None:
+                    self.score_state = ScoreState(
+                        game_type=self.config.game_type,
+                        victory_rules=self.config.victory_rule,
+                        player_names={
+                            "team1": self.config.team1_players,
+                            "team2": self.config.team2_players,
+                        }
+                    )
+
+                self._dirty = True
+                self._update_display()
+                ToastManager.show_success(self, "New game started", duration_ms=3000)
 
     def _build_session_state(self) -> SessionState:
         """Build SessionState from current state.

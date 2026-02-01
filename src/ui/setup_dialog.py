@@ -22,7 +22,7 @@ Recent Sessions features:
 """
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSlot
@@ -77,17 +77,25 @@ class GameConfig:
         video_path: Path to the source video file
         game_type: Type of game ("singles" or "doubles")
         victory_rule: Victory condition ("11", "9", or "timed")
-        team1_players: List of player names for Team 1
-        team2_players: List of player names for Team 2
+        team1_players: List of player names for Team 1 (optional, can be set later)
+        team2_players: List of player names for Team 2 (optional, can be set later)
         session_state: Optional loaded session state for resuming
     """
 
     video_path: Path
     game_type: str
     victory_rule: str
-    team1_players: list[str]
-    team2_players: list[str]
+    team1_players: list[str] = field(default_factory=list)
+    team2_players: list[str] = field(default_factory=list)
     session_state: SessionState | None = None
+
+    def has_player_names(self) -> bool:
+        """Check if player names have been configured.
+
+        Returns:
+            True if both teams have at least one player name
+        """
+        return len(self.team1_players) > 0 and len(self.team2_players) > 0
 
 
 class SetupDialog(QDialog):
@@ -515,17 +523,21 @@ class SetupDialog(QDialog):
 
         # Team 1 section (first server - highlighted)
         self.team1_group = QGroupBox("TEAM 1 (First Server)")
-        self.team1_player1_label = QLabel("Player 1 *")
+        self.team1_player1_label = QLabel("Player 1")
         self.team1_player1_edit = QLineEdit()
-        self.team1_player2_label = QLabel("Player 2 *")
+        self.team1_player1_edit.setPlaceholderText("Optional - can add later")
+        self.team1_player2_label = QLabel("Player 2")
         self.team1_player2_edit = QLineEdit()
+        self.team1_player2_edit.setPlaceholderText("Optional - can add later")
 
         # Team 2 section
         self.team2_group = QGroupBox("TEAM 2")
-        self.team2_player1_label = QLabel("Player 1 *")
+        self.team2_player1_label = QLabel("Player 1")
         self.team2_player1_edit = QLineEdit()
-        self.team2_player2_label = QLabel("Player 2 *")
+        self.team2_player1_edit.setPlaceholderText("Optional - can add later")
+        self.team2_player2_label = QLabel("Player 2")
         self.team2_player2_edit = QLineEdit()
+        self.team2_player2_edit.setPlaceholderText("Optional - can add later")
 
         # Dialog buttons
         self.cancel_button = QPushButton("Cancel")
@@ -990,12 +1002,14 @@ class SetupDialog(QDialog):
     def _validate(self) -> bool:
         """Validate all fields and update UI state.
 
+        Player names are now optional and can be added anytime during editing.
+
         Returns:
             True if all validation passes, False otherwise
         """
         is_valid = True
 
-        # Validate video path
+        # Validate video path (required for all game types)
         video_path = self.video_path_edit.text().strip()
         if not video_path or not Path(video_path).exists():
             self.video_path_edit.setProperty("invalid", "true")
@@ -1003,65 +1017,29 @@ class SetupDialog(QDialog):
         else:
             self.video_path_edit.setProperty("invalid", "false")
 
-        # Determine which fields are required based on game type
-        game_type_index = self.game_type_combo.currentIndex()
-        is_doubles = (game_type_index == 0)
-        is_highlights = (game_type_index == 2)
-
-        # For highlights mode, only video path is required
-        if is_highlights:
-            # Clear any invalid states on player fields
-            self.team1_player1_edit.setProperty("invalid", "false")
-            self.team1_player2_edit.setProperty("invalid", "false")
-            self.team2_player1_edit.setProperty("invalid", "false")
-            self.team2_player2_edit.setProperty("invalid", "false")
-        else:
-            # Validate Team 1 Player 1
-            if not self.team1_player1_edit.text().strip():
-                self.team1_player1_edit.setProperty("invalid", "true")
-                is_valid = False
-            else:
-                self.team1_player1_edit.setProperty("invalid", "false")
-
-            # Validate Team 1 Player 2 (only if doubles)
-            if is_doubles:
-                if not self.team1_player2_edit.text().strip():
-                    self.team1_player2_edit.setProperty("invalid", "true")
-                    is_valid = False
-                else:
-                    self.team1_player2_edit.setProperty("invalid", "false")
-
-            # Validate Team 2 Player 1
-            if not self.team2_player1_edit.text().strip():
-                self.team2_player1_edit.setProperty("invalid", "true")
-                is_valid = False
-            else:
-                self.team2_player1_edit.setProperty("invalid", "false")
-
-            # Validate Team 2 Player 2 (only if doubles)
-            if is_doubles:
-                if not self.team2_player2_edit.text().strip():
-                    self.team2_player2_edit.setProperty("invalid", "true")
-                    is_valid = False
-                else:
-                    self.team2_player2_edit.setProperty("invalid", "false")
+        # Player names are now optional - no validation required
+        # Clear any invalid states on player fields
+        self.team1_player1_edit.setProperty("invalid", "false")
+        self.team1_player2_edit.setProperty("invalid", "false")
+        self.team2_player1_edit.setProperty("invalid", "false")
+        self.team2_player2_edit.setProperty("invalid", "false")
 
         # Update Start Editing button state
         self.start_button.setEnabled(is_valid)
 
-        # Force style refresh
-        self.video_path_edit.style().unpolish(self.video_path_edit)
-        self.video_path_edit.style().polish(self.video_path_edit)
-        self.team1_player1_edit.style().unpolish(self.team1_player1_edit)
-        self.team1_player1_edit.style().polish(self.team1_player1_edit)
-        self.team1_player2_edit.style().unpolish(self.team1_player2_edit)
-        self.team1_player2_edit.style().polish(self.team1_player2_edit)
-        self.team2_player1_edit.style().unpolish(self.team2_player1_edit)
-        self.team2_player1_edit.style().polish(self.team2_player1_edit)
-        self.team2_player2_edit.style().unpolish(self.team2_player2_edit)
-        self.team2_player2_edit.style().polish(self.team2_player2_edit)
+        # Force style refresh for video path field
+        self._refresh_style(self.video_path_edit)
 
         return is_valid
+
+    def _refresh_style(self, widget: QWidget) -> None:
+        """Force style refresh on a widget.
+
+        Args:
+            widget: Widget to refresh
+        """
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
 
     @pyqtSlot()
     def _on_start_editing(self) -> None:
@@ -1089,17 +1067,27 @@ class SetupDialog(QDialog):
         # For highlights, use empty string as victory rule doesn't apply
         victory_rule = "" if game_type == "highlights" else victory_map[self.victory_combo.currentIndex()]
 
-        # Collect player names (empty for highlights mode)
+        # Collect player names based on source
         if game_type == "highlights":
+            # Highlights mode: no player names
             team1_players = []
             team2_players = []
+        elif self._session_state is not None:
+            # Resuming session: use session player names, filtering empty strings
+            team1_players = [n for n in self._session_state.player_names.get("team1", []) if n]
+            team2_players = [n for n in self._session_state.player_names.get("team2", []) if n]
         else:
-            team1_players = [self.team1_player1_edit.text().strip()]
-            team2_players = [self.team2_player1_edit.text().strip()]
+            # New session: collect from form fields, filtering empty strings
+            team1_inputs = [self.team1_player1_edit.text().strip()]
+            team2_inputs = [self.team2_player1_edit.text().strip()]
 
             if game_type == "doubles":
-                team1_players.append(self.team1_player2_edit.text().strip())
-                team2_players.append(self.team2_player2_edit.text().strip())
+                team1_inputs.append(self.team1_player2_edit.text().strip())
+                team2_inputs.append(self.team2_player2_edit.text().strip())
+
+            # Filter empty strings to prevent [""] propagation
+            team1_players = [n for n in team1_inputs if n]
+            team2_players = [n for n in team2_inputs if n]
 
         # Create configuration
         self._config = GameConfig(

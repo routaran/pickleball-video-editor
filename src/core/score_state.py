@@ -187,7 +187,7 @@ class ScoreState:
             ServerInfo containing:
                 - serving_team: Index of serving team (0 or 1)
                 - server_number: Server number for doubles (1 or 2), None for singles
-                - player_name: Name of the current server
+                - player_name: Name of the current server (empty string if not set)
         """
         # Get the serving team's player names
         team_key = f"team{self.serving_team + 1}"
@@ -195,7 +195,8 @@ class ScoreState:
 
         if self.game_type == "singles":
             # Singles: only one player per team
-            player_name = team_players[0] if team_players else "Unknown"
+            # Return empty string if no players set (signals "not set" to UI)
+            player_name = team_players[0] if team_players else ""
         else:  # doubles
             # Server 1 = first_server_player_index (set at side-out)
             # Server 2 = the other player (1 - first_server_player_index)
@@ -204,7 +205,8 @@ class ScoreState:
             else:  # server_number == 2
                 player_index = 1 - (self.first_server_player_index or 0)
 
-            player_name = team_players[player_index] if len(team_players) > player_index else "Unknown"
+            # Return empty string if player not set (signals "not set" to UI)
+            player_name = team_players[player_index] if len(team_players) > player_index else ""
 
         return ServerInfo(
             serving_team=self.serving_team,
@@ -342,16 +344,51 @@ class ScoreState:
         Returns:
             ScoreState instance
         """
+        # Use safe default for older sessions without player_names key
+        player_names = data.get("player_names", {})
         instance = cls(
             game_type=data["game_type"],
             victory_rules=data["victory_rules"],
-            player_names=data["player_names"]
+            player_names=player_names
         )
         instance.score = data["score"]
         instance.serving_team = data["serving_team"]
         instance.server_number = data.get("server_number")
         instance.first_server_player_index = data.get("first_server_player_index")
         return instance
+
+    def set_player_names(self, player_names: dict[str, list[str]]) -> None:
+        """Update player names after initialization.
+
+        Args:
+            player_names: Dictionary with "team1" and "team2" keys containing player name lists
+        """
+        self.player_names = player_names
+
+    def has_player_names(self) -> bool:
+        """Check if player names have been set (non-empty).
+
+        Returns:
+            True if both teams have at least one player name set
+        """
+        team1 = self.player_names.get("team1", [])
+        team2 = self.player_names.get("team2", [])
+        return len(team1) > 0 and len(team2) > 0
+
+    def reset(self) -> None:
+        """Reset score state for a new game.
+
+        Preserves player names, game type, and victory rules.
+        Resets score to 0-0 and serving state to initial values.
+        """
+        self.score = [0, 0]
+        self.serving_team = 0
+        if self.game_type == "doubles":
+            self.server_number = 2
+            self.first_server_player_index = 1
+        else:
+            self.server_number = None
+            self.first_server_player_index = None
 
     # Private helper methods
 
