@@ -314,3 +314,229 @@ class TestScoreStateEdgeCases:
         is_over, winner = state.is_game_over()
         assert is_over
         assert winner == 1
+
+
+class TestServerInfo:
+    """Test get_server_info() with first_server_player_index tracking for doubles.
+
+    The key insight: first_server_player_index is determined at side-out time
+    based on the new serving team's score parity. It stays FIXED for the
+    entire possession, even as the score changes.
+    """
+
+    def test_singles_server_info(self):
+        """Test singles mode returns correct player (unchanged behavior)."""
+        state = ScoreState("singles", "11", {"team1": ["Alice"], "team2": ["Bob"]})
+        info = state.get_server_info()
+        assert info.player_name == "Alice"
+        assert info.serving_team == 0
+        assert info.server_number is None
+
+        # Side-out to Bob
+        state.receiver_wins()
+        info = state.get_server_info()
+        assert info.player_name == "Bob"
+        assert info.serving_team == 1
+
+    def test_doubles_initial_state(self):
+        """Test doubles initial state: 0-0-2, player[0] serves.
+
+        At game start (0-0-2), the server is the player on the right (player[0]
+        since score is even). This is a special case since we start at "Server 2"
+        but it's really the only server for this possession.
+        """
+        state = ScoreState(
+            "doubles", "11", {"team1": ["Alice", "Bob"], "team2": ["Carol", "Dave"]}
+        )
+        # At game start: first_server_player_index = 1 so that
+        # Server 2 = 1 - 1 = 0 = player[0] = Alice
+        assert state.first_server_player_index == 1
+        info = state.get_server_info()
+        assert info.player_name == "Alice"  # Server 2 = 1 - first_server = 1 - 1 = player[0]
+        assert info.server_number == 2
+
+    def test_doubles_server_stays_same_during_possession(self):
+        """Test that the same player keeps serving when winning points."""
+        state = ScoreState(
+            "doubles", "11", {"team1": ["Alice", "Bob"], "team2": ["Carol", "Dave"]}
+        )
+        # Initial: 0-0-2, Server 2 = Alice (first_server=1, so Server 2 = 1-1 = 0)
+        assert state.get_server_info().player_name == "Alice"
+
+        # Alice wins a point: 1-0-2, still Alice serving
+        state.server_wins()
+        assert state.get_score_string() == "1-0-2"
+        assert state.get_server_info().player_name == "Alice"
+
+        # Alice wins again: 2-0-2, still Alice serving
+        state.server_wins()
+        assert state.get_score_string() == "2-0-2"
+        assert state.get_server_info().player_name == "Alice"
+
+        # Alice wins again: 3-0-2, still Alice serving (score odd, but same player)
+        state.server_wins()
+        assert state.get_score_string() == "3-0-2"
+        assert state.get_server_info().player_name == "Alice"
+
+    def test_doubles_sideout_recalculates_first_server(self):
+        """Test that side-out recalculates first_server based on new team's score."""
+        state = ScoreState(
+            "doubles", "11", {"team1": ["Alice", "Bob"], "team2": ["Carol", "Dave"]}
+        )
+        # Initial side-out (0-0-2 special case)
+        state.receiver_wins()
+        # Team 2 gets serve, their score is 0 (even) → first_server = player[0] = Carol
+        assert state.serving_team == 1
+        assert state.server_number == 1
+        assert state.first_server_player_index == 0
+        assert state.get_server_info().player_name == "Carol"
+
+    def test_user_scenario_sideout_at_odd_score(self):
+        """Test user's specific scenario: side-out when receiving team has odd score.
+
+        Scenario from user:
+        - Side-out at 3-2-1 (from team 1's perspective: they have 3, team 2 has 2)
+        - Team 2 gets serve with score 2 (even) → player[0] = Carol is Server 1
+        - After winning: 3-2-1 → Carol keeps serving
+        - After losing: 3-2-2 → Server 2 = Dave
+        """
+        state = ScoreState(
+            "doubles", "11", {"team1": ["Alice", "Bob"], "team2": ["Carol", "Dave"]}
+        )
+
+        # Set up the score to 3-2 with team 1 serving, server 1
+        # (Simulate getting to this state)
+        state.receiver_wins()  # Side-out to team 2
+        state.server_wins()    # Team 2 scores: 1-0-1
+        state.server_wins()    # Team 2 scores: 2-0-1
+        state.receiver_wins()  # Team 2 server 1 loses, goes to server 2: 2-0-2
+        state.receiver_wins()  # Team 2 server 2 loses, side-out to team 1: 0-2-1
+
+        # Team 1 now has score 0 (even), so first_server = 0 = Alice
+        assert state.serving_team == 0
+        assert state.first_server_player_index == 0
+
+        # Team 1 scores 3 points
+        state.server_wins()  # 1-2-1
+        state.server_wins()  # 2-2-1
+        state.server_wins()  # 3-2-1
+
+        # Now side-out (simulating receiver_wins twice to get side-out)
+        state.receiver_wins()  # Server 1 loses: 3-2-2
+        state.receiver_wins()  # Server 2 loses: side-out to team 2
+
+        # Team 2 now serves with score 2 (even) → first_server = 0 = Carol
+        assert state.serving_team == 1
+        assert state.server_number == 1
+        assert state.first_server_player_index == 0
+        assert state.get_server_info().player_name == "Carol"
+
+        # Carol wins a point: 3-3-1 (from team 2's perspective)
+        state.server_wins()
+        assert state.get_server_info().player_name == "Carol"
+
+        # Carol loses: goes to Server 2 = Dave (1 - 0 = 1 = Dave)
+        state.receiver_wins()
+        assert state.server_number == 2
+        assert state.get_server_info().player_name == "Dave"
+
+    def test_sideout_at_odd_score_sets_correct_first_server(self):
+        """Test side-out when new serving team has odd score."""
+        state = ScoreState(
+            "doubles", "11", {"team1": ["Alice", "Bob"], "team2": ["Carol", "Dave"]}
+        )
+
+        # Get team 2 to score 3 points, then side-out back to team 1
+        state.receiver_wins()  # Side-out to team 2
+        state.server_wins()    # 1-0-1
+        state.server_wins()    # 2-0-1
+        state.server_wins()    # 3-0-1
+        state.receiver_wins()  # Server 1 loses: 3-0-2
+        state.receiver_wins()  # Server 2 loses: side-out to team 1
+
+        # Team 1 gets serve with score 0 (even) → first_server = 0 = Alice
+        assert state.serving_team == 0
+        assert state.server_number == 1
+        assert state.first_server_player_index == 0
+        assert state.get_server_info().player_name == "Alice"
+
+        # Alice scores 1 point
+        state.server_wins()  # 1-3-1
+
+        # Alice loses, goes to server 2
+        state.receiver_wins()  # 1-3-2
+        # Server 2 = 1 - first_server = 1 - 0 = Bob
+        assert state.get_server_info().player_name == "Bob"
+
+    def test_sideout_with_team_having_odd_score(self):
+        """Test side-out when the receiving (about to serve) team has odd score."""
+        state = ScoreState(
+            "doubles", "11", {"team1": ["Alice", "Bob"], "team2": ["Carol", "Dave"]}
+        )
+
+        # Team 1 scores 1, then loses serve
+        state.server_wins()    # 1-0-2
+        state.receiver_wins()  # Side-out to team 2
+
+        # Team 2 has score 0 (even) → first_server = 0 = Carol
+        assert state.first_server_player_index == 0
+        assert state.get_server_info().player_name == "Carol"
+
+        # Team 2 scores 1, then loses both servers
+        state.server_wins()    # 1-1-1
+        state.receiver_wins()  # 1-1-2
+        state.receiver_wins()  # Side-out to team 1
+
+        # Team 1 has score 1 (odd) → first_server = 1 = Bob
+        assert state.serving_team == 0
+        assert state.first_server_player_index == 1
+        assert state.get_server_info().player_name == "Bob"  # Server 1 = first_server = Bob
+
+        # Bob loses, goes to server 2
+        state.receiver_wins()  # 1-1-2
+        # Server 2 = 1 - first_server = 1 - 1 = 0 = Alice
+        assert state.get_server_info().player_name == "Alice"
+
+    def test_first_server_fixed_during_possession(self):
+        """Test that first_server doesn't change when scoring during possession."""
+        state = ScoreState(
+            "doubles", "11", {"team1": ["Alice", "Bob"], "team2": ["Carol", "Dave"]}
+        )
+
+        # Side-out to team 2 with score 0 → first_server = 0 = Carol
+        state.receiver_wins()
+        assert state.first_server_player_index == 0
+
+        # Carol (Server 1) scores multiple points - first_server stays 0
+        state.server_wins()  # 1-0-1
+        assert state.first_server_player_index == 0
+
+        state.server_wins()  # 2-0-1
+        assert state.first_server_player_index == 0
+
+        state.server_wins()  # 3-0-1 (odd score, but first_server still 0)
+        assert state.first_server_player_index == 0
+        assert state.get_server_info().player_name == "Carol"  # Same player serving
+
+    def test_snapshot_preserves_first_server(self):
+        """Test that snapshots correctly save and restore first_server_player_index."""
+        state = ScoreState(
+            "doubles", "11", {"team1": ["Alice", "Bob"], "team2": ["Carol", "Dave"]}
+        )
+
+        # Side-out to team 2
+        state.receiver_wins()
+        state.server_wins()  # 1-0-1
+
+        # First_server is 0 (Carol)
+        snapshot = state.save_snapshot()
+        assert snapshot.first_server_player_index == 0
+
+        # Change state
+        state.receiver_wins()  # Goes to server 2
+        state.server_wins()    # 2-0-2
+
+        # Restore and verify first_server is back to 0
+        state.restore_snapshot(snapshot)
+        assert state.first_server_player_index == 0
+        assert state.get_server_info().player_name == "Carol"

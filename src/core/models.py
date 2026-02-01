@@ -101,11 +101,13 @@ class ScoreSnapshot:
         score: Score array ([team1, team2] or [team1, team2, server_num])
         serving_team: Index of serving team (0 or 1)
         server_number: Server number for doubles (1 or 2), None for singles
+        first_server_player_index: Which player (0 or 1) is Server 1 for this possession
     """
 
     score: tuple[int, ...]  # Using tuple for immutability
     serving_team: int
     server_number: int | None
+    first_server_player_index: int | None = None  # 0 or 1 for doubles, None for singles
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for JSON export.
@@ -117,6 +119,7 @@ class ScoreSnapshot:
             "score": list(self.score),  # Convert tuple back to list for JSON
             "serving_team": self.serving_team,
             "server_number": self.server_number,
+            "first_server_player_index": self.first_server_player_index,
         }
 
     @classmethod
@@ -133,6 +136,7 @@ class ScoreSnapshot:
             score=tuple(data["score"]),  # Convert list to tuple for immutability
             serving_team=data["serving_team"],
             server_number=data.get("server_number"),
+            first_server_player_index=data.get("first_server_player_index"),
         )
 
 
@@ -396,6 +400,7 @@ class SessionState:
         current_score: Current score state ([team1, team2] or [team1, team2, server])
         serving_team: Index of currently serving team (0 or 1)
         server_number: Current server number for doubles (1 or 2), None for singles
+        first_server_player_index: Which player (0 or 1) is Server 1 for current possession
         last_position: Last video position in seconds
         created_at: ISO timestamp when session was created
         modified_at: ISO timestamp when session was last modified
@@ -413,6 +418,7 @@ class SessionState:
     current_score: list[int] = field(default_factory=list)
     serving_team: int = 0
     server_number: int | None = None
+    first_server_player_index: int | None = None
     last_position: float = 0.0
     created_at: str = ""
     modified_at: str = ""
@@ -437,6 +443,7 @@ class SessionState:
             "current_score": self.current_score,
             "serving_team": self.serving_team,
             "server_number": self.server_number,
+            "first_server_player_index": self.first_server_player_index,
             "last_position": self.last_position,
             "created_at": self.created_at,
             "modified_at": self.modified_at,
@@ -466,6 +473,7 @@ class SessionState:
             current_score=data.get("current_score", []),
             serving_team=data.get("serving_team", 0),
             server_number=data.get("server_number"),
+            first_server_player_index=data.get("first_server_player_index"),
             last_position=data.get("last_position", 0.0),
             created_at=data.get("created_at", ""),
             modified_at=data.get("modified_at", ""),

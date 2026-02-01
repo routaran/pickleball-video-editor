@@ -71,9 +71,14 @@ class ScoreState:
 
         if game_type == "singles":
             self.server_number = None
+            self.first_server_player_index = None
         else:  # doubles
             # Doubles starts with server 2 (one fault causes immediate side-out)
             self.server_number = 2
+            # At game start (0-0-2), the server is player[0] (on right at even score).
+            # Since we use Server 2 = 1 - first_server, we set first_server = 1
+            # so that Server 2 = 1 - 1 = 0 = player[0]
+            self.first_server_player_index = 1
 
     def server_wins(self) -> None:
         """Handle server winning the rally.
@@ -174,6 +179,10 @@ class ScoreState:
     def get_server_info(self) -> ServerInfo:
         """Get current server information for UI display.
 
+        In doubles, first_server_player_index tracks which player was designated
+        as Server 1 when the possession started. This is fixed for the entire
+        possession and only recalculated on side-out.
+
         Returns:
             ServerInfo containing:
                 - serving_team: Index of serving team (0 or 1)
@@ -188,8 +197,13 @@ class ScoreState:
             # Singles: only one player per team
             player_name = team_players[0] if team_players else "Unknown"
         else:  # doubles
-            # Doubles: server_number (1 or 2) maps to player index (0 or 1)
-            player_index = (self.server_number or 1) - 1
+            # Server 1 = first_server_player_index (set at side-out)
+            # Server 2 = the other player (1 - first_server_player_index)
+            if self.server_number == 1:
+                player_index = self.first_server_player_index or 0
+            else:  # server_number == 2
+                player_index = 1 - (self.first_server_player_index or 0)
+
             player_name = team_players[player_index] if len(team_players) > player_index else "Unknown"
 
         return ServerInfo(
@@ -203,6 +217,9 @@ class ScoreState:
 
         This method parses a score string and updates the internal state.
         Used when the user manually corrects an incorrect score.
+
+        For doubles, this also recalculates first_server_player_index based
+        on the serving team's new score, treating it as a new possession start.
 
         Args:
             score_string: "X-Y" for singles, "X-Y-Z" for doubles (from serving team's perspective)
@@ -244,6 +261,8 @@ class ScoreState:
             receiving_team = 1 - self.serving_team
             self.score[receiving_team] = receiving_score
             self.server_number = server_num
+            # Recalculate first_server based on serving team's new score
+            self.first_server_player_index = 0 if serving_score % 2 == 0 else 1
 
     def force_side_out(self) -> None:
         """Force a side-out without scoring (for intervention).
@@ -256,13 +275,16 @@ class ScoreState:
 
         Doubles:
             - Switch to other team's server 1
+            - Recalculate first_server_player_index based on new serving team's score
         """
         # Switch serving team
         self.serving_team = 1 - self.serving_team
 
-        # For doubles, reset to server 1
+        # For doubles, reset to server 1 and recalculate first_server
         if self.game_type == "doubles":
             self.server_number = 1
+            new_serving_score = self.score[self.serving_team]
+            self.first_server_player_index = 0 if new_serving_score % 2 == 0 else 1
 
     def save_snapshot(self) -> ScoreSnapshot:
         """Save current state for undo functionality.
@@ -271,12 +293,14 @@ class ScoreState:
         restored later via restore_snapshot().
 
         Returns:
-            ScoreSnapshot containing current score, serving team, and server number
+            ScoreSnapshot containing current score, serving team, server number,
+            and first_server_player_index
         """
         return ScoreSnapshot(
             score=tuple(self.score),  # Convert to tuple for immutability
             serving_team=self.serving_team,
-            server_number=self.server_number
+            server_number=self.server_number,
+            first_server_player_index=self.first_server_player_index
         )
 
     def restore_snapshot(self, snapshot: ScoreSnapshot) -> None:
@@ -290,6 +314,7 @@ class ScoreState:
         self.score = list(snapshot.score)  # Convert tuple back to list
         self.serving_team = snapshot.serving_team
         self.server_number = snapshot.server_number
+        self.first_server_player_index = snapshot.first_server_player_index
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for JSON storage.
@@ -303,7 +328,8 @@ class ScoreState:
             "player_names": self.player_names,
             "score": self.score,
             "serving_team": self.serving_team,
-            "server_number": self.server_number
+            "server_number": self.server_number,
+            "first_server_player_index": self.first_server_player_index
         }
 
     @classmethod
@@ -324,6 +350,7 @@ class ScoreState:
         instance.score = data["score"]
         instance.serving_team = data["serving_team"]
         instance.server_number = data.get("server_number")
+        instance.first_server_player_index = data.get("first_server_player_index")
         return instance
 
     # Private helper methods
@@ -346,6 +373,9 @@ class ScoreState:
         - If server 1 loses: Switch to server 2 (same team)
         - If server 2 loses: Side-out to other team's server 1
         - Special case: At 0-0-2 (game start), first fault causes immediate side-out
+
+        On side-out, first_server_player_index is recalculated based on the new
+        serving team's score at the moment of side-out.
         """
         # Special case: Game start at 0-0-2
         # First fault causes immediate side-out (no server 2 attempt)
@@ -353,6 +383,9 @@ class ScoreState:
             # Side-out to other team's server 1
             self.serving_team = 1 - self.serving_team
             self.server_number = 1
+            # Calculate first_server for new serving team based on their score
+            new_serving_score = self.score[self.serving_team]
+            self.first_server_player_index = 0 if new_serving_score % 2 == 0 else 1
             return
 
         # Normal doubles rotation
@@ -363,3 +396,6 @@ class ScoreState:
             # Server 2 loses: side-out to other team's server 1
             self.serving_team = 1 - self.serving_team
             self.server_number = 1
+            # Calculate first_server for new serving team based on their score
+            new_serving_score = self.score[self.serving_team]
+            self.first_server_player_index = 0 if new_serving_score % 2 == 0 else 1
