@@ -14,7 +14,7 @@ BINDIR ?= $(PREFIX)/bin
 DATADIR ?= $(PREFIX)/share
 DESKTOPDIR ?= $(DATADIR)/applications
 
-PYTHON ?= python3.13
+PYTHON ?= python3
 PYINSTALLER ?= pyinstaller
 PYTEST ?= pytest
 RUFF ?= ruff

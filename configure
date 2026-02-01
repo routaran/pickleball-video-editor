@@ -39,7 +39,7 @@ fatal() {
 # Default Configuration
 # -----------------------------------------------------------------------------
 PREFIX="/usr/local"
-PYTHON_CMD="python3.13"
+PYTHON_CMD="python3"
 USE_VENV="yes"
 ENABLE_DEV="no"
 VENV_DIR=".venv"
@@ -58,7 +58,7 @@ Usage: ./configure [OPTIONS]
 Options:
   --help                  Show this help message and exit
   --prefix=DIR            Install prefix (default: /usr/local)
-  --python=CMD            Python command to use (default: python3.13)
+  --python=CMD            Python command to use (default: python3)
   --with-venv=DIR         Use virtual environment at DIR (default: .venv)
   --disable-venv          Do not create/use a virtual environment
   --enable-dev            Install development dependencies (pytest, ruff, mypy)
@@ -66,7 +66,7 @@ Options:
 Examples:
   ./configure
   ./configure --prefix=/opt/pickleball-editor
-  ./configure --python=python3.13 --enable-dev
+  ./configure --python=python3 --enable-dev
   ./configure --disable-venv --prefix=\$HOME/.local
 
 This script will:
