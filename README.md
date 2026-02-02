@@ -1,6 +1,6 @@
 # Pickleball Video Editor
 
-A desktop application for marking rally timestamps in pickleball game videos, automatically calculating scores, and generating Kdenlive video editing projects with rally-only clips and score overlays.
+A desktop application for marking rally timestamps in pickleball game videos, automatically calculating scores, and exporting highlight videos with score overlays. Supports direct MP4 export with hardware acceleration or Kdenlive project generation for advanced editing.
 
 ## What It Does
 
@@ -8,7 +8,7 @@ A desktop application for marking rally timestamps in pickleball game videos, au
 
 1. **Mark rallies** - Play your video and mark the start/end of each rally with simple keyboard shortcuts
 2. **Automatic scoring** - The app tracks the score using official pickleball rules (singles and doubles)
-3. **Export to Kdenlive** - Generate a video editing project with only the rallies, complete with score subtitles
+3. **Export** - Generate a ready-to-share MP4 with embedded subtitles, or a Kdenlive project for advanced editing
 
 No more scrubbing through hours of footage. No more manually typing scores. Just mark, review, and export.
 
@@ -18,10 +18,14 @@ No more scrubbing through hours of footage. No more manually typing scores. Just
 - **Singles and Doubles scoring** with automatic side-out detection and server rotation
 - **Highlights mode** for creating cuts without score tracking
 - **Session auto-save** - Resume editing anytime, even if you close the app
-- **Review mode** - Adjust rally timing and correct scores before export
-- **Kdenlive XML export** with sequential rally clips and ASS subtitle overlays
+- **Review mode** - Visual clip timeline, adjust rally timing, correct scores before export
+- **FFmpeg direct export** - Generate MP4 with embedded subtitles and hardware acceleration (NVENC)
+- **Kdenlive XML export** - For advanced editing with sequential rally clips and ASS subtitles
+- **Non-blocking export** - Continue editing while video encodes in the background
+- **Configurable encoder profiles** - Customize FFmpeg settings via config file
+- **Multi-game sessions** - Start new games without restarting the app
 - **Configurable keyboard shortcuts** and skip durations
-- **Player/team names** displayed in intro subtitles
+- **Player/team names** - Optional, can be added or updated anytime during editing
 
 ## Installation
 
@@ -106,7 +110,7 @@ make format
    - Click "Browse" to select your video file
    - Choose game type: Singles, Doubles, or Highlights
    - Select victory rules: Game to 11, Game to 9, or Timed
-   - Enter player/team names (optional)
+   - Player/team names are optional (can be added later via "Names" button)
    - Click "Start Editing"
 
 3. **Mark rallies**
@@ -116,14 +120,16 @@ make format
    - Use **U** to undo mistakes
 
 4. **Review and export**
-   - Click "Final Review" to verify rally timings
+   - Click "Final Review" to see the visual clip timeline
    - Adjust timing with +/- buttons if needed
-   - Click "Generate Kdenlive" to export
+   - Choose export format:
+     - **Export MP4** - Direct video with embedded subtitles (recommended)
+     - **Generate Kdenlive** - Project file for advanced editing
 
-5. **Open in Kdenlive**
-   - Find your project in `~/Videos/pickleball/`
-   - Open the `.kdenlive` file
-   - Your rally clips and score subtitles are ready
+5. **Multi-game sessions**
+   - Click "New Game" to start a fresh game without restarting
+   - Change settings (game type, players) when starting a new game
+   - Previous game data is cleared
 
 ### Keyboard Shortcuts
 
@@ -179,9 +185,41 @@ During editing, you can manually correct the game state:
 - **Time Expired** - End timed games manually
 - **Mark Game Completed** - Record final score with winner
 
+### Highlights Mode
+
+For quick highlight compilations without score tracking:
+
+- Select "Highlights" as game type during setup
+- No player names or victory rules needed
+- Simplified controls: just "Mark Start" and "Mark End"
+- Press **C** to mark clip start, **S** to mark clip end
+- Export generates video cuts without score subtitles
+
+### Export Options
+
+**FFmpeg Direct Export (MP4):**
+- Generates a ready-to-share MP4 file with embedded score subtitles
+- Hardware acceleration (NVENC) when available, falls back to libx264
+- Non-blocking: continue editing while video encodes in the background
+- Configurable encoder profiles (see Configuration section)
+
+**Kdenlive Project Export:**
+- Generates `.kdenlive` project file for advanced editing
+- Includes separate ASS subtitle file for score overlays
+- Rally clips are pre-arranged on the timeline
+- Open in Kdenlive for color grading, transitions, or additional edits
+
 ### Output Files
 
-After export, find your files in `~/Videos/pickleball/`:
+After export, find your files:
+
+**FFmpeg Export** (user-selected location):
+
+| File | Description |
+|------|-------------|
+| `{video}.mp4` | Ready-to-share video with embedded subtitles |
+
+**Kdenlive Export** (`~/Videos/pickleball/`):
 
 | File | Description |
 |------|-------------|
@@ -205,6 +243,41 @@ Access settings via the Settings button:
 **File Locations:**
 - Settings: `~/.config/pickleball-editor/config.json`
 - Sessions: `~/.local/share/pickleball-editor/sessions/`
+
+### Encoder Profiles
+
+Customize FFmpeg export by editing `~/.config/pickleball-editor/config.json`:
+
+```json
+{
+  "encoder": {
+    "active_profile": "auto",
+    "profiles": {
+      "nvenc_quality": {
+        "codec": "h264_nvenc",
+        "preset": "p5",
+        "rate_control": ["-rc", "constqp", "-qp", "20"],
+        "extra_video_opts": ["-rc-lookahead", "32", "-spatial-aq", "1"],
+        "audio_codec": "aac",
+        "audio_bitrate": "192k"
+      }
+    }
+  }
+}
+```
+
+| Setting | Description |
+|---------|-------------|
+| `active_profile` | `"auto"` for hardware detection, or a profile name |
+| `profiles` | Named encoder configurations |
+
+**Built-in profiles:**
+- `nvenc_quality` - NVIDIA hardware encoding, high quality
+- `nvenc_fast` - NVIDIA hardware encoding, faster
+- `x264_quality` - Software encoding, high quality (CRF 18)
+- `x264_fast` - Software encoding, faster (CRF 23)
+
+**Custom profiles:** Add your own with any FFmpeg codec, preset, and rate control options.
 
 ## Build System
 
@@ -255,6 +328,8 @@ pickleball-video-editor/
 │   │   └── widgets/
 │   └── output/              # Export generators
 │       ├── kdenlive_generator.py
+│       ├── ffmpeg_exporter.py
+│       ├── hardware_detect.py
 │       └── subtitle_generator.py
 ├── tests/                   # 200+ unit tests
 ├── resources/               # Icons and assets
@@ -268,9 +343,10 @@ pickleball-video-editor/
 | Component | Technology |
 |-----------|------------|
 | GUI | PyQt6 |
-| Video | python-mpv (libmpv) |
+| Video Playback | python-mpv (libmpv) |
+| Video Export | FFmpeg (NVENC/libx264) |
 | Metadata | FFprobe |
-| Export | lxml (MLT XML) |
+| Kdenlive Export | lxml (MLT XML) |
 | Build | PyInstaller |
 | Tests | pytest |
 
