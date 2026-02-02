@@ -419,8 +419,8 @@ class KdenliveGenerator:
 
         is_last = (seg_index == len(self.segments) - 1)
         if is_last and self.game_completion is not None and self.game_completion.is_completed:
-            extension_frames = int(self.game_completion.extension_seconds * self.fps)
-            max_frames = self.video_info.frame_count or int(self.video_info.duration * self.fps)
+            extension_frames = round(self.game_completion.extension_seconds * self.fps)
+            max_frames = self.video_info.frame_count or round(self.video_info.duration * self.fps)
             max_extension = max_frames - seg["out"]
             out_frame += min(extension_frames, max_extension)
 
@@ -451,7 +451,7 @@ class KdenliveGenerator:
         timeline_frames = self._calculate_timeline_length()
         timeline_duration_tc = self.frames_to_timecode(timeline_frames)
         source_duration_tc = self.frames_to_timecode(
-            self.video_info.frame_count or int(self.video_info.duration * self.fps)
+            self.video_info.frame_count or round(self.video_info.duration * self.fps)
         )
 
         # Generate UUIDs and IDs
@@ -556,7 +556,7 @@ class KdenliveGenerator:
   </filter>
  </tractor>
  <chain id="chain0" out="{source_duration_tc}">
-  <property name="length">{self.video_info.frame_count or int(self.video_info.duration * self.fps)}</property>
+  <property name="length">{self.video_info.frame_count or round(self.video_info.duration * self.fps)}</property>
   <property name="eof">pause</property>
   <property name="resource">{video_path_escaped}</property>
   <property name="mlt_service">avformat-novalidate</property>
@@ -607,7 +607,7 @@ class KdenliveGenerator:
   </filter>
  </tractor>
  <chain id="chain1" out="{source_duration_tc}">
-  <property name="length">{self.video_info.frame_count or int(self.video_info.duration * self.fps)}</property>
+  <property name="length">{self.video_info.frame_count or round(self.video_info.duration * self.fps)}</property>
   <property name="eof">pause</property>
   <property name="resource">{video_path_escaped}</property>
   <property name="mlt_service">avformat-novalidate</property>
@@ -644,7 +644,7 @@ class KdenliveGenerator:
   <track hide="audio" producer="playlist7"/>
  </tractor>
  <chain id="chain2" out="{source_duration_tc}">
-  <property name="length">{self.video_info.frame_count or int(self.video_info.duration * self.fps)}</property>
+  <property name="length">{self.video_info.frame_count or round(self.video_info.duration * self.fps)}</property>
   <property name="eof">pause</property>
   <property name="resource">{video_path_escaped}</property>
   <property name="mlt_service">avformat-novalidate</property>
