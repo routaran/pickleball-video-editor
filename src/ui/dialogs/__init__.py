@@ -6,6 +6,7 @@ This package contains reusable dialog windows for:
 - Data loss prevention: UnsavedWarningDialog
 - Interventions: EditScoreDialog, ForceSideOutDialog, AddCommentDialog
 - Export completion: ExportCompleteDialog
+- Export progress: ExportProgressDialog
 - Configuration: ConfigDialog
 - Player names: PlayerNamesDialog
 - New game: NewGameConfirmDialog
@@ -22,6 +23,11 @@ from src.ui.dialogs.edit_score import EditScoreDialog, EditScoreResult
 from src.ui.dialogs.force_sideout import ForceSideOutDialog, ForceSideOutResult
 from src.ui.dialogs.add_comment import AddCommentDialog, AddCommentResult
 from src.ui.dialogs.export_complete import ExportCompleteDialog, ExportCompleteResult
+from src.ui.dialogs.export_progress import (
+    ExportProgressDialog,
+    ExportProgressResult,
+    FFmpegWorker,
+)
 from src.ui.dialogs.config_dialog import ConfigDialog, ConfigDialogResult
 from src.ui.dialogs.player_names import PlayerNamesDialog, PlayerNamesResult
 from src.ui.dialogs.new_game_confirm import (
@@ -53,6 +59,10 @@ __all__ = [
     # Export Complete Dialog
     "ExportCompleteDialog",
     "ExportCompleteResult",
+    # Export Progress Dialog
+    "ExportProgressDialog",
+    "ExportProgressResult",
+    "FFmpegWorker",
     # Config Dialog
     "ConfigDialog",
     "ConfigDialogResult",

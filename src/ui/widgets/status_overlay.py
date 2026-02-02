@@ -74,6 +74,9 @@ class StatusOverlay(QFrame):
         self._setup_ui()
         self._apply_styles()
 
+        # Set minimum width to prevent truncation
+        self.setMinimumWidth(480)
+
         # Set initial state
         self.set_status(in_rally=False)
 
@@ -85,11 +88,12 @@ class StatusOverlay(QFrame):
         layout.setSpacing(SPACE_MD)
 
         # Status section (dot + text)
-        self._status_dot.setFixedSize(8, 8)
+        self._status_dot.setFixedSize(10, 10)
         self._status_dot.setObjectName("status_dot")
         layout.addWidget(self._status_dot)
 
         self._status_text.setObjectName("status_text")
+        self._status_text.setFixedWidth(75)
         layout.addWidget(self._status_text)
 
         # Add some spacing between sections
@@ -100,6 +104,7 @@ class StatusOverlay(QFrame):
         layout.addWidget(self._score_label)
 
         self._score_value.setObjectName("score_value")
+        self._score_value.setMinimumWidth(80)
         layout.addWidget(self._score_value)
 
         # Add spacing
@@ -110,6 +115,7 @@ class StatusOverlay(QFrame):
         layout.addWidget(self._server_label)
 
         self._server_value.setObjectName("server_value")
+        self._server_value.setMinimumWidth(150)
         layout.addWidget(self._server_value)
 
         # Push everything to the left
@@ -129,7 +135,7 @@ class StatusOverlay(QFrame):
             }}
 
             QLabel#status_dot {{
-                border-radius: 4px;
+                border-radius: 5px;
                 background-color: {TEXT_WARNING};
             }}
 
@@ -155,22 +161,22 @@ class StatusOverlay(QFrame):
 
         self.setStyleSheet(stylesheet)
 
-        # Apply fonts
+        # Apply fonts - using slightly larger sizes for better readability
         # Status text: body font, medium weight
-        status_font = Fonts.body(size=14, weight=500)
+        status_font = Fonts.body(size=15, weight=500)
         self._status_text.setFont(status_font)
 
-        # Score label: body font, regular
-        label_font = Fonts.label()
+        # Score label: body font, regular (13px default)
+        label_font = Fonts.body(size=13, weight=400)
         self._score_label.setFont(label_font)
         self._server_label.setFont(label_font)
 
-        # Score value: display font (monospace, bold, tabular) - LARGER
-        score_font = Fonts.display(size=24, weight=700, tabular=True)
+        # Score value: display font (monospace, bold, tabular) - LARGER (26px)
+        score_font = Fonts.display(size=26, weight=700, tabular=True)
         self._score_value.setFont(score_font)
 
-        # Server value: body font, regular
-        server_font = Fonts.body(size=14, weight=400)
+        # Server value: body font, regular (15px)
+        server_font = Fonts.body(size=15, weight=400)
         self._server_value.setFont(server_font)
 
     def set_status(self, in_rally: bool) -> None:
@@ -183,7 +189,7 @@ class StatusOverlay(QFrame):
             # Green dot for "IN RALLY"
             self._status_dot.setStyleSheet(f"""
                 QLabel#status_dot {{
-                    border-radius: 4px;
+                    border-radius: 5px;
                     background-color: {RALLY_START};
                 }}
             """)
@@ -213,6 +219,8 @@ class StatusOverlay(QFrame):
             server_info: Server description (e.g., "Team 1 (John) #2")
         """
         self._server_value.setText(server_info)
+        # Add tooltip for long server names that might be truncated
+        self._server_value.setToolTip(server_info if len(server_info) > 15 else "")
 
     def update_display(self, in_rally: bool, score: str, server_info: str) -> None:
         """Update all status fields at once.
@@ -241,10 +249,10 @@ class StatusOverlay(QFrame):
     def set_compact_mode(self, compact: bool) -> None:
         """Apply compact or normal mode styling.
 
-        In compact mode (window < 950px width), font sizes are reduced:
-        - Score value: 18px instead of 24px
-        - Labels: 11px instead of 13px
-        - Status and server text: 12px instead of 14px
+        In compact mode (window < 950px width), font sizes are reduced less aggressively:
+        - Score value: 22px instead of 26px (was 18 vs 24)
+        - Labels: 12px instead of 13px (was 11 vs 13)
+        - Status and server text: 13px instead of 15px (was 12 vs 14)
 
         Args:
             compact: True for smaller fonts (window < 950px width)
@@ -254,18 +262,18 @@ class StatusOverlay(QFrame):
 
         self._compact_mode = compact
 
-        # Scale score value (most prominent element)
-        score_size = 18 if compact else 24
+        # Scale score value (most prominent element) - less aggressive reduction
+        score_size = 22 if compact else 26
         self._score_value.setFont(Fonts.display(size=score_size, weight=700, tabular=True))
 
-        # Scale labels
-        label_size = 11 if compact else 13
+        # Scale labels - less aggressive reduction
+        label_size = 12 if compact else 13
         label_font = Fonts.body(size=label_size, weight=400)
         self._score_label.setFont(label_font)
         self._server_label.setFont(label_font)
 
-        # Scale status and server text
-        text_size = 12 if compact else 14
+        # Scale status and server text - less aggressive reduction
+        text_size = 13 if compact else 15
         self._status_text.setFont(Fonts.body(size=text_size, weight=500))
         self._server_value.setFont(Fonts.body(size=text_size, weight=400))
 
