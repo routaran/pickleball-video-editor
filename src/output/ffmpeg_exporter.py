@@ -11,9 +11,13 @@ This module provides direct MP4 generation using ffmpeg with:
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+from typing import TYPE_CHECKING
 
 from src.core.models import GameCompletionInfo
 from src.output.hardware_detect import get_optimal_config
+
+if TYPE_CHECKING:
+    from src.core.app_config import EncoderSettings
 
 
 @dataclass
@@ -27,6 +31,7 @@ class FFmpegExporter:
         fps: Source video frame rate
         player_names: Optional player name mapping (for subtitle context)
         game_completion: Optional game completion metadata
+        encoder_settings: Optional encoder settings from app config
     """
 
     video_path: Path
@@ -34,6 +39,7 @@ class FFmpegExporter:
     fps: float
     player_names: dict | None
     game_completion: GameCompletionInfo | None
+    encoder_settings: "EncoderSettings | None" = None
 
     def generate(self, output_path: Path) -> Path:
         """Generate MP4 directly using ffmpeg.
@@ -376,7 +382,7 @@ class FFmpegExporter:
         Runs ffmpeg subprocess with:
         - NVENC hardware encoder if available, otherwise libx264
         - Appropriate rate control for each encoder
-        - Audio re-encoded to AAC 192k for compatibility
+        - Audio encoding based on config (default: AAC 192k)
 
         Args:
             output_path: Destination path for output MP4
@@ -385,8 +391,8 @@ class FFmpegExporter:
         Raises:
             subprocess.CalledProcessError: If ffmpeg execution fails
         """
-        # Get optimal encoder configuration based on hardware
-        config = get_optimal_config()
+        # Get encoder configuration (from settings or auto-detect)
+        config = get_optimal_config(self.encoder_settings)
 
         # Build filter complex and get audio output label
         filter_complex, audio_label = self._build_filter_complex(ass_path)
@@ -404,8 +410,8 @@ class FFmpegExporter:
             "-preset", config.preset,
             *config.rate_control,
             *config.extra_opts,
-            "-c:a", "aac",
-            "-b:a", "192k",
+            "-c:a", config.audio_codec,
+            "-b:a", config.audio_bitrate,
             "-movflags", "+faststart",
             str(output_path),
         ]

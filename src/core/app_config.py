@@ -4,6 +4,7 @@ This module provides user-configurable settings for the Pickleball Video Editor:
 - Keyboard shortcuts for rally actions
 - Video skip durations for buttons and arrow keys
 - Window size constraints
+- FFmpeg encoder profiles for video export
 
 Settings are stored in ~/.config/pickleball-editor/config.json.
 """
@@ -18,6 +19,8 @@ __all__ = [
     "ShortcutConfig",
     "SkipDurationConfig",
     "WindowSizeConfig",
+    "EncoderProfile",
+    "EncoderSettings",
     "AppSettings",
     "get_default_config_dir",
 ]
@@ -174,6 +177,144 @@ class WindowSizeConfig:
 
 
 @dataclass
+class EncoderProfile:
+    """FFmpeg encoder profile configuration.
+
+    Defines codec, preset, rate control, and additional options for video encoding.
+    Users can edit these in config.json to customize FFmpeg export behavior.
+
+    Attributes:
+        codec: FFmpeg video codec (e.g., "h264_nvenc", "libx264")
+        preset: Encoder preset (e.g., "p5" for NVENC, "medium" for libx264)
+        rate_control: Rate control arguments as list (e.g., ["-crf", "20"])
+        extra_video_opts: Additional encoder options as list
+        audio_codec: Audio codec (default: "aac")
+        audio_bitrate: Audio bitrate (default: "192k")
+    """
+
+    codec: str
+    preset: str
+    rate_control: list[str] = field(default_factory=list)
+    extra_video_opts: list[str] = field(default_factory=list)
+    audio_codec: str = "aac"
+    audio_bitrate: str = "192k"
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON export."""
+        return {
+            "codec": self.codec,
+            "preset": self.preset,
+            "rate_control": self.rate_control,
+            "extra_video_opts": self.extra_video_opts,
+            "audio_codec": self.audio_codec,
+            "audio_bitrate": self.audio_bitrate,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "EncoderProfile":
+        """Deserialize from dictionary."""
+        return cls(
+            codec=data.get("codec", "libx264"),
+            preset=data.get("preset", "medium"),
+            rate_control=data.get("rate_control", ["-crf", "20"]),
+            extra_video_opts=data.get("extra_video_opts", []),
+            audio_codec=data.get("audio_codec", "aac"),
+            audio_bitrate=data.get("audio_bitrate", "192k"),
+        )
+
+
+@dataclass
+class EncoderSettings:
+    """FFmpeg encoder settings with multiple profiles.
+
+    Provides named encoder profiles that can be selected via active_profile.
+    Set active_profile to "auto" for hardware-based auto-detection.
+
+    Example config.json encoder section:
+        "encoder": {
+            "active_profile": "auto",
+            "profiles": {
+                "nvenc_quality": {
+                    "codec": "h264_nvenc",
+                    "preset": "p5",
+                    "rate_control": ["-rc", "constqp", "-qp", "20"],
+                    "extra_video_opts": ["-rc-lookahead", "32", "-spatial-aq", "1"],
+                    "audio_codec": "aac",
+                    "audio_bitrate": "192k"
+                }
+            }
+        }
+    """
+
+    active_profile: str = "auto"
+    profiles: dict[str, EncoderProfile] = field(default_factory=dict)
+
+    @classmethod
+    def get_defaults(cls) -> "EncoderSettings":
+        """Get factory-default encoder settings with common profiles."""
+        return cls(
+            active_profile="auto",
+            profiles={
+                "nvenc_quality": EncoderProfile(
+                    codec="h264_nvenc",
+                    preset="p5",
+                    rate_control=["-rc", "constqp", "-qp", "20"],
+                    extra_video_opts=["-rc-lookahead", "32", "-spatial-aq", "1", "-temporal-aq", "1"],
+                ),
+                "nvenc_fast": EncoderProfile(
+                    codec="h264_nvenc",
+                    preset="p3",
+                    rate_control=["-rc", "constqp", "-qp", "24"],
+                    extra_video_opts=[],
+                ),
+                "x264_quality": EncoderProfile(
+                    codec="libx264",
+                    preset="slow",
+                    rate_control=["-crf", "18"],
+                    extra_video_opts=[],
+                ),
+                "x264_fast": EncoderProfile(
+                    codec="libx264",
+                    preset="veryfast",
+                    rate_control=["-crf", "23"],
+                    extra_video_opts=[],
+                ),
+            },
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary for JSON export."""
+        return {
+            "active_profile": self.active_profile,
+            "profiles": {name: profile.to_dict() for name, profile in self.profiles.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "EncoderSettings":
+        """Deserialize from dictionary."""
+        active_profile = data.get("active_profile", "auto")
+        profiles_data = data.get("profiles", {})
+
+        profiles: dict[str, EncoderProfile] = {}
+        for name, profile_data in profiles_data.items():
+            if isinstance(profile_data, dict):
+                profiles[name] = EncoderProfile.from_dict(profile_data)
+
+        # If no profiles loaded, use defaults
+        if not profiles:
+            defaults = cls.get_defaults()
+            profiles = defaults.profiles
+
+        return cls(active_profile=active_profile, profiles=profiles)
+
+    def get_active_profile(self) -> EncoderProfile | None:
+        """Get the active encoder profile, or None if set to 'auto'."""
+        if self.active_profile == "auto":
+            return None
+        return self.profiles.get(self.active_profile)
+
+
+@dataclass
 class AppSettings:
     """Application settings container with JSON persistence.
 
@@ -183,6 +324,7 @@ class AppSettings:
     shortcuts: ShortcutConfig = field(default_factory=ShortcutConfig)
     skip_durations: SkipDurationConfig = field(default_factory=SkipDurationConfig)
     window_size: WindowSizeConfig = field(default_factory=WindowSizeConfig)
+    encoder: EncoderSettings = field(default_factory=EncoderSettings.get_defaults)
 
     def save(self, config_dir: Path | None = None) -> bool:
         """Save settings to JSON configuration file.
@@ -211,6 +353,7 @@ class AppSettings:
             "shortcuts": self.shortcuts.to_dict(),
             "skip_durations": self.skip_durations.to_dict(),
             "window_size": self.window_size.to_dict(),
+            "encoder": self.encoder.to_dict(),
         }
 
         # Write JSON file
@@ -262,21 +405,25 @@ class AppSettings:
         shortcuts_data = data.get("shortcuts", {})
         skip_durations_data = data.get("skip_durations", {})
         window_size_data = data.get("window_size", {})
+        encoder_data = data.get("encoder", {})
 
         shortcuts = ShortcutConfig.from_dict(shortcuts_data if isinstance(shortcuts_data, dict) else {})
         skip_durations = SkipDurationConfig.from_dict(skip_durations_data if isinstance(skip_durations_data, dict) else {})
         window_size = WindowSizeConfig.from_dict(window_size_data if isinstance(window_size_data, dict) else {})
+        encoder = EncoderSettings.from_dict(encoder_data if isinstance(encoder_data, dict) else {})
 
         return cls(
             shortcuts=shortcuts,
             skip_durations=skip_durations,
             window_size=window_size,
+            encoder=encoder,
         )
 
-    def to_dict(self) -> dict[str, dict[str, int | float | str]]:
+    def to_dict(self) -> dict:
         """Serialize to nested dictionary for JSON export."""
         return {
             "shortcuts": self.shortcuts.to_dict(),
             "skip_durations": self.skip_durations.to_dict(),
             "window_size": self.window_size.to_dict(),
+            "encoder": self.encoder.to_dict(),
         }

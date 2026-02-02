@@ -2190,13 +2190,14 @@ class MainWindow(QMainWindow):
                 extension_seconds=8.0
             )
 
-        # Create FFmpeg exporter
+        # Create FFmpeg exporter with encoder settings from app config
         exporter = FFmpegExporter(
             video_path=self.config.video_path,
             segments=segments,
             fps=self.video_fps,
             player_names=player_names,
-            game_completion=game_completion_info
+            game_completion=game_completion_info,
+            encoder_settings=self._app_settings.encoder,
         )
 
         # Create and show non-blocking progress dialog

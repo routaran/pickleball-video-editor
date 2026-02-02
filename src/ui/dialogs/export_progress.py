@@ -171,8 +171,8 @@ class FFmpegWorker(QThread):
         """
         from src.output.hardware_detect import get_optimal_config
 
-        # Get optimal encoder configuration
-        config = get_optimal_config()
+        # Get encoder configuration (from settings or auto-detect)
+        config = get_optimal_config(self.exporter.encoder_settings)
 
         # Build filter complex and get the correct audio output label
         filter_complex, audio_label = self.exporter._build_filter_complex(ass_path)
@@ -191,8 +191,8 @@ class FFmpegWorker(QThread):
             "-preset", config.preset,
             *config.rate_control,
             *config.extra_opts,
-            "-c:a", "aac",
-            "-b:a", "192k",
+            "-c:a", config.audio_codec,
+            "-b:a", config.audio_bitrate,
             "-movflags", "+faststart",
             str(self.output_path),
         ]

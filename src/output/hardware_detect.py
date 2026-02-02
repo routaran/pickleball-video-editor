@@ -1,29 +1,43 @@
 """Hardware encoder detection and optimal configuration.
 
 This module detects available hardware encoders (NVENC, libx264) and provides
-optimal encoding configurations based on system capabilities.
+optimal encoding configurations based on system capabilities or user settings.
+
+Configuration can be provided via ~/.config/pickleball-editor/config.json
+in the "encoder" section. Set active_profile to a profile name to use that
+profile, or "auto" for hardware-based auto-detection.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 import shutil
 import subprocess
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.core.app_config import EncoderSettings
 
 
 @dataclass
 class EncoderConfig:
-    """Optimal encoder configuration based on hardware.
+    """Encoder configuration for FFmpeg export.
 
     Attributes:
         codec: FFmpeg codec name (e.g., "h264_nvenc" or "libx264")
         preset: Encoder preset (e.g., "p5" for NVENC, "medium" for libx264)
         rate_control: Rate control arguments as a list
         extra_opts: Additional encoder-specific options
+        audio_codec: Audio codec (default: "aac")
+        audio_bitrate: Audio bitrate (default: "192k")
     """
 
     codec: str
     preset: str
     rate_control: list[str]
     extra_opts: list[str]
+    audio_codec: str = "aac"
+    audio_bitrate: str = "192k"
 
 
 def detect_nvenc_available() -> bool:
@@ -57,14 +71,11 @@ def detect_nvenc_available() -> bool:
         return False
 
 
-def get_optimal_config() -> EncoderConfig:
-    """Get optimal encoder config based on available hardware.
-
-    Detects NVENC availability and returns appropriate configuration.
-    Falls back to libx264 software encoding if NVENC is unavailable.
+def _get_auto_config() -> EncoderConfig:
+    """Get auto-detected encoder config based on hardware.
 
     Returns:
-        EncoderConfig with optimal settings for available hardware
+        EncoderConfig with NVENC if available, otherwise libx264
     """
     if detect_nvenc_available():
         return EncoderConfig(
@@ -87,6 +98,37 @@ def get_optimal_config() -> EncoderConfig:
             rate_control=["-crf", "20"],
             extra_opts=[],
         )
+
+
+def get_optimal_config(encoder_settings: EncoderSettings | None = None) -> EncoderConfig:
+    """Get encoder config based on settings or hardware auto-detection.
+
+    If encoder_settings is provided and has an active profile (not "auto"),
+    uses that profile's configuration. Otherwise, auto-detects based on
+    available hardware.
+
+    Args:
+        encoder_settings: Optional EncoderSettings from AppSettings.
+                         If None or active_profile is "auto", uses auto-detection.
+
+    Returns:
+        EncoderConfig with optimal settings
+    """
+    # Check if we have settings with a specific profile
+    if encoder_settings is not None:
+        profile = encoder_settings.get_active_profile()
+        if profile is not None:
+            return EncoderConfig(
+                codec=profile.codec,
+                preset=profile.preset,
+                rate_control=list(profile.rate_control),
+                extra_opts=list(profile.extra_video_opts),
+                audio_codec=profile.audio_codec,
+                audio_bitrate=profile.audio_bitrate,
+            )
+
+    # Fall back to auto-detection
+    return _get_auto_config()
 
 
 __all__ = ["EncoderConfig", "detect_nvenc_available", "get_optimal_config"]
