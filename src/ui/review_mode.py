@@ -42,6 +42,7 @@ from src.ui.styles import (
     PRIMARY_ACTION,
     RADIUS_LG,
     RADIUS_MD,
+    SERVER_WINS,
     SPACE_LG,
     SPACE_MD,
     SPACE_SM,
@@ -747,6 +748,7 @@ class ReviewModeWidget(QWidget):
     exit_requested = pyqtSignal()
     return_to_menu_requested = pyqtSignal()
     generate_requested = pyqtSignal()
+    export_ffmpeg_requested = pyqtSignal()
     play_rally_requested = pyqtSignal(int)
     navigate_previous = pyqtSignal()
     navigate_next = pyqtSignal()
@@ -943,22 +945,43 @@ class ReviewModeWidget(QWidget):
         self._final_score_label.hide()
         generate_layout.addWidget(self._final_score_label)
 
-        # Export path section
-        export_path_layout = QHBoxLayout()
-        export_path_layout.setSpacing(SPACE_SM)
+        # Export Options section header
+        export_header = QLabel("Export Options")
+        export_header.setFont(Fonts.body(size=14, weight=600))
+        export_header.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        generate_layout.addWidget(export_header)
 
+        # Horizontal layout for two export cards
+        export_cards_layout = QHBoxLayout()
+        export_cards_layout.setSpacing(SPACE_MD)
+
+        # === Kdenlive Card (left) ===
+        kdenlive_card = QWidget()
+        kdenlive_card.setObjectName("kdenliveCard")
+        kdenlive_layout = QVBoxLayout(kdenlive_card)
+        kdenlive_layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        kdenlive_layout.setSpacing(SPACE_SM)
+
+        # Kdenlive title
+        kdenlive_title = QLabel("Kdenlive Project")
+        kdenlive_title.setFont(Fonts.body(size=14, weight=600))
+        kdenlive_title.setStyleSheet(f"color: {PRIMARY_ACTION};")
+        kdenlive_layout.addWidget(kdenlive_title)
+
+        # Export path label
         export_label = QLabel("Export to:")
         export_label.setFont(Fonts.label())
         export_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        export_path_layout.addWidget(export_label)
+        kdenlive_layout.addWidget(export_label)
 
+        # Export path input
         self._export_path_edit = QLineEdit()
-        self._export_path_edit.setPlaceholderText("Click Browse or use default location...")
+        self._export_path_edit.setPlaceholderText("Click Browse or use default...")
         self._export_path_edit.setReadOnly(False)
         self._export_path_edit.textChanged.connect(self._on_export_path_changed)
         self._export_path_edit.setStyleSheet(f"""
             QLineEdit {{
-                background-color: {BG_TERTIARY};
+                background-color: {BG_PRIMARY};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: {RADIUS_MD}px;
@@ -968,14 +991,15 @@ class ReviewModeWidget(QWidget):
                 border-color: {PRIMARY_ACTION};
             }}
         """)
-        export_path_layout.addWidget(self._export_path_edit, stretch=1)
+        kdenlive_layout.addWidget(self._export_path_edit)
 
+        # Browse button
         self._browse_button = QPushButton("Browse")
         self._browse_button.setFont(Fonts.button_other())
         self._browse_button.clicked.connect(self._on_browse_clicked)
         self._browse_button.setStyleSheet(f"""
             QPushButton {{
-                background-color: {BG_TERTIARY};
+                background-color: {BG_PRIMARY};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: {RADIUS_MD}px;
@@ -985,11 +1009,12 @@ class ReviewModeWidget(QWidget):
                 background-color: {BG_BORDER};
             }}
         """)
-        export_path_layout.addWidget(self._browse_button)
+        kdenlive_layout.addWidget(self._browse_button)
 
-        generate_layout.addLayout(export_path_layout)
+        kdenlive_layout.addStretch()
 
-        generate_button = QPushButton("GENERATE KDENLIVE PROJECT")
+        # Generate button
+        generate_button = QPushButton("GENERATE PROJECT")
         generate_button.setFont(Fonts.button_rally())
         generate_button.clicked.connect(self.generate_requested.emit)
         generate_button.setStyleSheet(f"""
@@ -998,14 +1023,83 @@ class ReviewModeWidget(QWidget):
                 color: {BG_PRIMARY};
                 border: 2px solid {PRIMARY_ACTION};
                 border-radius: {RADIUS_MD}px;
-                padding: {SPACE_MD}px {SPACE_XL}px;
-                min-height: 48px;
+                padding: {SPACE_SM}px {SPACE_MD}px;
+                min-height: 40px;
+                min-width: 120px;
+                font-size: 13px;
+                font-weight: 600;
             }}
             QPushButton:hover {{
                 background-color: {TEXT_ACCENT};
-                            }}
+            }}
         """)
-        generate_layout.addWidget(generate_button, alignment=Qt.AlignmentFlag.AlignCenter)
+        kdenlive_layout.addWidget(generate_button)
+
+        kdenlive_card.setStyleSheet(f"""
+            QWidget#kdenliveCard {{
+                background-color: {BG_TERTIARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {RADIUS_LG}px;
+            }}
+        """)
+        kdenlive_card.setMinimumHeight(180)
+        export_cards_layout.addWidget(kdenlive_card, 1)  # stretch factor = 1
+
+        # === FFmpeg Card (right) ===
+        ffmpeg_card = QWidget()
+        ffmpeg_card.setObjectName("ffmpegCard")
+        ffmpeg_layout = QVBoxLayout(ffmpeg_card)
+        ffmpeg_layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        ffmpeg_layout.setSpacing(SPACE_SM)
+
+        # FFmpeg title
+        ffmpeg_title = QLabel("MP4 Video")
+        ffmpeg_title.setFont(Fonts.body(size=14, weight=600))
+        ffmpeg_title.setStyleSheet(f"color: {SERVER_WINS};")
+        ffmpeg_layout.addWidget(ffmpeg_title)
+
+        # FFmpeg description
+        ffmpeg_desc = QLabel("Ready-to-share output\nwith hardware encoding")
+        ffmpeg_desc.setFont(Fonts.label())
+        ffmpeg_desc.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        ffmpeg_desc.setWordWrap(True)
+        ffmpeg_layout.addWidget(ffmpeg_desc)
+
+        ffmpeg_layout.addStretch()
+
+        # FFmpeg export button
+        ffmpeg_button = QPushButton("EXPORT MP4")
+        ffmpeg_button.setFont(Fonts.button_rally())
+        ffmpeg_button.clicked.connect(self.export_ffmpeg_requested.emit)
+        ffmpeg_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {SERVER_WINS};
+                color: {BG_PRIMARY};
+                border: 2px solid {SERVER_WINS};
+                border-radius: {RADIUS_MD}px;
+                padding: {SPACE_SM}px {SPACE_MD}px;
+                min-height: 40px;
+                min-width: 120px;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: #7AD4FA;
+            }}
+        """)
+        ffmpeg_layout.addWidget(ffmpeg_button)
+
+        ffmpeg_card.setStyleSheet(f"""
+            QWidget#ffmpegCard {{
+                background-color: {BG_TERTIARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {RADIUS_LG}px;
+            }}
+        """)
+        ffmpeg_card.setMinimumHeight(140)
+        export_cards_layout.addWidget(ffmpeg_card, 1)  # stretch factor = 1
+
+        generate_layout.addLayout(export_cards_layout)
 
         generate_container.setStyleSheet(f"""
             QWidget {{
@@ -1014,6 +1108,7 @@ class ReviewModeWidget(QWidget):
                 border-radius: {RADIUS_LG}px;
             }}
         """)
+        generate_container.setMinimumHeight(200)
         bottom_layout.addWidget(generate_container)
 
         # ===================================================================
@@ -1021,7 +1116,7 @@ class ReviewModeWidget(QWidget):
         # ===================================================================
         self._outer_splitter.addWidget(top_section)
         self._outer_splitter.addWidget(bottom_section)
-        self._outer_splitter.setSizes([400, 200])
+        self._outer_splitter.setSizes([350, 250])
 
         main_layout.addWidget(self._outer_splitter)
 

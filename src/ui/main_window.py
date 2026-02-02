@@ -46,7 +46,7 @@ from src.core.models import GameCompletionInfo, ScoreSnapshot, SessionState
 from src.core.rally_manager import RallyManager
 from src.core.score_state import ScoreState
 from src.core.session_manager import SessionManager
-from src.output import KdenliveGenerator
+from src.output import KdenliveGenerator, FFmpegExporter
 from src.ui.dialogs import (
     AddCommentDialog,
     AddCommentResult,
@@ -54,6 +54,7 @@ from src.ui.dialogs import (
     EditScoreResult,
     ExportCompleteDialog,
     ExportCompleteResult,
+    ExportProgressDialog,
     ForceSideOutDialog,
     ForceSideOutResult,
     GameOverDialog,
@@ -232,6 +233,9 @@ class MainWindow(QMainWindow):
 
         # Compact mode state
         self._compact_mode = False
+
+        # Active export dialog tracking (for non-blocking FFmpeg export)
+        self._active_export_dialog: ExportProgressDialog | None = None
 
         # Initialize core components (may restore from session)
         self._init_core_components()
@@ -1664,6 +1668,7 @@ class MainWindow(QMainWindow):
             self._review_widget.play_rally_requested.connect(self._on_review_play_rally)
             self._review_widget.exit_requested.connect(self.exit_review_mode)
             self._review_widget.generate_requested.connect(self._on_review_generate)
+            self._review_widget.export_ffmpeg_requested.connect(self._on_export_ffmpeg)
             self._review_widget.game_completed_toggled.connect(self._on_game_completed_toggled)
             self._review_widget.return_to_menu_requested.connect(self.return_to_menu_requested.emit)
 
@@ -2121,6 +2126,127 @@ class MainWindow(QMainWindow):
                 duration_ms=5000
             )
 
+    @pyqtSlot()
+    def _on_export_ffmpeg(self) -> None:
+        """Handle FFmpeg MP4 export request.
+
+        Exports rally segments directly to MP4 using FFmpeg with hardware encoding.
+        Uses a non-blocking progress dialog with background threading.
+        Shows toast notifications on completion.
+        """
+        # Check if export already in progress
+        if self._active_export_dialog is not None:
+            ToastManager.show_warning(
+                self,
+                "Export already in progress",
+                duration_ms=3000
+            )
+            self._active_export_dialog.raise_()
+            self._active_export_dialog.activateWindow()
+            return
+
+        # Get segments from rally manager
+        segments = self.rally_manager.to_segments()
+
+        # Check if there are segments to export
+        if not segments:
+            msg = "No clips to export" if self._is_highlights_mode else "No rallies to export"
+            ToastManager.show_warning(self, msg, duration_ms=3000)
+            return
+
+        # Show file save dialog for MP4 output
+        default_dir = str(Path.home() / "Videos")
+        default_filename = f"{self.config.video_path.stem}.mp4"
+        selected_path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export to MP4",
+            str(Path(default_dir) / default_filename),
+            "MP4 Video (*.mp4);;All Files (*)"
+        )
+
+        # Check if user cancelled
+        if not selected_path_str:
+            return
+
+        selected_path = Path(selected_path_str)
+
+        # Build player_names dict
+        player_names = {
+            "team1": self.config.team1_players,
+            "team2": self.config.team2_players,
+            "game_type": self.config.game_type
+        }
+
+        # Check if game is marked as completed (only for normal mode)
+        game_completion_info = None
+        if not self._is_highlights_mode and self._review_widget is not None and self._review_widget.is_game_completed():
+            final_score, winning_names = self._review_widget.get_game_completion_info()
+            winning_team = 0 if self.score_state.score[0] > self.score_state.score[1] else 1
+            game_completion_info = GameCompletionInfo(
+                is_completed=True,
+                final_score=final_score,
+                winning_team=winning_team,
+                winning_team_names=winning_names,
+                extension_seconds=8.0
+            )
+
+        # Create FFmpeg exporter
+        exporter = FFmpegExporter(
+            video_path=self.config.video_path,
+            segments=segments,
+            fps=self.video_fps,
+            player_names=player_names,
+            game_completion=game_completion_info
+        )
+
+        # Create and show non-blocking progress dialog
+        dialog = ExportProgressDialog(
+            exporter=exporter,
+            output_path=selected_path,
+            parent=self
+        )
+        dialog.export_finished.connect(self._on_export_finished)
+        dialog.export_cancelled_signal.connect(self._on_export_cancelled)
+
+        self._active_export_dialog = dialog
+        dialog.show()  # Non-blocking
+
+    @pyqtSlot(bool, Path, str)
+    def _on_export_finished(self, success: bool, output_path: Path, error_message: str) -> None:
+        """Handle export completion signal.
+
+        Args:
+            success: True if export succeeded
+            output_path: Path to exported file if successful
+            error_message: Error description if failed
+        """
+        self._active_export_dialog = None
+
+        if success:
+            ToastManager.show_success(
+                self,
+                f"MP4 exported to {output_path.name}",
+                duration_ms=5000
+            )
+            # Open file manager to output directory
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
+        else:
+            ToastManager.show_error(
+                self,
+                f"Export failed: {error_message}",
+                duration_ms=5000
+            )
+
+    @pyqtSlot()
+    def _on_export_cancelled(self) -> None:
+        """Handle export cancellation signal."""
+        self._active_export_dialog = None
+        ToastManager.show_warning(
+            self,
+            "Export cancelled",
+            duration_ms=3000
+        )
+
     def _check_compact_mode(self) -> None:
         """Check if compact mode should be toggled based on window width."""
         width = self.width()
@@ -2180,11 +2306,27 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event.
 
-        Checks for unsaved changes and prompts user before closing.
+        Checks for active export and unsaved changes before closing.
 
         Args:
             event: Close event from Qt
         """
+        # Check if export is in progress
+        if self._active_export_dialog is not None:
+            reply = QMessageBox.question(
+                self,
+                "Export in Progress",
+                "Video export is still in progress. Cancel export and quit?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+            # Cancel the export via close() which triggers cancellation
+            self._active_export_dialog.close()
+            self._active_export_dialog = None
+
         # Check if there are unsaved changes
         if self._dirty:
             # Show unsaved warning dialog
