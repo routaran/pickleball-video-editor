@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -139,7 +140,7 @@ class SetupDialog(QDialog):
         self.setWindowTitle("Pickleball Video Editor")
         self.setModal(True)
         self.setMinimumWidth(700)
-        self.setMinimumHeight(750)
+        self.setMinimumHeight(650)  # Fits all sections with minimal scrolling
 
         # Configuration result (set when accepted)
         self._config: GameConfig | None = None
@@ -496,11 +497,13 @@ class SetupDialog(QDialog):
         self.sessions_label = QLabel("RECENT SESSIONS")
         self.sessions_count_label = QLabel("")  # Will be populated later
         self.sessions_scroll = QScrollArea()
+        self.sessions_scroll.setObjectName("sessions-scroll")
         self.sessions_scroll.setWidgetResizable(True)
-        self.sessions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.sessions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.sessions_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.sessions_scroll.setMinimumHeight(200)
         self.sessions_container = QWidget()
+        self.sessions_container.setObjectName("sessions-container")
         self.sessions_layout = QHBoxLayout(self.sessions_container)
         self.sessions_layout.setContentsMargins(0, 0, 0, 0)
         self.sessions_layout.setSpacing(16)
@@ -555,16 +558,46 @@ class SetupDialog(QDialog):
         self.start_button.setObjectName("primary-button")
 
     def _create_layout(self) -> None:
-        """Create and configure the dialog layout."""
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(24)
-        main_layout.setContentsMargins(24, 24, 24, 24)
+        """Create and configure the dialog layout.
 
-        # Top header with Settings button
-        header_layout = QHBoxLayout()
+        Layout structure:
+            main_layout (QVBoxLayout)
+              ├─ header_layout (Settings button - stays fixed at top)
+              └─ QScrollArea (scrolls when needed)
+                  └─ content_widget
+                      ├─ sessions_section
+                      ├─ video_section
+                      ├─ config_layout
+                      ├─ team1_group
+                      ├─ team2_group
+                      └─ button_layout
+        """
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Top header with Settings button (stays fixed at top)
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(24, 24, 24, 12)
         header_layout.addStretch()
         header_layout.addWidget(self._settings_button)
-        main_layout.addLayout(header_layout)
+        main_layout.addWidget(header_widget)
+
+        # Create scrollable content area
+        self._content_scroll = QScrollArea()
+        self._content_scroll.setWidgetResizable(True)
+        self._content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._content_scroll.setObjectName("content-scroll")
+
+        # Content widget inside scroll area
+        content_widget = QWidget()
+        content_widget.setObjectName("content-widget")
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setSpacing(24)
+        content_layout.setContentsMargins(24, 12, 24, 24)
 
         # Recent Sessions section (conditionally visible)
         sessions_header_layout = QHBoxLayout()
@@ -579,11 +612,14 @@ class SetupDialog(QDialog):
         sessions_section_layout.addLayout(sessions_header_layout)
         sessions_section_layout.addWidget(self.sessions_scroll)
 
-        main_layout.addWidget(self.sessions_section)
+        content_layout.addWidget(self.sessions_section)
 
         # Video source section
-        video_layout = QVBoxLayout()
-        video_layout.setSpacing(8)
+        video_section = QWidget()
+        video_section.setMinimumHeight(100)  # Label + input row with comfortable padding
+        video_layout = QVBoxLayout(video_section)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        video_layout.setSpacing(SPACE_SM)
         video_layout.addWidget(self.video_label)
 
         video_input_layout = QHBoxLayout()
@@ -591,14 +627,15 @@ class SetupDialog(QDialog):
         video_input_layout.addWidget(self.browse_button)
         video_layout.addLayout(video_input_layout)
 
-        main_layout.addLayout(video_layout)
+        content_layout.addWidget(video_section)
 
         # Game configuration section (side by side)
         config_layout = QHBoxLayout()
-        config_layout.setSpacing(16)
+        config_layout.setSpacing(SPACE_MD)
 
         # Game type container
         game_type_container = QWidget()
+        game_type_container.setMinimumHeight(110)  # Label + combo with 16px padding each side
         game_type_layout = QVBoxLayout(game_type_container)
         game_type_layout.setContentsMargins(16, 16, 16, 16)
         game_type_layout.setSpacing(8)
@@ -608,6 +645,7 @@ class SetupDialog(QDialog):
 
         # Victory rules container
         self._victory_container = QWidget()
+        self._victory_container.setMinimumHeight(110)  # Label + combo with 16px padding each side
         victory_layout = QVBoxLayout(self._victory_container)
         victory_layout.setContentsMargins(16, 16, 16, 16)
         victory_layout.setSpacing(8)
@@ -618,35 +656,47 @@ class SetupDialog(QDialog):
         config_layout.addWidget(game_type_container)
         config_layout.addWidget(self._victory_container)
 
-        main_layout.addLayout(config_layout)
+        content_layout.addLayout(config_layout)
 
         # Team 1 section (first server)
+        self.team1_group.setMinimumHeight(160)  # Two rows at ~52px each + 16px margins top/bottom
         team1_layout = QFormLayout()
-        team1_layout.setSpacing(12)
+        team1_layout.setSpacing(SPACE_SM)
         team1_layout.setContentsMargins(16, 16, 16, 16)
         team1_layout.addRow(self.team1_player1_label, self.team1_player1_edit)
         team1_layout.addRow(self.team1_player2_label, self.team1_player2_edit)
         self.team1_group.setLayout(team1_layout)
 
-        main_layout.addWidget(self.team1_group)
+        content_layout.addWidget(self.team1_group)
 
         # Team 2 section
+        self.team2_group.setMinimumHeight(160)  # Two rows at ~52px each + 16px margins top/bottom
         team2_layout = QFormLayout()
-        team2_layout.setSpacing(12)
+        team2_layout.setSpacing(SPACE_SM)
         team2_layout.setContentsMargins(16, 16, 16, 16)
         team2_layout.addRow(self.team2_player1_label, self.team2_player1_edit)
         team2_layout.addRow(self.team2_player2_label, self.team2_player2_edit)
         self.team2_group.setLayout(team2_layout)
 
-        main_layout.addWidget(self.team2_group)
+        content_layout.addWidget(self.team2_group)
 
         # Dialog buttons
-        button_layout = QHBoxLayout()
+        button_widget = QWidget()
+        button_widget.setMinimumHeight(60)  # Touch-friendly button height
+        button_layout = QHBoxLayout(button_widget)
+        button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.addStretch()
         button_layout.addWidget(self.cancel_button)
         button_layout.addWidget(self.start_button)
 
-        main_layout.addLayout(button_layout)
+        content_layout.addWidget(button_widget)
+
+        # Add stretch to push content to top when window is larger
+        content_layout.addStretch()
+
+        # Set the content widget in the scroll area
+        self._content_scroll.setWidget(content_widget)
+        main_layout.addWidget(self._content_scroll)
 
         self.setLayout(main_layout)
 
@@ -695,24 +745,65 @@ class SetupDialog(QDialog):
                 background-color: {BG_SECONDARY};
             }}
 
+            #setupDialog QWidget#sessions-container {{
+                background-color: {BG_SECONDARY};
+            }}
+
+            #setupDialog QScrollArea#content-scroll {{
+                background-color: {BG_SECONDARY};
+                border: none;
+            }}
+
+            #setupDialog QScrollArea#content-scroll > QWidget {{
+                background-color: {BG_SECONDARY};
+            }}
+
+            #setupDialog QWidget#content-widget {{
+                background-color: {BG_SECONDARY};
+            }}
+
             #setupDialog QScrollBar:horizontal {{
                 height: 10px;
                 background-color: {BG_TERTIARY};
                 border-radius: 5px;
+                margin: 2px;
             }}
 
             #setupDialog QScrollBar::handle:horizontal {{
-                background-color: {BG_BORDER};
-                border-radius: 5px;
-                min-width: 40px;
+                background-color: {TEXT_SECONDARY};
+                border-radius: 4px;
+                min-width: 30px;
             }}
 
             #setupDialog QScrollBar::handle:horizontal:hover {{
-                background-color: {TEXT_ACCENT};
+                background-color: {PRIMARY_ACTION};
             }}
 
-            #setupDialog QScrollBar::add-line:horizontal, #setupDialog QScrollBar::sub-line:horizontal {{
+            #setupDialog QScrollBar::add-line:horizontal,
+            #setupDialog QScrollBar::sub-line:horizontal {{
                 width: 0px;
+            }}
+
+            #setupDialog QScrollBar:vertical {{
+                width: 10px;
+                background-color: {BG_TERTIARY};
+                border-radius: 5px;
+                margin: 2px;
+            }}
+
+            #setupDialog QScrollBar::handle:vertical {{
+                background-color: {TEXT_SECONDARY};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+
+            #setupDialog QScrollBar::handle:vertical:hover {{
+                background-color: {PRIMARY_ACTION};
+            }}
+
+            #setupDialog QScrollBar::add-line:vertical,
+            #setupDialog QScrollBar::sub-line:vertical {{
+                height: 0px;
             }}
 
             #setupDialog QLineEdit {{
@@ -722,6 +813,8 @@ class SetupDialog(QDialog):
                 border-radius: 4px;
                 padding: 8px 12px;
                 font-size: 14px;
+                min-height: 36px;   /* Prevents vertical squishing */
+                min-width: 200px;   /* Prevents horizontal squishing */
             }}
 
             #setupDialog QLineEdit:focus {{
