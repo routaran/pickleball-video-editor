@@ -14,15 +14,15 @@ Visual Features:
 - Rally count and last modified time
 - Warning indicator for missing video files
 - Hover state with accent border
-- Optional context menu or delete button
+- Absolutely positioned delete button (bottom-left) and load hint (bottom-right)
 """
 
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QEnterEvent, QMouseEvent, QResizeEvent
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -33,7 +33,6 @@ from PyQt6.QtWidgets import (
 )
 
 from src.ui.styles import (
-    BG_BORDER,
     BG_SECONDARY,
     BG_TERTIARY,
     BORDER_COLOR,
@@ -41,7 +40,6 @@ from src.ui.styles import (
     RADIUS_LG,
     SPACE_MD,
     SPACE_SM,
-    SPACE_XS,
     TEXT_ACCENT,
     TEXT_DISABLED,
     TEXT_PRIMARY,
@@ -154,7 +152,15 @@ class SavedSessionCard(QFrame):
     Visual States:
     - Normal: Dark background with border
     - Hover: Accent-colored border with slight background change
-    - Missing Video: Grayed out with warning icon
+    - Missing Video: Grayed out with warning icon, yellow border on hover
+
+    Layout Structure:
+    - Header: Video name + timestamp (top-right)
+    - Score: Prominent center display
+    - Meta row: Rally count • game type (with warning icon if video missing)
+    - Overlays (absolutely positioned, shown on hover):
+      - Delete button: Bottom-left corner with red background
+      - Load hint: Bottom-right corner "Click to load →"
 
     Signals:
         clicked(SavedSessionInfo): Emitted when card is clicked
@@ -163,6 +169,9 @@ class SavedSessionCard(QFrame):
 
     clicked = pyqtSignal(SavedSessionInfo)
     delete_requested = pyqtSignal(SavedSessionInfo)
+
+    # Delete button dimensions
+    DELETE_BTN_SIZE = 0
 
     def __init__(
         self,
@@ -177,18 +186,21 @@ class SavedSessionCard(QFrame):
         """
         super().__init__(parent)
         self._session_info = session_info
+        self._delete_btn: QPushButton | None = None
+        self._load_hint: QLabel | None = None
         self._init_ui()
+        self._init_overlays()
         self._apply_styling()
         # Ensure card has minimum height to display all content
-        self.setMinimumHeight(170)
+        self.setMinimumHeight(140)
 
     def _init_ui(self) -> None:
-        """Initialize UI components."""
+        """Initialize main UI components (not overlays)."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
         layout.setSpacing(SPACE_SM)
 
-        # Header: Video name + delete button
+        # Header: Video name + timestamp
         header_layout = QHBoxLayout()
         header_layout.setSpacing(SPACE_SM)
 
@@ -199,26 +211,13 @@ class SavedSessionCard(QFrame):
         video_name_label.setToolTip(self._session_info.video_name)
         header_layout.addWidget(video_name_label, stretch=1)
 
-        # Delete button (small X button)
-        delete_btn = QPushButton("×")
-        delete_btn.setFont(Fonts.body(size=18, weight=700))
-        delete_btn.setFixedSize(24, 24)
-        delete_btn.clicked.connect(self._on_delete_clicked)
-        delete_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {TEXT_SECONDARY};
-                border: none;
-                border-radius: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {BG_BORDER};
-                color: {TEXT_PRIMARY};
-            }}
-        """)
-        delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        delete_btn.setToolTip("Delete session")
-        header_layout.addWidget(delete_btn)
+        # Timestamp (right side of header)
+        time_label = QLabel(_format_relative_time(self._session_info.last_modified))
+        time_label.setFont(Fonts.secondary())
+        time_label.setStyleSheet(
+            f"color: {TEXT_DISABLED if not self._session_info.video_exists else TEXT_SECONDARY};"
+        )
+        header_layout.addWidget(time_label)
 
         layout.addLayout(header_layout)
 
@@ -229,56 +228,80 @@ class SavedSessionCard(QFrame):
         score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(score_label)
 
-        # Metadata row: rally count + game type
-        metadata_layout = QHBoxLayout()
-        metadata_layout.setSpacing(SPACE_XS)
+        # Meta row: rally count • game type (with optional warning)
+        meta_layout = QHBoxLayout()
+        meta_layout.setSpacing(SPACE_SM)
 
-        rally_count_label = QLabel(
-            f"{self._session_info.rally_count} {'rally' if self._session_info.rally_count == 1 else 'rallies'}"
-        )
-        rally_count_label.setFont(Fonts.secondary())
-        rally_count_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        metadata_layout.addWidget(rally_count_label)
-
-        # Bullet separator
-        bullet = QLabel("•")
-        bullet.setFont(Fonts.secondary())
-        bullet.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        metadata_layout.addWidget(bullet)
-
-        game_type_label = QLabel(self._session_info.game_type)
-        game_type_label.setFont(Fonts.secondary())
-        game_type_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        metadata_layout.addWidget(game_type_label)
-
-        metadata_layout.addStretch()
-
-        layout.addLayout(metadata_layout)
-
-        # Last modified with warning if video missing
-        footer_layout = QHBoxLayout()
-        footer_layout.setSpacing(SPACE_XS)
-
+        # Warning icon for missing video (at start of meta row)
         if not self._session_info.video_exists:
             warning_icon = QLabel("⚠")
             warning_icon.setFont(Fonts.body(size=12))
             warning_icon.setStyleSheet(f"color: {TEXT_WARNING};")
             warning_icon.setToolTip("Video file not found")
-            footer_layout.addWidget(warning_icon)
+            meta_layout.addWidget(warning_icon)
 
-        time_label = QLabel(_format_relative_time(self._session_info.last_modified))
-        time_label.setFont(Fonts.secondary())
-        time_label.setStyleSheet(
-            f"color: {TEXT_DISABLED if not self._session_info.video_exists else TEXT_SECONDARY};"
+        # Rally count
+        rally_count_label = QLabel(
+            f"{self._session_info.rally_count} {'rally' if self._session_info.rally_count == 1 else 'rallies'}"
         )
-        footer_layout.addWidget(time_label)
+        rally_count_label.setFont(Fonts.secondary())
+        rally_count_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        meta_layout.addWidget(rally_count_label)
 
-        footer_layout.addStretch()
+        # Bullet separator
+        bullet = QLabel("•")
+        bullet.setFont(Fonts.secondary())
+        bullet.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        meta_layout.addWidget(bullet)
 
-        layout.addLayout(footer_layout)
+        # Game type
+        game_type_label = QLabel(self._session_info.game_type)
+        game_type_label.setFont(Fonts.secondary())
+        game_type_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        meta_layout.addWidget(game_type_label)
+
+        meta_layout.addStretch()
+        layout.addLayout(meta_layout)
+
+        # Add bottom padding to make room for overlays
+        layout.addSpacing(SPACE_MD)
 
         # Make entire card clickable
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _init_overlays(self) -> None:
+        """Initialize absolutely positioned overlay widgets.
+
+        Creates the delete button (bottom-left) and load hint (bottom-right)
+        as direct children of the card, positioned manually in resizeEvent.
+        """
+        # Delete button (direct child, positioned at bottom-left corner)
+        self._delete_btn = QPushButton("🗑", self)
+        self._delete_btn.setFixedSize(self.DELETE_BTN_SIZE, self.DELETE_BTN_SIZE)
+        self._delete_btn.clicked.connect(self._on_delete_clicked)
+        self._delete_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ef4444;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover { background-color: #dc2626; }
+            QPushButton:pressed { background-color: #b91c1c; }
+        """)
+        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn.setToolTip("Delete session")
+        self._delete_btn.setVisible(False)
+
+        # Load hint (bottom-right corner)
+        self._load_hint = QLabel("Click to load →", self)
+        self._load_hint.setFont(Fonts.secondary())
+        self._load_hint.setStyleSheet(f"color: {PRIMARY_ACTION};")
+        self._load_hint.adjustSize()
+        self._load_hint.setVisible(False)
 
     def _apply_styling(self) -> None:
         """Apply card styling with hover effects."""
@@ -314,7 +337,7 @@ class SavedSessionCard(QFrame):
             """)
 
         # Set minimum size for consistent card layout
-        self.setMinimumSize(240, 160)
+        self.setMinimumSize(240, 140)
         self.setMaximumWidth(320)
 
     def _truncate_filename(self, filename: str, max_length: int = 30) -> str:
@@ -345,6 +368,51 @@ class SavedSessionCard(QFrame):
         """Handle delete button click."""
         self.delete_requested.emit(self._session_info)
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Position overlay widgets when card is resized.
+
+        Args:
+            event: Resize event
+        """
+        super().resizeEvent(event)
+        self._position_overlays()
+
+    def _position_overlays(self) -> None:
+        """Position the delete button and load hint overlays."""
+        # Position delete button at bottom-left corner with margin inside card
+        if self._delete_btn is not None:
+            self._delete_btn.move(8, self.height() - self._delete_btn.height() - 8)
+
+        # Position load hint at bottom-right corner
+        if self._load_hint is not None:
+            hint_x = self.width() - self._load_hint.width() - SPACE_MD
+            hint_y = self.height() - self._load_hint.height() - SPACE_SM
+            self._load_hint.move(hint_x, hint_y)
+
+    def enterEvent(self, event: QEnterEvent) -> None:
+        """Show hover overlays when mouse enters card.
+
+        Args:
+            event: Enter event
+        """
+        if self._delete_btn is not None:
+            self._delete_btn.setVisible(True)
+        if self._load_hint is not None:
+            self._load_hint.setVisible(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        """Hide hover overlays when mouse leaves card.
+
+        Args:
+            event: Leave event
+        """
+        if self._delete_btn is not None:
+            self._delete_btn.setVisible(False)
+        if self._load_hint is not None:
+            self._load_hint.setVisible(False)
+        super().leaveEvent(event)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle mouse press to emit clicked signal.
 
@@ -370,12 +438,24 @@ class SavedSessionCard(QFrame):
             session_info: New session metadata
         """
         self._session_info = session_info
-        # Clear and rebuild UI
+
+        # Clean up old overlays
+        if self._delete_btn is not None:
+            self._delete_btn.deleteLater()
+            self._delete_btn = None
+        if self._load_hint is not None:
+            self._load_hint.deleteLater()
+            self._load_hint = None
+
+        # Clear and rebuild main layout
         layout = self.layout()
         if layout:
             while layout.count():
                 item = layout.takeAt(0)
                 if item.widget():
                     item.widget().deleteLater()
+
         self._init_ui()
+        self._init_overlays()
         self._apply_styling()
+        self._position_overlays()
