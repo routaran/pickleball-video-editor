@@ -153,8 +153,8 @@ class WindowSizeConfig:
     A value of 0 for max_width/max_height means unlimited.
     """
 
-    min_width: int = 1400
-    min_height: int = 1080
+    min_width: int = 800
+    min_height: int = 600
     max_width: int = 0  # 0 = unlimited
     max_height: int = 0  # 0 = unlimited
 
@@ -169,8 +169,8 @@ class WindowSizeConfig:
         Missing fields are filled with defaults.
         """
         return cls(
-            min_width=data.get("min_width", 1400),
-            min_height=data.get("min_height", 1080),
+            min_width=data.get("min_width", 800),
+            min_height=data.get("min_height", 600),
             max_width=data.get("max_width", 0),
             max_height=data.get("max_height", 0),
         )

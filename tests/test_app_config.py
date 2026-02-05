@@ -281,11 +281,11 @@ class TestWindowSizeConfig:
     """Test WindowSizeConfig serialization and constraints."""
 
     def test_default_values(self):
-        """Verify default min 1400x1080, max unlimited (0x0)."""
+        """Verify default min 800x600, max unlimited (0x0)."""
         config = WindowSizeConfig()
 
-        assert config.min_width == 1400
-        assert config.min_height == 1080
+        assert config.min_width == 800
+        assert config.min_height == 600
         assert config.max_width == 0   # 0 = unlimited
         assert config.max_height == 0  # 0 = unlimited
 
@@ -300,13 +300,13 @@ class TestWindowSizeConfig:
         """Custom window size constraints are stored correctly."""
         config = WindowSizeConfig(
             min_width=1920,
-            min_height=1080,
+            min_height=600,
             max_width=3840,
             max_height=2160,
         )
 
         assert config.min_width == 1920
-        assert config.min_height == 1080
+        assert config.min_height == 600
         assert config.max_width == 3840
         assert config.max_height == 2160
 
@@ -335,7 +335,7 @@ class TestWindowSizeConfig:
         config = WindowSizeConfig.from_dict(data)
 
         assert config.min_width == 1920
-        assert config.min_height == 1080  # Default
+        assert config.min_height == 600  # Default
         assert config.max_width == 0      # Default
         assert config.max_height == 0     # Default
 
@@ -343,8 +343,8 @@ class TestWindowSizeConfig:
         """Empty dict uses all defaults."""
         config = WindowSizeConfig.from_dict({})
 
-        assert config.min_width == 1400
-        assert config.min_height == 1080
+        assert config.min_width == 800
+        assert config.min_height == 600
         assert config.max_width == 0
         assert config.max_height == 0
 
@@ -369,8 +369,8 @@ class TestAppSettings:
         assert settings.skip_durations.arrow_up == 30.0
 
         # Verify window size defaults
-        assert settings.window_size.min_width == 1400
-        assert settings.window_size.min_height == 1080
+        assert settings.window_size.min_width == 800
+        assert settings.window_size.min_height == 600
         assert settings.window_size.max_width == 0
         assert settings.window_size.max_height == 0
 
@@ -415,7 +415,7 @@ class TestAppSettings:
             ),
             window_size=WindowSizeConfig(
                 min_width=1920,
-                min_height=1080,
+                min_height=600,
                 max_width=3840,
                 max_height=2160,
             ),
@@ -441,7 +441,7 @@ class TestAppSettings:
 
         # Verify window size
         assert loaded.window_size.min_width == 1920
-        assert loaded.window_size.min_height == 1080
+        assert loaded.window_size.min_height == 600
         assert loaded.window_size.max_width == 3840
         assert loaded.window_size.max_height == 2160
 
@@ -455,7 +455,7 @@ class TestAppSettings:
         # Should return defaults
         assert settings.shortcuts.rally_start == "C"
         assert settings.skip_durations.small_backward == 1.0
-        assert settings.window_size.min_width == 1400
+        assert settings.window_size.min_width == 800
 
     def test_load_corrupt_json(self, temp_config_dir):
         """Returns defaults when JSON is invalid."""
@@ -469,7 +469,7 @@ class TestAppSettings:
         # Should return defaults
         assert settings.shortcuts.rally_start == "C"
         assert settings.skip_durations.small_backward == 1.0
-        assert settings.window_size.min_width == 1400
+        assert settings.window_size.min_width == 800
 
     def test_load_partial_config(self, temp_config_dir):
         """Missing fields use defaults when loading partial config."""
@@ -503,7 +503,7 @@ class TestAppSettings:
         # Missing sections use defaults
         assert settings.skip_durations.small_backward == 1.0
         assert settings.skip_durations.arrow_up == 30.0
-        assert settings.window_size.min_width == 1400
+        assert settings.window_size.min_width == 800
         assert settings.window_size.max_height == 0
 
     def test_load_non_dict_json(self, temp_config_dir):
@@ -519,7 +519,7 @@ class TestAppSettings:
         # Should return defaults
         assert settings.shortcuts.rally_start == "C"
         assert settings.skip_durations.small_backward == 1.0
-        assert settings.window_size.min_width == 1400
+        assert settings.window_size.min_width == 800
 
     def test_load_invalid_section_types(self, temp_config_dir):
         """Returns defaults for sections that are not dicts."""
@@ -542,7 +542,7 @@ class TestAppSettings:
         # All sections should use defaults
         assert settings.shortcuts.rally_start == "C"
         assert settings.skip_durations.small_backward == 1.0
-        assert settings.window_size.min_width == 1400
+        assert settings.window_size.min_width == 800
 
     def test_to_dict_structure(self):
         """to_dict() returns correct nested structure."""
@@ -569,7 +569,7 @@ class TestAppSettings:
 
         # Check window_size section
         assert data["window_size"]["min_width"] == 1600
-        assert data["window_size"]["min_height"] == 1080
+        assert data["window_size"]["min_height"] == 600
 
     def test_save_json_format(self, temp_config_dir):
         """Saved JSON is well-formatted and readable."""

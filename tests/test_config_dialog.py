@@ -329,8 +329,8 @@ class TestWindowSizeTab:
         dialog = ConfigDialog(default_settings)
         dialog.tab_widget.setCurrentIndex(2)  # Window Size tab
 
-        assert dialog.min_width_spin.value() == 1400
-        assert dialog.min_height_spin.value() == 1080
+        assert dialog.min_width_spin.value() == 800
+        assert dialog.min_height_spin.value() == 600
         assert dialog.max_width_spin.value() == 0  # Unlimited
         assert dialog.max_height_spin.value() == 0  # Unlimited
 
@@ -473,7 +473,7 @@ class TestDialogBehavior:
         dialog.min_height_spin.setValue(1100)
         dialog.unlimited_max_checkbox.setChecked(False)
         dialog.max_width_spin.setValue(1920)
-        dialog.max_height_spin.setValue(1080)
+        dialog.max_height_spin.setValue(600)
 
         # Apply
         dialog._on_apply()
@@ -497,7 +497,7 @@ class TestDialogBehavior:
         assert result.settings.window_size.min_width == 1500
         assert result.settings.window_size.min_height == 1100
         assert result.settings.window_size.max_width == 1920
-        assert result.settings.window_size.max_height == 1080
+        assert result.settings.window_size.max_height == 600
 
     def test_apply_disabled_on_validation_error(self, qapp, default_settings):
         """Apply button disabled when validation errors exist."""
