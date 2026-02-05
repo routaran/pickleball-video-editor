@@ -341,6 +341,9 @@ class ClipTimelineWidget(QFrame):
         super().__init__(parent)
         self.setObjectName("clip_timeline")
 
+        # Ensure timeline remains visible at all screen sizes
+        self.setMinimumHeight(56)
+
         # State
         self._clips: list[tuple[float, float]] = []  # (start_seconds, end_seconds)
         self._cells: list[_ClipCell] = []

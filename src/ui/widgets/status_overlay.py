@@ -77,6 +77,9 @@ class StatusOverlay(QFrame):
         # Set minimum width to prevent truncation
         self.setMinimumWidth(480)
 
+        # Ensure overlay remains visible at all screen sizes
+        self.setMinimumHeight(50)
+
         # Set initial state
         self.set_status(in_rally=False)
 

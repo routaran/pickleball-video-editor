@@ -155,6 +155,9 @@ class PlaybackControls(QFrame):
         self._is_playing = False
         self._current_speed = 1.0
 
+        # Ensure control bar remains visible at all screen sizes
+        self.setMinimumHeight(64)
+
         self._init_ui()
         self._apply_styles()
         self._connect_signals()
