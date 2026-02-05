@@ -19,6 +19,7 @@ from PyQt6.QtCore import Qt, QSize, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -26,6 +27,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -272,24 +274,18 @@ class TimingControlWidget(QWidget):
         self._style_adjust_button(end_plus_btn)
         controls_layout.addWidget(end_plus_btn, 1, 4)
 
-        layout.addLayout(controls_layout)
-
-        # Duration display
-        duration_layout = QHBoxLayout()
-        duration_layout.setSpacing(SPACE_SM)
-
+        # Duration display - immediately below the +/- buttons (row 2)
         duration_label = QLabel("DURATION")
         duration_label.setFont(Fonts.label())
         duration_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        duration_layout.addWidget(duration_label)
+        controls_layout.addWidget(duration_label, 2, 0)
 
         self._duration_label = QLabel("00:00.0")
         self._duration_label.setFont(Fonts.timestamp())
         self._duration_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        duration_layout.addWidget(self._duration_label)
-        duration_layout.addStretch()
+        controls_layout.addWidget(self._duration_label, 2, 1)
 
-        layout.addLayout(duration_layout)
+        layout.addLayout(controls_layout)
 
         # Container styling
         self.setStyleSheet(f"""
@@ -772,16 +768,74 @@ class ReviewModeWidget(QWidget):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        """Initialize UI components with dual-splitter layout."""
+        """Initialize UI components with dual-splitter layout inside scroll area."""
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
         main_layout.setSpacing(SPACE_MD)
 
-        # Header with rally progress (stays at top, outside splitters)
+        # Header with rally progress (stays at top, outside scroll area)
         self._header = RallyHeaderWidget()
         self._header.exit_requested.connect(self.exit_requested.emit)
         self._header.return_to_menu_requested.connect(self.return_to_menu_requested.emit)
         main_layout.addWidget(self._header)
+
+        # ===================================================================
+        # SCROLL AREA - wraps all content below header for small screens
+        # ===================================================================
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll_area.setStyleSheet(f"""
+            QScrollArea {{
+                background-color: {BG_PRIMARY};
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                background-color: {BG_TERTIARY};
+                width: 10px;
+                border-radius: 5px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {BG_BORDER};
+                border-radius: 4px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {PRIMARY_ACTION};
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{
+                height: 0;
+            }}
+            QScrollBar:horizontal {{
+                background-color: {BG_TERTIARY};
+                height: 10px;
+                border-radius: 5px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background-color: {BG_BORDER};
+                border-radius: 4px;
+                min-width: 30px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background-color: {PRIMARY_ACTION};
+            }}
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal {{
+                width: 0;
+            }}
+        """)
+
+        # Container widget for scroll area content
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet(f"background-color: {BG_PRIMARY};")
+        scroll_content_layout = QVBoxLayout(scroll_content)
+        scroll_content_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_content_layout.setSpacing(0)
 
         # ===================================================================
         # OUTER SPLITTER (Vertical) - separates top section from rally list
@@ -803,6 +857,7 @@ class ReviewModeWidget(QWidget):
         # TOP SECTION - contains inner splitter (video + controls)
         # ===================================================================
         top_section = QWidget()
+        top_section.setMinimumHeight(200)  # Allow video area to shrink for small screens
         top_section_layout = QVBoxLayout(top_section)
         top_section_layout.setContentsMargins(0, 0, 0, 0)
         top_section_layout.setSpacing(0)
@@ -822,10 +877,10 @@ class ReviewModeWidget(QWidget):
         """)
 
         # Video Placeholder (for main_window to embed video widget)
-        # Minimum size enforces 16:9 video at 870x490 (user requirement)
+        # Allow video to shrink significantly for small screens - 16:9 at 320x180
         self._video_placeholder = QWidget()
         self._video_placeholder.setObjectName("video_placeholder")
-        self._video_placeholder.setMinimumSize(870, 490)
+        self._video_placeholder.setMinimumSize(320, 180)
         # CRITICAL: Make placeholder a native window so MPV's X11 window can be
         # properly reparented here. Without this, the video stays at (0,0) of main window.
         self._video_placeholder.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
@@ -833,10 +888,41 @@ class ReviewModeWidget(QWidget):
         # No background/border - the embedded video container provides its own styling
         self._video_placeholder.setStyleSheet("")
 
-        # Control Panel (Play Rally + Timing + Score)
+        # Control Panel (Play Rally + Timing + Score) - wrapped in scroll area
+        control_panel_scroll = QScrollArea()
+        control_panel_scroll.setWidgetResizable(True)
+        control_panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        control_panel_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        control_panel_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        control_panel_scroll.setMinimumWidth(500)
+        control_panel_scroll.setMaximumWidth(550)
+        control_panel_scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background-color: transparent;
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                background-color: {BG_TERTIARY};
+                width: 8px;
+                border-radius: 4px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {BG_BORDER};
+                border-radius: 3px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {PRIMARY_ACTION};
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{
+                height: 0;
+            }}
+        """)
+
         control_panel = QWidget()
-        control_panel.setMinimumWidth(280)
-        control_panel.setMaximumWidth(400)
+        control_panel.setStyleSheet(f"background-color: transparent;")
         control_panel_layout = QVBoxLayout(control_panel)
         control_panel_layout.setContentsMargins(0, 0, 0, 0)
         control_panel_layout.setSpacing(SPACE_MD)
@@ -873,9 +959,12 @@ class ReviewModeWidget(QWidget):
 
         control_panel_layout.addStretch()
 
+        # Set control panel as scroll area content
+        control_panel_scroll.setWidget(control_panel)
+
         # Add widgets to inner splitter
         self._inner_splitter.addWidget(self._video_placeholder)
-        self._inner_splitter.addWidget(control_panel)
+        self._inner_splitter.addWidget(control_panel_scroll)
         self._inner_splitter.setSizes([600, 320])
         self._inner_splitter.setStretchFactor(0, 1)  # Video stretches
         self._inner_splitter.setStretchFactor(1, 0)  # Controls stay fixed width
@@ -886,6 +975,8 @@ class ReviewModeWidget(QWidget):
         # BOTTOM SECTION - rally list + navigation + generate
         # ===================================================================
         bottom_section = QWidget()
+        # CRITICAL: Set minimum height to ensure all controls visible (rally list + export cards)
+        bottom_section.setMinimumHeight(565)
         bottom_layout = QVBoxLayout(bottom_section)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(SPACE_MD)
@@ -1108,7 +1199,7 @@ class ReviewModeWidget(QWidget):
                 border-radius: {RADIUS_LG}px;
             }}
         """)
-        generate_container.setMinimumHeight(200)
+        generate_container.setMinimumHeight(240)  # Needs more height for export cards
         bottom_layout.addWidget(generate_container)
 
         # ===================================================================
@@ -1116,9 +1207,22 @@ class ReviewModeWidget(QWidget):
         # ===================================================================
         self._outer_splitter.addWidget(top_section)
         self._outer_splitter.addWidget(bottom_section)
-        self._outer_splitter.setSizes([350, 250])
+        # Initial sizes: video area gets less space, controls get more
+        self._outer_splitter.setSizes([300, 400])
+        # Stretch factors: video can shrink, bottom section maintains priority
+        self._outer_splitter.setStretchFactor(0, 1)  # Video can shrink
+        self._outer_splitter.setStretchFactor(1, 0)  # Bottom stays fixed
 
-        main_layout.addWidget(self._outer_splitter)
+        # Set minimum size for splitter content - this ensures scroll triggers
+        # when window is smaller than content needs
+        self._outer_splitter.setMinimumHeight(765)  # 200 (top min) + 565 (bottom min)
+
+        # Add splitter to scroll content
+        scroll_content_layout.addWidget(self._outer_splitter)
+
+        # Set scroll content and add scroll area to main layout
+        self._scroll_area.setWidget(scroll_content)
+        main_layout.addWidget(self._scroll_area, stretch=1)
 
         # Main container styling
         self.setStyleSheet(f"""
