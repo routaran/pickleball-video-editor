@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -134,8 +135,9 @@ class _VideoContainer(QWidget):
         # Ensure overlay is on top
         status_overlay.raise_()
 
-        # Set minimum size for 16:9 video (user requirement: 870x490)
-        self.setMinimumSize(870, 490)
+        # Set minimum size - allow shrinking for responsive layout
+        # 16:9 aspect ratio at 320x180 minimum for small screens
+        self.setMinimumSize(320, 180)
 
         # Force native window creation
         self.winId()
@@ -365,8 +367,13 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(SPACE_MD)
         main_layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
 
-        # Video area (player + overlay)
+        # Video area (player + overlay) - flexible but with minimum height
         video_area = self._create_video_area()
+        video_area.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding
+        )
+        video_area.setMinimumHeight(200)
         main_layout.addWidget(video_area, stretch=1)
 
         # Playback controls
@@ -474,6 +481,9 @@ class MainWindow(QMainWindow):
         self.clip_timeline.clip_play_requested.connect(self._on_clip_play_requested)
         layout.addWidget(self.clip_timeline)
 
+        # Ensure rally controls panel remains visible at all screen sizes
+        panel.setMinimumHeight(100)
+
         return panel
 
     def _create_toolbar(self) -> QFrame:
@@ -551,6 +561,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_return_to_menu)
         layout.addWidget(self.btn_save_session)
         layout.addWidget(self.btn_final_review)
+
+        # Ensure toolbar remains visible at all screen sizes
+        panel.setMinimumHeight(56)
 
         return panel
 
@@ -2249,18 +2262,48 @@ class MainWindow(QMainWindow):
         )
 
     def _check_compact_mode(self) -> None:
-        """Check if compact mode should be toggled based on window width."""
-        width = self.width()
-        new_compact = width < 950
-        if new_compact != self._compact_mode:
-            self._compact_mode = new_compact
-            self._apply_compact_styles()
+        """Apply compact styling based on window width.
 
-    def _apply_compact_styles(self) -> None:
-        """Apply or remove compact mode styles."""
+        Breakpoints:
+        - width < 800: ultra_compact mode
+        - width < 1000: compact mode
+        - width >= 1000: normal mode
+        """
+        width = self.width()
+
+        if width < 800:
+            new_mode = "ultra_compact"
+        elif width < 1000:
+            new_mode = "compact"
+        else:
+            new_mode = "normal"
+
+        # _compact_mode stores previous state; we use string comparison now
+        old_is_compact = self._compact_mode
+        new_is_compact = new_mode != "normal"
+
+        if new_is_compact != old_is_compact:
+            self._compact_mode = new_is_compact
+            self._apply_compact_styles(new_mode)
+
+    def _apply_compact_styles(self, mode: str = "normal") -> None:
+        """Apply mode-specific styles.
+
+        Args:
+            mode: One of "normal", "compact", or "ultra_compact"
+        """
         from PyQt6.QtGui import QFont
 
-        if self._compact_mode:
+        if mode == "ultra_compact":
+            # Smallest fonts for very narrow windows
+            for btn in [self.btn_rally_start, self.btn_server_wins,
+                        self.btn_receiver_wins, self.btn_undo]:
+                if btn:
+                    btn.setFont(QFont("IBM Plex Sans", 12))
+            # Notify status overlay
+            if hasattr(self, 'status_overlay') and self.status_overlay:
+                self.status_overlay.set_compact_mode(True)
+        elif mode == "compact":
             # Smaller fonts for compact mode
             for btn in [self.btn_rally_start, self.btn_server_wins,
                         self.btn_receiver_wins, self.btn_undo]:
