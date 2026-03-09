@@ -16,6 +16,7 @@ from .models import (
     Comment,
     Intervention,
     SessionState,
+    generate_export_basename,
 )
 from .score_state import ScoreState
 from .rally_manager import RallyManager
@@ -33,4 +34,5 @@ __all__ = [
     "ScoreState",
     "RallyManager",
     "SessionManager",
+    "generate_export_basename",
 ]

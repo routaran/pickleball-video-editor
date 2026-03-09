@@ -10,6 +10,7 @@ This module defines all dataclasses and enums for representing:
 All dataclasses implement to_dict/from_dict for JSON serialization.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -26,7 +27,41 @@ __all__ = [
     "Intervention",
     "GameCompletionInfo",
     "SessionState",
+    "generate_export_basename",
 ]
+
+
+def generate_export_basename(
+    video_stem: str,
+    game_type: str,
+    team1_players: list[str],
+    team2_players: list[str],
+) -> str:
+    """Generate a formatted export basename from video stem and game info.
+
+    Args:
+        video_stem: The video filename without extension
+        game_type: "singles", "doubles", or "highlights"
+        team1_players: Player names for team 1
+        team2_players: Player names for team 2
+
+    Returns:
+        Formatted basename like "2025-03-08_AliceCharlie_vs_BobDave",
+        or the original video_stem if it doesn't start with 8 digits.
+    """
+    date_part = video_stem[:8] if len(video_stem) >= 8 else ""
+    if not re.match(r"^\d{8}$", date_part):
+        return video_stem
+    date_formatted = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+
+    if game_type == "highlights":
+        return f"{date_formatted}_Highlights"
+
+    if not team1_players or not team2_players:
+        return video_stem
+    team1_str = "".join(p.strip().replace(" ", "") for p in team1_players)
+    team2_str = "".join(p.strip().replace(" ", "") for p in team2_players)
+    return f"{date_formatted}_{team1_str}_vs_{team2_str}"
 
 
 class ActionType(Enum):

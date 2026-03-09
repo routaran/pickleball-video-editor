@@ -20,7 +20,7 @@ from html import escape as xml_escape
 from pathlib import Path
 from typing import Any
 
-from src.core.models import GameCompletionInfo
+from src.core.models import GameCompletionInfo, generate_export_basename
 from src.video.probe import VideoInfo, probe_video, frames_to_timecode
 
 
@@ -181,7 +181,12 @@ class KdenliveGenerator:
             # Use default path: output_dir/{video_name}.kdenlive
             if not self.output_dir.exists():
                 self.output_dir.mkdir(parents=True, exist_ok=True)
-            video_basename = self.video_path.stem
+            video_basename = generate_export_basename(
+                self.video_path.stem,
+                self.game_type,
+                self.team1_players,
+                self.team2_players,
+            )
             kdenlive_path = self.output_dir / f"{video_basename}.kdenlive"
 
         # ASS file is always alongside the kdenlive file

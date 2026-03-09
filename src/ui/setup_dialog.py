@@ -46,7 +46,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.app_config import AppSettings
-from src.core.models import SessionState
+from src.core.models import SessionState, generate_export_basename
 from src.core.session_manager import SessionManager
 from src.ui.dialogs import ResumeSessionDialog, ResumeSessionResult, SessionDetails
 from src.ui.dialogs.config_dialog import ConfigDialog
@@ -97,6 +97,19 @@ class GameConfig:
             True if both teams have at least one player name
         """
         return len(self.team1_players) > 0 and len(self.team2_players) > 0
+
+    def export_base_filename(self) -> str:
+        """Generate a formatted export basename from video and game info.
+
+        Returns:
+            Formatted basename like "2025-03-08_AliceCharlie_vs_BobDave"
+        """
+        return generate_export_basename(
+            self.video_path.stem,
+            self.game_type,
+            self.team1_players,
+            self.team2_players,
+        )
 
 
 class SetupDialog(QDialog):

@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.app_config import AppSettings
+from src.core.export_manager import ExportManager
 from src.core.models import GameCompletionInfo, ScoreSnapshot, SessionState
 from src.core.rally_manager import RallyManager
 from src.core.score_state import ScoreState
@@ -196,6 +197,7 @@ class MainWindow(QMainWindow):
         self,
         config: GameConfig,
         app_settings: AppSettings | None = None,
+        export_manager: ExportManager | None = None,
         parent: QWidget | None = None,
     ) -> None:
         """Initialize main window with game configuration.
@@ -203,11 +205,13 @@ class MainWindow(QMainWindow):
         Args:
             config: Game configuration from SetupDialog (may include session_state for resuming)
             app_settings: Application settings for shortcuts and window sizes
+            export_manager: Application-level export manager for independent FFmpeg exports
             parent: Parent widget (optional)
         """
         super().__init__(parent)
         self.config = config
         self._app_settings = app_settings or AppSettings()
+        self._export_manager = export_manager
 
         # Track if we're in highlights mode (no scores, just cuts)
         self._is_highlights_mode = config.game_type == "highlights"
@@ -1717,7 +1721,7 @@ class MainWindow(QMainWindow):
         self._review_widget.set_rallies(rallies, fps=self.video_fps, is_highlights=self._is_highlights_mode)
 
         # Set default export path suggestion
-        default_path = str(self.config.video_path.parent / f"{self.config.video_path.stem}.kdenlive")
+        default_path = str(self.config.video_path.parent / f"{self.config.export_base_filename()}.kdenlive")
         self._review_widget.set_export_path(default_path)
 
         if self._is_highlights_mode:
@@ -2036,7 +2040,7 @@ class MainWindow(QMainWindow):
         else:
             # Show file save dialog for export path
             default_dir = str(Path.home() / "Videos")
-            default_filename = f"{self.config.video_path.stem}.kdenlive"
+            default_filename = f"{self.config.export_base_filename()}.kdenlive"
             selected_path_str, _ = QFileDialog.getSaveFileName(
                 self,
                 "Export Kdenlive Project",
@@ -2145,19 +2149,9 @@ class MainWindow(QMainWindow):
 
         Exports rally segments directly to MP4 using FFmpeg with hardware encoding.
         Uses a non-blocking progress dialog with background threading.
+        If an ExportManager is available, delegates to it for independent lifecycle.
         Shows toast notifications on completion.
         """
-        # Check if export already in progress
-        if self._active_export_dialog is not None:
-            ToastManager.show_warning(
-                self,
-                "Export already in progress",
-                duration_ms=3000
-            )
-            self._active_export_dialog.raise_()
-            self._active_export_dialog.activateWindow()
-            return
-
         # Get segments from rally manager
         segments = self.rally_manager.to_segments()
 
@@ -2169,7 +2163,7 @@ class MainWindow(QMainWindow):
 
         # Show file save dialog for MP4 output
         default_dir = str(Path.home() / "Videos")
-        default_filename = f"{self.config.video_path.stem}.mp4"
+        default_filename = f"{self.config.export_base_filename()}.mp4"
         selected_path_str, _ = QFileDialog.getSaveFileName(
             self,
             "Export to MP4",
@@ -2213,27 +2207,24 @@ class MainWindow(QMainWindow):
             encoder_settings=self._app_settings.encoder,
         )
 
-        # Create and show non-blocking progress dialog
-        dialog = ExportProgressDialog(
-            exporter=exporter,
-            output_path=selected_path,
-            parent=self
-        )
-        dialog.export_finished.connect(self._on_export_finished)
-        dialog.export_cancelled_signal.connect(self._on_export_cancelled)
-
-        self._active_export_dialog = dialog
-        dialog.show()  # Non-blocking
+        if self._export_manager is not None:
+            # Delegate to ExportManager for independent lifecycle
+            self._export_manager.start_export(exporter, selected_path)
+        else:
+            # Fallback: create dialog parented to self (legacy behavior)
+            dialog = ExportProgressDialog(
+                exporter=exporter,
+                output_path=selected_path,
+                parent=self
+            )
+            dialog.export_finished.connect(self._on_export_finished)
+            dialog.export_cancelled_signal.connect(self._on_export_cancelled)
+            self._active_export_dialog = dialog
+            dialog.show()
 
     @pyqtSlot(bool, Path, str)
     def _on_export_finished(self, success: bool, output_path: Path, error_message: str) -> None:
-        """Handle export completion signal.
-
-        Args:
-            success: True if export succeeded
-            output_path: Path to exported file if successful
-            error_message: Error description if failed
-        """
+        """Handle export completion signal (legacy fallback only)."""
         self._active_export_dialog = None
 
         if success:
@@ -2242,7 +2233,6 @@ class MainWindow(QMainWindow):
                 f"MP4 exported to {output_path.name}",
                 duration_ms=5000
             )
-            # Open file manager to output directory
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
         else:
             ToastManager.show_error(
@@ -2253,7 +2243,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def _on_export_cancelled(self) -> None:
-        """Handle export cancellation signal."""
+        """Handle export cancellation signal (legacy fallback only)."""
         self._active_export_dialog = None
         ToastManager.show_warning(
             self,
@@ -2351,12 +2341,13 @@ class MainWindow(QMainWindow):
         """Handle window close event.
 
         Checks for active export and unsaved changes before closing.
+        When using ExportManager, exports are independent and don't block close.
 
         Args:
             event: Close event from Qt
         """
-        # Check if export is in progress
-        if self._active_export_dialog is not None:
+        # Only block for legacy (non-ExportManager) exports
+        if self._export_manager is None and self._active_export_dialog is not None:
             reply = QMessageBox.question(
                 self,
                 "Export in Progress",

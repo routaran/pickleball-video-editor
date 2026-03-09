@@ -41,6 +41,7 @@ import sys
 from src import __version__
 from src.app import create_application
 from src.core.app_config import AppSettings
+from src.core.export_manager import ExportManager
 from src.ui.setup_dialog import SetupDialog
 from src.ui.main_window import MainWindow
 
@@ -53,6 +54,10 @@ def main() -> int:
     1. Start with the setup dialog (new session or resume existing)
     2. Edit video in the main window
     3. Return to the setup dialog from review mode if needed
+
+    FFmpeg exports are managed by ExportManager and survive MainWindow
+    destruction (e.g., returning to menu). The app stays alive until all
+    exports complete.
 
     Returns:
         Exit code (0 for success, non-zero for errors)
@@ -67,13 +72,22 @@ def main() -> int:
     # Load application settings
     app_settings = AppSettings.load()
 
+    # Create application-level export manager (survives MainWindow lifecycle)
+    export_manager = ExportManager()
+
     # Main application loop - allows returning to menu
     while True:
         # Show setup dialog with app settings
         setup_dialog = SetupDialog(app_settings=app_settings)
 
         if not setup_dialog.exec():
-            # User cancelled the setup dialog - exit application
+            # User cancelled the setup dialog
+            if export_manager.has_active_exports():
+                # Keep app alive until exports finish
+                print("Setup cancelled, waiting for active exports to finish...")
+                export_manager.all_exports_finished.connect(app.quit)
+                app.exec()
+                export_manager.all_exports_finished.disconnect(app.quit)
             print("Setup cancelled by user")
             return 0
 
@@ -93,8 +107,8 @@ def main() -> int:
         print(f"Loading video: {game_config.video_path}")
         print(f"Game type: {game_config.game_type}")
 
-        # Create main window with game config and app settings
-        main_window = MainWindow(game_config, app_settings)
+        # Create main window with game config, app settings, and export manager
+        main_window = MainWindow(game_config, app_settings, export_manager=export_manager)
 
         # Track if we should return to menu
         return_to_menu = False
@@ -105,6 +119,8 @@ def main() -> int:
             return_to_menu = True
             print("Return to menu requested")
             main_window.close()
+            # Force app.exec() to return so the loop continues
+            app.quit()
 
         # Connect the return to menu signal
         main_window.return_to_menu_requested.connect(on_return_to_menu)
@@ -123,6 +139,12 @@ def main() -> int:
 
         # If return_to_menu is True, loop continues to show setup dialog again
         print("Returning to setup dialog...")
+
+    # If exports are still running, keep the app alive until they finish
+    if export_manager.has_active_exports():
+        print("Waiting for active exports to finish...")
+        export_manager.all_exports_finished.connect(app.quit)
+        app.exec()
 
     return 0
 
