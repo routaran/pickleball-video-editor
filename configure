@@ -39,7 +39,7 @@ fatal() {
 # Default Configuration
 # -----------------------------------------------------------------------------
 PREFIX="/usr/local"
-PYTHON_CMD="python3"
+PYTHON_CMD="python"
 USE_VENV="yes"
 ENABLE_DEV="no"
 VENV_DIR=".venv"

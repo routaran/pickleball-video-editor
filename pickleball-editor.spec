@@ -20,6 +20,15 @@ src_dir = project_root / 'src'
 # Resources directory (if it exists)
 resources_dir = project_root / 'resources'
 
+# Build datas list, filtering out None values
+_datas = [
+    # Include resources directory if it exists
+    (str(resources_dir), 'resources') if resources_dir.exists() else None,
+    # Include stylesheets
+    (str(src_dir / 'ui' / 'styles' / 'theme.qss'), 'src/ui/styles'),
+]
+datas_list = [item for item in _datas if item is not None]
+
 # -----------------------------------------------------------------------------
 # Analysis - Collect all source files and dependencies
 # -----------------------------------------------------------------------------
@@ -37,12 +46,7 @@ a = Analysis(
     binaries=[],
 
     # Data files to include
-    datas=[
-        # Include resources directory if it exists
-        (str(resources_dir), 'resources') if resources_dir.exists() else None,
-        # Include stylesheets
-        (str(src_dir / 'ui' / 'styles' / 'theme.qss'), 'src/ui/styles'),
-    ],
+    datas=datas_list,
 
     # Hidden imports (modules not automatically detected)
     hiddenimports=[
@@ -148,9 +152,6 @@ a = Analysis(
     # Optimize imports
     optimize=2,
 )
-
-# Remove None entries from datas
-a.datas = [item for item in a.datas if item is not None]
 
 # -----------------------------------------------------------------------------
 # PYZ - Python archive
