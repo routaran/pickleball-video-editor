@@ -65,18 +65,17 @@ cd pickleball-video-editor
 
 # Configure (checks dependencies, creates virtual environment, installs packages)
 ./configure
+```
 
-# Build the executable
-make
+On success, `./configure` prints a summary of next steps:
 
-# Run tests (optional)
-make test
-
-# Install system-wide
-sudo make install
-
-# Or install to your home directory
-make install PREFIX=~/.local
+```
+Next Steps:
+  1. Build the application:  make
+  2. Run tests:              make test
+  3. Install on profile      make install PREFIX=~/.local
+  4. Install system-wide:    sudo make install
+  5. Run in dev mode:        make run
 ```
 
 ### Development Setup
