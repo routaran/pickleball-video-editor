@@ -91,6 +91,7 @@ class Rally:
     score_at_start: str
     winner: str
     comment: str | None = None
+    is_post_game: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for JSON export.
@@ -104,6 +105,7 @@ class Rally:
             "score_at_start": self.score_at_start,
             "winner": self.winner,
             "comment": self.comment,
+            "is_post_game": self.is_post_game,
         }
 
     @classmethod
@@ -122,6 +124,7 @@ class Rally:
             score_at_start=data["score_at_start"],
             winner=data["winner"],
             comment=data.get("comment"),
+            is_post_game=data.get("is_post_game", False),
         )
 
 
