@@ -5,6 +5,8 @@ Exports survive MainWindow destruction (e.g., returning to menu) and can
 run concurrently across sessions.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
