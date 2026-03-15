@@ -369,7 +369,8 @@ class RallyManager:
             {
                 "in": rally.start_frame,
                 "out": rally.end_frame,
-                "score": rally.score_at_start
+                "score": rally.score_at_start,
+                "is_post_game": rally.is_post_game,
             }
             for rally in self.rallies
         ]

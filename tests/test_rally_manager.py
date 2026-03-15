@@ -190,9 +190,33 @@ class TestRallyManager:
         assert "in" in segments[0]
         assert "out" in segments[0]
         assert "score" in segments[0]
+        assert "is_post_game" in segments[0]
         assert segments[0]["in"] == 570
         assert segments[0]["out"] == 960
         assert segments[0]["score"] == "0-0-2"
+        assert segments[0]["is_post_game"] is False
+
+    def test_to_segments_includes_is_post_game(self):
+        """Test that is_post_game flag is propagated through to_segments()."""
+        manager = RallyManager(fps=60.0)
+        snapshot = ScoreSnapshot(score=(0, 0), serving_team=0, server_number=2)
+
+        # Normal rally
+        manager.start_rally(10.0, snapshot)
+        rally1 = manager.end_rally(15.0, "server", "0-0-2", snapshot)
+
+        # Post-game rally
+        manager.start_rally(20.0, snapshot)
+        rally2 = manager.end_rally(25.0, "", "", snapshot)
+        rally2.is_post_game = True
+
+        segments = manager.to_segments()
+
+        assert len(segments) == 2
+        assert segments[0]["is_post_game"] is False
+        assert segments[1]["is_post_game"] is True
+        assert segments[0]["score"] == "0-0-2"
+        assert segments[1]["score"] == ""
 
     def test_to_segments_multiple(self):
         """Test segment export with multiple rallies."""

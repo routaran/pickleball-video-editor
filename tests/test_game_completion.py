@@ -541,6 +541,69 @@ class TestASSFileWithGameCompletion:
         # and end at 5 + 8 = 13 seconds
         assert "0:00:05.00,0:00:13.00" in ass_content
 
+    def test_ass_file_timing_with_post_game_segments(self, mock_video_file, tmp_path, mock_video_info):
+        """Test final score subtitle appears after last scored rally, not after post-game segments."""
+        game_completion = GameCompletionInfo(
+            is_completed=True,
+            final_score="11-9",
+            winning_team=0,
+            winning_team_names=["Jane", "Joe"],
+            extension_seconds=8.0
+        )
+
+        generator = KdenliveGenerator(
+            video_path=mock_video_file,
+            segments=[
+                {"in": 0, "out": 300, "score": "0-0-2", "is_post_game": False},      # 5 seconds
+                {"in": 600, "out": 900, "score": "11-9-2", "is_post_game": False},    # 5 seconds
+                {"in": 1200, "out": 1500, "score": "", "is_post_game": True},          # 5 seconds (post-game)
+                {"in": 1800, "out": 2100, "score": "", "is_post_game": True},          # 5 seconds (post-game)
+            ],
+            fps=60.0,
+            output_dir=tmp_path,
+            game_completion=game_completion
+        )
+
+        with patch('src.output.kdenlive_generator.probe_video', return_value=mock_video_info):
+            kdenlive_path, ass_path = generator.generate()
+
+        ass_content = ass_path.read_text()
+
+        # Final subtitle should start at 10 seconds (after 2 scored rallies of 5s each),
+        # NOT at 20 seconds (after all 4 segments)
+        assert "0:00:10.00,0:00:18.00" in ass_content
+        # Verify it does NOT appear at the end (20 seconds)
+        assert "0:00:20.00" not in ass_content
+
+    def test_ass_file_no_post_game_timing_unchanged(self, mock_video_file, tmp_path, mock_video_info):
+        """Test that without post-game segments, timing is unchanged."""
+        game_completion = GameCompletionInfo(
+            is_completed=True,
+            final_score="11-9",
+            winning_team=0,
+            winning_team_names=["Jane", "Joe"],
+            extension_seconds=8.0
+        )
+
+        generator = KdenliveGenerator(
+            video_path=mock_video_file,
+            segments=[
+                {"in": 0, "out": 300, "score": "0-0-2"},      # 5 seconds, no is_post_game key
+                {"in": 600, "out": 900, "score": "11-9-2"},    # 5 seconds
+            ],
+            fps=60.0,
+            output_dir=tmp_path,
+            game_completion=game_completion
+        )
+
+        with patch('src.output.kdenlive_generator.probe_video', return_value=mock_video_info):
+            kdenlive_path, ass_path = generator.generate()
+
+        ass_content = ass_path.read_text()
+
+        # Final subtitle should start at 10 seconds (end of last segment)
+        assert "0:00:10.00,0:00:18.00" in ass_content
+
 
 class TestEdgeCases:
     """Tests for edge cases and error handling."""

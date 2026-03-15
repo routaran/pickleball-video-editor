@@ -254,6 +254,7 @@ class KdenliveGenerator:
         # with video/audio entries. MLT calculates entry duration as (out_tc - in_tc)
         # where timecodes are rounded to milliseconds. We must use the same math.
         current_output_seconds = 0.0
+        final_score_position = 0.0
         is_first_segment = True
 
         for seg in self.segments:
@@ -267,8 +268,9 @@ class KdenliveGenerator:
             segment_duration = out_seconds - in_seconds
 
             score = seg.get("score", "")
+            is_post_game = seg.get("is_post_game", False)
 
-            if score:
+            if score and not is_post_game:
                 start_time = self._seconds_to_ass_time(current_output_seconds)
                 end_time = self._seconds_to_ass_time(current_output_seconds + segment_duration)
 
@@ -283,13 +285,18 @@ class KdenliveGenerator:
 
             current_output_seconds += segment_duration
 
+            # Track position after the last non-post-game segment
+            if not is_post_game:
+                final_score_position = current_output_seconds
+
         # Add final score subtitle if game is marked as completed
         if self.game_completion is not None and self.game_completion.is_completed:
-            # Calculate start time (end of last segment in output timeline)
-            final_start_time = self._seconds_to_ass_time(current_output_seconds)
+            # Place final score immediately after the last scored rally,
+            # not after post-game segments
+            final_start_time = self._seconds_to_ass_time(final_score_position)
 
             # Calculate end time (start + extension duration)
-            final_end_seconds = current_output_seconds + self.game_completion.extension_seconds
+            final_end_seconds = final_score_position + self.game_completion.extension_seconds
             final_end_time = self._seconds_to_ass_time(final_end_seconds)
 
             # Format the final score subtitle
@@ -423,7 +430,8 @@ class KdenliveGenerator:
         out_frame = seg["out"]
 
         is_last = (seg_index == len(self.segments) - 1)
-        if is_last and self.game_completion is not None and self.game_completion.is_completed:
+        has_post_game = any(s.get("is_post_game", False) for s in self.segments)
+        if is_last and self.game_completion is not None and self.game_completion.is_completed and not has_post_game:
             extension_frames = round(self.game_completion.extension_seconds * self.fps)
             max_frames = self.video_info.frame_count or round(self.video_info.duration * self.fps)
             max_extension = max_frames - seg["out"]

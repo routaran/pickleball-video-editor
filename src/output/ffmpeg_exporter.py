@@ -169,8 +169,10 @@ class FFmpegExporter:
         filter_parts.append(concat_filter)
 
         # Apply tpad filter if game completion is active (extends video by cloning last frame)
-        # This ensures the video extends to show the final score subtitle
-        if self.game_completion is not None and self.game_completion.is_completed:
+        # This ensures the video extends to show the final score subtitle.
+        # Skip when post-game segments exist — they already provide video after the game-winning rally.
+        has_post_game = any(s.get("is_post_game", False) for s in self.segments)
+        if self.game_completion is not None and self.game_completion.is_completed and not has_post_game:
             extension_sec = self.game_completion.extension_seconds
             # tpad clones the last frame for the extension duration
             tpad_filter = f"[concatv]tpad=stop_mode=clone:stop_duration={extension_sec:.6f}[paddedv]"
@@ -287,12 +289,14 @@ class FFmpegExporter:
 
         # Track cumulative output timeline position
         current_output_seconds = 0.0
+        final_score_position = 0.0
 
         # Process each rally segment
         for idx, segment in enumerate(self.segments):
             in_frame = segment["in"]
             out_frame = segment["out"]
             score = segment.get("score", "")
+            is_post_game = segment.get("is_post_game", False)
 
             # Calculate segment duration
             segment_duration = (out_frame - in_frame) / self.fps
@@ -301,35 +305,36 @@ class FFmpegExporter:
             subtitle_start = current_output_seconds
             subtitle_end = current_output_seconds + segment_duration
 
-            # Build subtitle text
+            # Build subtitle text (skip for post-game segments)
             subtitle_text = ""
 
-            # Add player name intro only on first segment
-            if idx == 0 and self.player_names is not None:
-                team1_names = self.player_names.get("team1", [])
-                team2_names = self.player_names.get("team2", [])
-                game_type = self.player_names.get("game_type", "singles")
+            if not is_post_game:
+                # Add player name intro only on first segment
+                if idx == 0 and self.player_names is not None:
+                    team1_names = self.player_names.get("team1", [])
+                    team2_names = self.player_names.get("team2", [])
+                    game_type = self.player_names.get("game_type", "singles")
 
-                # Check if we have valid player names
-                if team1_names and team2_names:
-                    if game_type == "singles":
-                        # Singles: "Name1\Nvs\NName2\N\NScore"
-                        name1 = team1_names[0] if len(team1_names) > 0 else "Player 1"
-                        name2 = team2_names[0] if len(team2_names) > 0 else "Player 2"
-                        subtitle_text = f"{name1}\\Nvs\\N{name2}\\N\\N{score}"
+                    # Check if we have valid player names
+                    if team1_names and team2_names:
+                        if game_type == "singles":
+                            # Singles: "Name1\Nvs\NName2\N\NScore"
+                            name1 = team1_names[0] if len(team1_names) > 0 else "Player 1"
+                            name2 = team2_names[0] if len(team2_names) > 0 else "Player 2"
+                            subtitle_text = f"{name1}\\Nvs\\N{name2}\\N\\N{score}"
+                        else:
+                            # Doubles: "Name1 & Name2\Nvs\NName3 & Name4\N\NScore"
+                            name1 = team1_names[0] if len(team1_names) > 0 else "Player 1"
+                            name2 = team1_names[1] if len(team1_names) > 1 else "Player 2"
+                            name3 = team2_names[0] if len(team2_names) > 0 else "Player 3"
+                            name4 = team2_names[1] if len(team2_names) > 1 else "Player 4"
+                            subtitle_text = f"{name1} & {name2}\\Nvs\\N{name3} & {name4}\\N\\N{score}"
                     else:
-                        # Doubles: "Name1 & Name2\Nvs\NName3 & Name4\N\NScore"
-                        name1 = team1_names[0] if len(team1_names) > 0 else "Player 1"
-                        name2 = team1_names[1] if len(team1_names) > 1 else "Player 2"
-                        name3 = team2_names[0] if len(team2_names) > 0 else "Player 3"
-                        name4 = team2_names[1] if len(team2_names) > 1 else "Player 4"
-                        subtitle_text = f"{name1} & {name2}\\Nvs\\N{name3} & {name4}\\N\\N{score}"
+                        # No valid player names, just show score
+                        subtitle_text = score
                 else:
-                    # No valid player names, just show score
+                    # Regular score display for all other segments
                     subtitle_text = score
-            else:
-                # Regular score display for all other segments
-                subtitle_text = score
 
             # Escape text and generate dialogue line
             if subtitle_text:
@@ -340,6 +345,10 @@ class FFmpegExporter:
 
             # Advance timeline position
             current_output_seconds += segment_duration
+
+            # Track position after the last non-post-game segment
+            if not is_post_game:
+                final_score_position = current_output_seconds
 
         # Add game completion subtitle if applicable
         if self.game_completion is not None and self.game_completion.is_completed:
@@ -362,11 +371,12 @@ class FFmpegExporter:
                 # No winner names, just show final score
                 completion_text = final_score
 
-            # Add completion subtitle
+            # Place final score immediately after the last scored rally,
+            # not after post-game segments
             if completion_text:
                 escaped_text = self._escape_ass_text(completion_text)
-                start_time = self._seconds_to_ass_time(current_output_seconds)
-                end_time = self._seconds_to_ass_time(current_output_seconds + extension_seconds)
+                start_time = self._seconds_to_ass_time(final_score_position)
+                end_time = self._seconds_to_ass_time(final_score_position + extension_seconds)
                 lines.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{escaped_text}")
 
         # Write ASS file
