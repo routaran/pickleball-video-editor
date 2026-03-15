@@ -41,7 +41,9 @@ class TestShortcutConfig:
             rally_start="Q",
             server_wins="W",
             receiver_wins="E",
-            undo="Z"
+            undo="Z",
+            ravi_touch="R",
+            partner_touch="T",
         )
         errors = config.validate()
         assert errors == []
@@ -66,7 +68,9 @@ class TestShortcutConfig:
             rally_start="c",
             server_wins="S",
             receiver_wins="R",
-            undo="C"  # Duplicate of rally_start (case-insensitive)
+            undo="C",  # Duplicate of rally_start (case-insensitive)
+            ravi_touch="E",
+            partner_touch="T",
         )
         errors = config.validate()
         assert len(errors) == 1
@@ -79,8 +83,10 @@ class TestShortcutConfig:
         config = ShortcutConfig(
             rally_start="",
             server_wins="S",
-            receiver_wins="R",
-            undo="U"
+            receiver_wins="D",
+            undo="U",
+            ravi_touch="R",
+            partner_touch="E",
         )
         errors = config.validate()
         assert len(errors) >= 1
@@ -92,8 +98,10 @@ class TestShortcutConfig:
         config = ShortcutConfig(
             rally_start="CC",
             server_wins="S",
-            receiver_wins="R",
-            undo="U"
+            receiver_wins="D",
+            undo="U",
+            ravi_touch="R",
+            partner_touch="E",
         )
         errors = config.validate()
         assert len(errors) >= 1
@@ -105,8 +113,10 @@ class TestShortcutConfig:
         config = ShortcutConfig(
             rally_start="!",
             server_wins="S",
-            receiver_wins="R",
-            undo="U"
+            receiver_wins="D",
+            undo="U",
+            ravi_touch="R",
+            partner_touch="E",
         )
         errors = config.validate()
         assert len(errors) >= 1
@@ -146,7 +156,9 @@ class TestShortcutConfig:
             rally_start="Q",
             server_wins="W",
             receiver_wins="E",
-            undo="Z"
+            undo="Z",
+            ravi_touch="R",
+            partner_touch="T",
         )
         data = original.to_dict()
         restored = ShortcutConfig.from_dict(data)
@@ -155,6 +167,8 @@ class TestShortcutConfig:
         assert restored.server_wins == original.server_wins
         assert restored.receiver_wins == original.receiver_wins
         assert restored.undo == original.undo
+        assert restored.ravi_touch == original.ravi_touch
+        assert restored.partner_touch == original.partner_touch
 
     def test_from_dict_missing_fields_use_defaults(self):
         """Missing fields in from_dict use default values."""

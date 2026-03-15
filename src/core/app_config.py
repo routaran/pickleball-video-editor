@@ -43,6 +43,8 @@ class ShortcutConfig:
     server_wins: str = "S"
     receiver_wins: str = "R"
     undo: str = "U"
+    ravi_touch: str = "R"
+    partner_touch: str = "E"
 
     def validate(self) -> list[str]:
         """Validate shortcuts - no duplicates, single alphanumeric characters.
@@ -58,6 +60,8 @@ class ShortcutConfig:
             "server_wins": self.server_wins,
             "receiver_wins": self.receiver_wins,
             "undo": self.undo,
+            "ravi_touch": self.ravi_touch,
+            "partner_touch": self.partner_touch,
         }
 
         # Check each shortcut is valid
@@ -101,6 +105,8 @@ class ShortcutConfig:
             server_wins=data.get("server_wins", "S"),
             receiver_wins=data.get("receiver_wins", "R"),
             undo=data.get("undo", "U"),
+            ravi_touch=data.get("ravi_touch", "R"),
+            partner_touch=data.get("partner_touch", "E"),
         )
 
 

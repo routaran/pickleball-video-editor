@@ -243,6 +243,10 @@ class MainWindow(QMainWindow):
         # Compact mode state
         self._compact_mode = False
 
+        # Touch counters (internal-only, not exported)
+        self._ravi_touches: int = 0
+        self._partner_touches: int = 0
+
         # Active export dialog tracking (for non-blocking FFmpeg export)
         self._active_export_dialog: ExportProgressDialog | None = None
 
@@ -727,6 +731,22 @@ class MainWindow(QMainWindow):
         self._shortcut_undo = QShortcut(QKeySequence(self._key_from_char(shortcuts.undo)), self)
         self._shortcut_undo.activated.connect(self._on_shortcut_undo)
 
+        self._shortcut_ravi_touch = QShortcut(QKeySequence(self._key_from_char(shortcuts.ravi_touch)), self)
+        self._shortcut_ravi_touch.activated.connect(self._on_shortcut_ravi_touch)
+
+        self._shortcut_partner_touch = QShortcut(QKeySequence(self._key_from_char(shortcuts.partner_touch)), self)
+        self._shortcut_partner_touch.activated.connect(self._on_shortcut_partner_touch)
+
+        self._shortcut_undo_ravi_touch = QShortcut(
+            QKeySequence(f"Shift+{shortcuts.ravi_touch.upper()}"), self
+        )
+        self._shortcut_undo_ravi_touch.activated.connect(self._on_shortcut_undo_ravi_touch)
+
+        self._shortcut_undo_partner_touch = QShortcut(
+            QKeySequence(f"Shift+{shortcuts.partner_touch.upper()}"), self
+        )
+        self._shortcut_undo_partner_touch.activated.connect(self._on_shortcut_undo_partner_touch)
+
     def _on_shortcut_pause(self) -> None:
         """Handle Space shortcut for pause/unpause."""
         self.video_widget.toggle_pause()
@@ -762,6 +782,34 @@ class MainWindow(QMainWindow):
         """Handle U shortcut for undo."""
         if not self._in_review_mode and self.btn_undo.isEnabled():
             self.on_undo()
+
+    def _on_shortcut_ravi_touch(self) -> None:
+        """Handle Ravi touch shortcut to increment touch counter."""
+        if not self._in_review_mode:
+            self._ravi_touches += 1
+            self.status_overlay.set_touches(self._ravi_touches, self._partner_touches)
+            ToastManager.show_success(self, f"Ravi touch: {self._ravi_touches}", duration_ms=1000)
+
+    def _on_shortcut_partner_touch(self) -> None:
+        """Handle Partner touch shortcut to increment touch counter."""
+        if not self._in_review_mode:
+            self._partner_touches += 1
+            self.status_overlay.set_touches(self._ravi_touches, self._partner_touches)
+            ToastManager.show_success(self, f"Partner touch: {self._partner_touches}", duration_ms=1000)
+
+    def _on_shortcut_undo_ravi_touch(self) -> None:
+        """Handle Shift+key to decrement Ravi touch counter."""
+        if not self._in_review_mode and self._ravi_touches > 0:
+            self._ravi_touches -= 1
+            self.status_overlay.set_touches(self._ravi_touches, self._partner_touches)
+            ToastManager.show_success(self, f"Ravi touch: {self._ravi_touches}", duration_ms=1000)
+
+    def _on_shortcut_undo_partner_touch(self) -> None:
+        """Handle Shift+key to decrement Partner touch counter."""
+        if not self._in_review_mode and self._partner_touches > 0:
+            self._partner_touches -= 1
+            self.status_overlay.set_touches(self._ravi_touches, self._partner_touches)
+            ToastManager.show_success(self, f"Partner touch: {self._partner_touches}", duration_ms=1000)
 
     def _load_video(self) -> None:
         """Load the video file and probe metadata.
@@ -1112,6 +1160,9 @@ class MainWindow(QMainWindow):
                 score=score_string,
                 server_info=server_text
             )
+
+        # Update touch counters
+        self.status_overlay.set_touches(self._ravi_touches, self._partner_touches)
 
         # Update button states
         self._update_button_states()
@@ -1572,6 +1623,10 @@ class MainWindow(QMainWindow):
             if result == NewGameResult.START_NEW:
                 # Clear all rallies
                 self.rally_manager.clear_all()
+
+                # Reset touch counters
+                self._ravi_touches = 0
+                self._partner_touches = 0
 
                 # Update game settings if changed
                 if new_settings is not None:

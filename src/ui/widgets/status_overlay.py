@@ -69,6 +69,10 @@ class StatusOverlay(QFrame):
         self._score_value = QLabel("0-0-2")
         self._server_label = QLabel("Server:")
         self._server_value = QLabel("Team 1 #1")
+        self._ravi_label = QLabel("R:")
+        self._ravi_value = QLabel("0")
+        self._partner_label = QLabel("T:")
+        self._partner_value = QLabel("0")
 
         # Setup UI
         self._setup_ui()
@@ -121,6 +125,24 @@ class StatusOverlay(QFrame):
         self._server_value.setMinimumWidth(150)
         layout.addWidget(self._server_value)
 
+        # Add spacing
+        layout.addSpacing(SPACE_MD)
+
+        # Touch counter section (Ravi + Teammate)
+        self._ravi_label.setObjectName("touch_label")
+        layout.addWidget(self._ravi_label)
+
+        self._ravi_value.setObjectName("touch_value")
+        layout.addWidget(self._ravi_value)
+
+        layout.addSpacing(SPACE_SM)
+
+        self._partner_label.setObjectName("touch_label")
+        layout.addWidget(self._partner_label)
+
+        self._partner_value.setObjectName("touch_value")
+        layout.addWidget(self._partner_value)
+
         # Push everything to the left
         layout.addStretch()
 
@@ -160,6 +182,15 @@ class StatusOverlay(QFrame):
             QLabel#server_value {{
                 color: {TEXT_PRIMARY};
             }}
+
+            QLabel#touch_label {{
+                color: {TEXT_PRIMARY};
+            }}
+
+            QLabel#touch_value {{
+                color: {TEXT_PRIMARY};
+                font-weight: 700;
+            }}
         """
 
         self.setStyleSheet(stylesheet)
@@ -181,6 +212,15 @@ class StatusOverlay(QFrame):
         # Server value: body font, regular (15px)
         server_font = Fonts.body(size=15, weight=400)
         self._server_value.setFont(server_font)
+
+        # Touch labels: body font, regular (13px)
+        self._ravi_label.setFont(label_font)
+        self._partner_label.setFont(label_font)
+
+        # Touch values: display font (monospace, bold, tabular) - same as score
+        touch_font = Fonts.display(size=26, weight=700, tabular=True)
+        self._ravi_value.setFont(touch_font)
+        self._partner_value.setFont(touch_font)
 
     def set_status(self, in_rally: bool) -> None:
         """Update status dot and text (WAITING or IN RALLY).
@@ -224,6 +264,16 @@ class StatusOverlay(QFrame):
         self._server_value.setText(server_info)
         # Add tooltip for long server names that might be truncated
         self._server_value.setToolTip(server_info if len(server_info) > 15 else "")
+
+    def set_touches(self, ravi: int, partner: int) -> None:
+        """Update touch counter display.
+
+        Args:
+            ravi: Ravi's touch count
+            partner: Teammate's touch count
+        """
+        self._ravi_value.setText(str(ravi))
+        self._partner_value.setText(str(partner))
 
     def update_display(self, in_rally: bool, score: str, server_info: str) -> None:
         """Update all status fields at once.
@@ -274,6 +324,12 @@ class StatusOverlay(QFrame):
         label_font = Fonts.body(size=label_size, weight=400)
         self._score_label.setFont(label_font)
         self._server_label.setFont(label_font)
+        self._ravi_label.setFont(label_font)
+        self._partner_label.setFont(label_font)
+
+        # Scale touch values alongside score value
+        self._ravi_value.setFont(Fonts.display(size=score_size, weight=700, tabular=True))
+        self._partner_value.setFont(Fonts.display(size=score_size, weight=700, tabular=True))
 
         # Scale status and server text - less aggressive reduction
         text_size = 13 if compact else 15
