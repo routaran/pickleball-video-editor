@@ -134,13 +134,21 @@ class RallyManager:
         padded_time = timestamp + self.END_PADDING
         end_frame = self._time_to_frame(padded_time)
 
+        # Compute raw (unpadded) frames from original timestamps
+        raw_start_frame = self._time_to_frame(self._current_rally_timestamp)
+        raw_end_frame = self._time_to_frame(timestamp)
+
         # Create rally
         rally = Rally(
             start_frame=self._current_rally_start,
             end_frame=end_frame,
             score_at_start=score_at_start,
             winner=winner,
-            comment=comment
+            comment=comment,
+            raw_start_seconds=self._current_rally_timestamp,
+            raw_end_seconds=timestamp,
+            raw_start_frame=raw_start_frame,
+            raw_end_frame=raw_end_frame,
         )
 
         self.rallies.append(rally)
@@ -256,6 +264,26 @@ class RallyManager:
         rally.end_frame = new_end
 
         return rally
+
+    def update_rally_winner(self, index: int, new_winner: str) -> None:
+        """Flip the winner of a rally in-place.
+
+        Sets rallies[index].winner to new_winner without touching any score
+        strings.  Score cascade is the caller's responsibility (MainWindow
+        drives it via ScoreState, mirroring the existing update_rally_score
+        cascade pattern).
+
+        Args:
+            index: Rally index to update (0-based)
+            new_winner: "server" or "receiver"
+
+        Raises:
+            IndexError: If index is out of range
+            ValueError: If new_winner is not "server" or "receiver"
+        """
+        if new_winner not in ("server", "receiver"):
+            raise ValueError(f"new_winner must be 'server' or 'receiver', got {new_winner!r}")
+        self.rallies[index].winner = new_winner
 
     def update_rally_score(
         self,

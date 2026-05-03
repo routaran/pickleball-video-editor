@@ -79,11 +79,21 @@ class Rally:
     """Represents a single rally with start/end frames and score information.
 
     Attributes:
-        start_frame: Frame number where rally begins
-        end_frame: Frame number where rally ends
+        start_frame: Frame number where rally begins (with padding applied)
+        end_frame: Frame number where rally ends (with padding applied)
         score_at_start: Score string at rally start ("0-0" singles, "0-0-2" doubles)
         winner: Who won the rally ("server" or "receiver")
         comment: Optional comment about this rally
+        is_post_game: Whether this is post-game footage
+        raw_start_seconds: Original user-marked start time before padding (seconds)
+        raw_end_seconds: Original user-marked end time before padding (seconds)
+        raw_start_frame: Original user-marked start frame before padding
+        raw_end_frame: Original user-marked end frame before padding
+
+    Note:
+        winning_team (0 or 1) is NOT stored on the Rally; it is derived at
+        export time by re-syncing ScoreState from score_at_start, which correctly
+        handles interventions and side-outs.  See TrainingDataGenerator.generate().
     """
 
     start_frame: int
@@ -92,6 +102,10 @@ class Rally:
     winner: str
     comment: str | None = None
     is_post_game: bool = False
+    raw_start_seconds: float | None = None
+    raw_end_seconds: float | None = None
+    raw_start_frame: int | None = None
+    raw_end_frame: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for JSON export.
@@ -99,7 +113,7 @@ class Rally:
         Returns:
             Dictionary containing all rally data
         """
-        return {
+        d: dict[str, Any] = {
             "start_frame": self.start_frame,
             "end_frame": self.end_frame,
             "score_at_start": self.score_at_start,
@@ -107,6 +121,12 @@ class Rally:
             "comment": self.comment,
             "is_post_game": self.is_post_game,
         }
+        if self.raw_start_seconds is not None:
+            d["raw_start_seconds"] = self.raw_start_seconds
+            d["raw_end_seconds"] = self.raw_end_seconds
+            d["raw_start_frame"] = self.raw_start_frame
+            d["raw_end_frame"] = self.raw_end_frame
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Rally":
@@ -125,6 +145,10 @@ class Rally:
             winner=data["winner"],
             comment=data.get("comment"),
             is_post_game=data.get("is_post_game", False),
+            raw_start_seconds=data.get("raw_start_seconds"),
+            raw_end_seconds=data.get("raw_end_seconds"),
+            raw_start_frame=data.get("raw_start_frame"),
+            raw_end_frame=data.get("raw_end_frame"),
         )
 
 
@@ -463,6 +487,7 @@ class SessionState:
     interventions: list[Intervention] = field(default_factory=list)
     comments: list[Comment] = field(default_factory=list)
     game_completion: GameCompletionInfo = field(default_factory=GameCompletionInfo)
+    court_corners: list[list[int]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for JSON export.
@@ -488,6 +513,7 @@ class SessionState:
             "interventions": [intervention.to_dict() for intervention in self.interventions],
             "comments": [comment.to_dict() for comment in self.comments],
             "game_completion": self.game_completion.to_dict(),
+            "court_corners": self.court_corners,
         }
 
     @classmethod
@@ -518,6 +544,7 @@ class SessionState:
             interventions=[Intervention.from_dict(i) for i in data.get("interventions", [])],
             comments=[Comment.from_dict(c) for c in data.get("comments", [])],
             game_completion=GameCompletionInfo.from_dict(data.get("game_completion", {})),
+            court_corners=data.get("court_corners"),
         )
 
     def update_modified_timestamp(self) -> None:
