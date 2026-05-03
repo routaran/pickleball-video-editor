@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QWidget
 
 # CRITICAL: Set locale BEFORE importing mpv to prevent numeric parsing issues.
@@ -267,6 +268,33 @@ class VideoWidget(QWidget):
             Current frame number (0-based)
         """
         return int(self.get_position() * self.fps)
+
+    def get_current_frame_pixmap(self) -> QPixmap | None:
+        """Capture the current MPV-rendered frame as a QPixmap.
+
+        Uses MPV's screenshot_raw command to retrieve raw RGB pixel data
+        for the currently displayed frame, then converts it to a QPixmap
+        without any intermediate file I/O or re-decode.
+
+        Returns:
+            QPixmap of the current frame, or None if no player is active,
+            screenshot_raw returns None, or the returned dict is missing
+            required keys.
+        """
+        if self._player is None:
+            return None
+
+        raw = self._player.screenshot_raw()
+
+        if raw is None:
+            return None
+
+        if "data" not in raw or "w" not in raw or "h" not in raw:
+            return None
+
+        stride = raw.get("stride", raw["w"] * 3)
+        img = QImage(raw["data"], raw["w"], raw["h"], stride, QImage.Format.Format_RGB888)
+        return QPixmap.fromImage(img)
 
     def get_duration(self) -> float:
         """Get video duration in seconds.
