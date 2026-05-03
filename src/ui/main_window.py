@@ -48,7 +48,7 @@ from src.core.models import GameCompletionInfo, ScoreSnapshot, SessionState
 from src.core.rally_manager import RallyManager
 from src.core.score_state import ScoreState
 from src.core.session_manager import SessionManager
-from src.output import KdenliveGenerator, FFmpegExporter
+from src.output import KdenliveGenerator, FFmpegExporter, TrainingDataGenerator
 from src.ui.dialogs import (
     AddCommentDialog,
     AddCommentResult,
@@ -2225,6 +2225,23 @@ class MainWindow(QMainWindow):
         # Generate files with selected path
         try:
             kdenlive_path, srt_path = generator.generate(output_path=selected_path)
+
+            # Generate ML training data JSON alongside Kdenlive project
+            training_json_path = kdenlive_path.with_suffix(".training.json")
+            TrainingDataGenerator.write(
+                output_path=training_json_path,
+                video_path=str(self.config.video_path),
+                fps=self.video_fps,
+                duration_seconds=self.video_duration,
+                resolution=resolution,
+                game_type=self.config.game_type,
+                victory_rules=self.config.victory_rule,
+                team1_players=self.config.team1_players,
+                team2_players=self.config.team2_players,
+                rallies=self.rally_manager.get_rallies(),
+                game_completion=game_completion_info,
+                court_corners=self.config.court_corners,
+            )
 
             # Check if session exists
             session_exists = self._session_manager.find_existing(
