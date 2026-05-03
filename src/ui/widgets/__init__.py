@@ -9,9 +9,11 @@ This package contains reusable UI widgets:
 - PlaybackControls: Video transport controls with speed toggles
 - SavedSessionCard: Card displaying saved session metadata
 - ClipTimelineWidget: Visual clip timeline with clickable cells
+- CourtCalibratorWidget: 4-corner court calibration widget
 """
 
 from src.ui.widgets.clip_timeline import ClipTimelineWidget
+from src.ui.widgets.court_calibrator import CourtCalibratorWidget
 from src.ui.widgets.playback_controls import PlaybackControls
 from src.ui.widgets.rally_button import (
     BUTTON_TYPE_RALLY_START,
@@ -44,4 +46,6 @@ __all__ = [
     "SavedSessionInfo",
     # Clip timeline
     "ClipTimelineWidget",
+    # Court calibrator
+    "CourtCalibratorWidget",
 ]
