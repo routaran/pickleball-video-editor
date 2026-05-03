@@ -8,6 +8,7 @@ This package contains reusable dialog windows for:
 - Export completion: ExportCompleteDialog
 - Export progress: ExportProgressDialog
 - Configuration: ConfigDialog
+- Frame selection: FrameSelectorDialog
 - Player names: PlayerNamesDialog
 - New game: NewGameConfirmDialog
 """
@@ -21,6 +22,7 @@ from src.ui.dialogs.resume_session import (
 from src.ui.dialogs.unsaved_warning import UnsavedWarningDialog, UnsavedWarningResult
 from src.ui.dialogs.edit_score import EditScoreDialog, EditScoreResult
 from src.ui.dialogs.force_sideout import ForceSideOutDialog, ForceSideOutResult
+from src.ui.dialogs.frame_selector_dialog import FrameSelectorDialog
 from src.ui.dialogs.add_comment import AddCommentDialog, AddCommentResult
 from src.ui.dialogs.export_complete import ExportCompleteDialog, ExportCompleteResult
 from src.ui.dialogs.export_progress import (
@@ -53,6 +55,8 @@ __all__ = [
     # Force Side-Out Dialog
     "ForceSideOutDialog",
     "ForceSideOutResult",
+    # Frame Selector Dialog
+    "FrameSelectorDialog",
     # Add Comment Dialog
     "AddCommentDialog",
     "AddCommentResult",
