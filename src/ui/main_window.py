@@ -1870,6 +1870,7 @@ class MainWindow(QMainWindow):
             self._review_widget.rally_changed.connect(self._on_review_rally_changed)
             self._review_widget.timing_adjusted.connect(self._on_review_timing_adjusted)
             self._review_widget.score_changed.connect(self._on_review_score_changed)
+            self._review_widget.winner_flipped.connect(self._on_review_winner_flipped)
             self._review_widget.play_rally_requested.connect(self._on_review_play_rally)
             self._review_widget.exit_requested.connect(self.exit_review_mode)
             self._review_widget.generate_requested.connect(self._on_review_generate)
@@ -2134,6 +2135,78 @@ class MainWindow(QMainWindow):
         self._dirty = True
 
         # Refresh game completion info after any score edit
+        self._refresh_game_completion_info()
+
+    @pyqtSlot(int)
+    def _on_review_winner_flipped(self, index: int) -> None:
+        """Handle winner flip request from review mode.
+
+        Flips the rally.winner at index between "server" and "receiver", then
+        replays ScoreState forward from that point to recompute score_at_start
+        for all subsequent rallies.  This mirrors the cascade logic in
+        _on_review_score_changed but derives the starting score from the
+        rally's own score_at_start (which is already correct up to this point)
+        rather than from a user-supplied string.
+
+        Args:
+            index: Rally index (0-based) whose winner should be flipped
+        """
+        if not (0 <= index < self.rally_manager.get_rally_count()):
+            return
+
+        if self.score_state is None:
+            # Highlights mode has no score state — nothing to cascade
+            return
+
+        rally = self.rally_manager.get_rally(index)
+        old_winner = rally.winner
+        new_winner = "receiver" if old_winner == "server" else "server"
+
+        # Mutate the winner in rally_manager
+        self.rally_manager.update_rally_winner(index, new_winner)
+
+        # Cascade: re-derive score state from the flipped rally's score_at_start
+        # and replay every rally from index onward.
+        try:
+            self.score_state.set_score(rally.score_at_start)
+
+            for i in range(index, self.rally_manager.get_rally_count()):
+                current_rally = self.rally_manager.get_rally(i)
+
+                # For rallies after the flipped one, update their score_at_start
+                # from the running score state.
+                if i > index:
+                    current_rally.score_at_start = self.score_state.get_score_string()
+
+                # Advance score state by this rally's (possibly updated) winner
+                if current_rally.winner == "server":
+                    self.score_state.server_wins()
+                elif current_rally.winner == "receiver":
+                    self.score_state.receiver_wins()
+
+            # Refresh the review display with updated rally data
+            if self._review_widget is not None:
+                rallies = self.rally_manager.get_rallies()
+                self._review_widget.set_rallies(rallies, fps=self.video_fps)
+                self._review_widget.set_current_rally(index)
+
+            ToastManager.show_success(
+                self,
+                f"Winner flipped for rally {index + 1}: "
+                f"{old_winner} \u2192 {new_winner}, cascade applied",
+                duration_ms=3000,
+            )
+        except (ValueError, IndexError) as e:
+            # Roll back the winner mutation so data stays consistent
+            self.rally_manager.update_rally_winner(index, old_winner)
+            ToastManager.show_error(
+                self,
+                f"Could not cascade winner flip: {e}",
+                duration_ms=3000,
+            )
+            return
+
+        self._dirty = True
         self._refresh_game_completion_info()
 
     @pyqtSlot(int)

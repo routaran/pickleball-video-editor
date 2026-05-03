@@ -41,9 +41,11 @@ from src.ui.styles import (
     BG_TERTIARY,
     BORDER_COLOR,
     GLOW_GREEN,
+    GLOW_ORANGE,
     PRIMARY_ACTION,
     RADIUS_LG,
     RADIUS_MD,
+    RECEIVER_WINS,
     SERVER_WINS,
     SPACE_LG,
     SPACE_MD,
@@ -52,6 +54,7 @@ from src.ui.styles import (
     TEXT_ACCENT,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
+    TEXT_WARNING,
     Fonts,
 )
 
@@ -741,6 +744,7 @@ class ReviewModeWidget(QWidget):
     rally_changed = pyqtSignal(int)
     timing_adjusted = pyqtSignal(int, str, float)
     score_changed = pyqtSignal(int, str, bool)
+    winner_flipped = pyqtSignal(int)  # rally index — emitted when user flips the rally winner
     exit_requested = pyqtSignal()
     return_to_menu_requested = pyqtSignal()
     generate_requested = pyqtSignal()
@@ -765,6 +769,7 @@ class ReviewModeWidget(QWidget):
         self._final_score = ""
         self._winning_team_names: list[str] = []
         self._export_path: str = ""  # Custom export path, empty means use dialog
+        self._low_confidence_indices: set[int] = set()
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -946,6 +951,18 @@ class ReviewModeWidget(QWidget):
                             }}
         """)
         control_panel_layout.addWidget(play_rally_button)
+
+        # Flip Winner button — corrects a misclassified rally outcome and
+        # triggers a full score cascade downstream.
+        self._flip_winner_button = QPushButton("Flip Winner")
+        self._flip_winner_button.setFont(Fonts.button_other())
+        self._flip_winner_button.setObjectName("flipWinnerButton")
+        self._flip_winner_button.clicked.connect(self._on_flip_winner_clicked)
+        self._flip_winner_button.setToolTip(
+            "Swap server/receiver for this rally and recalculate all subsequent scores"
+        )
+        self._apply_flip_button_style(low_confidence=False)
+        control_panel_layout.addWidget(self._flip_winner_button)
 
         # Timing controls
         self._timing_widget = TimingControlWidget()
@@ -1272,6 +1289,69 @@ class ReviewModeWidget(QWidget):
         """
         self.score_changed.emit(self._current_index, new_score, cascade)
 
+    @pyqtSlot()
+    def _on_flip_winner_clicked(self) -> None:
+        """Handle Flip Winner button click.
+
+        Emits winner_flipped with the current rally index so MainWindow can
+        update rally_manager and cascade scores.
+        """
+        self.winner_flipped.emit(self._current_index)
+
+    def _apply_flip_button_style(self, low_confidence: bool) -> None:
+        """Apply styling to the Flip Winner button.
+
+        When low_confidence is True the button uses the orange/amber palette
+        to draw the user's attention to an uncertain classification.
+
+        Args:
+            low_confidence: Whether the current rally has a low-confidence winner
+        """
+        if low_confidence:
+            border_color = RECEIVER_WINS      # orange
+            text_color = RECEIVER_WINS
+            hover_bg = RECEIVER_WINS
+            glow = GLOW_ORANGE
+        else:
+            border_color = SERVER_WINS        # blue — neutral / informational
+            text_color = SERVER_WINS
+            hover_bg = SERVER_WINS
+            glow = "rgba(79, 195, 247, 0.4)"
+
+        self._flip_winner_button.setStyleSheet(f"""
+            QPushButton#flipWinnerButton {{
+                background-color: transparent;
+                color: {text_color};
+                border: 2px solid {border_color};
+                border-radius: {RADIUS_MD}px;
+                padding: {SPACE_SM}px {SPACE_MD}px;
+                min-height: 36px;
+            }}
+            QPushButton#flipWinnerButton:hover {{
+                background-color: {hover_bg};
+                color: {BG_PRIMARY};
+                border-color: {hover_bg};
+            }}
+            QPushButton#flipWinnerButton:pressed {{
+                background-color: {hover_bg};
+                color: {BG_PRIMARY};
+            }}
+        """)
+
+    def set_low_confidence_indices(self, indices: set[int]) -> None:
+        """Mark specific rally indices as having low-confidence winner classifications.
+
+        The Flip Winner button will be shown with a more prominent orange style
+        when the currently displayed rally is in this set.
+
+        Args:
+            indices: Set of rally indices (0-based) that have low confidence
+        """
+        self._low_confidence_indices = indices
+        # Re-style button if the current rally is affected
+        low_conf = self._current_index in self._low_confidence_indices
+        self._apply_flip_button_style(low_confidence=low_conf)
+
     @pyqtSlot(int)
     def _on_rally_selected(self, index: int) -> None:
         """Handle rally selection from RallyListWidget.
@@ -1347,6 +1427,10 @@ class ReviewModeWidget(QWidget):
 
         # Update rally list selection
         self._rally_list.set_current_rally(index)
+
+        # Refresh Flip Winner button styling based on low-confidence flag
+        low_conf = index in self._low_confidence_indices
+        self._apply_flip_button_style(low_confidence=low_conf)
 
         # Emit signal
         self.rally_changed.emit(index)
