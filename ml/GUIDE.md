@@ -1,0 +1,244 @@
+# Rally Detection ML Pipeline
+
+This pipeline trains an audio-based machine learning model to automatically detect rally boundaries in pickleball match videos. Given a raw game recording, the trained model identifies when each point starts and ends so the video can be trimmed to remove dead time between rallies.
+
+## How it works
+
+The model listens to the audio track of a pickleball video and classifies short windows (2 seconds each) as either **active play** or **dead time**. Pickleball has a distinctive acoustic signature during rallies (ball hits, shoe squeaks, rhythmic volleys) that differs clearly from the gaps between points (talking, silence, walking around).
+
+The pipeline has three stages:
+
+1. **Data preparation** -- extract audio from labeled videos, compute mel spectrograms, and create training windows with binary labels derived from your manual annotations
+2. **Training** -- train a small CNN classifier on the spectrogram windows
+3. **Prediction** -- run the trained model on a new video to detect rally boundaries
+
+## Prerequisites
+
+- Python 3.13+
+- NVIDIA GPU with CUDA (for training; CPU works but is much slower)
+- ffmpeg installed and available on PATH (used to extract audio from video files)
+- Labeled pickleball videos exported with `.training.json` files from the Pickleball Video Editor
+
+### Verify ffmpeg is installed
+
+```bash
+ffmpeg -version
+```
+
+If not installed, on Arch/Manjaro: `sudo pacman -S ffmpeg`
+
+## Setup
+
+All commands should be run from the **project root** directory (the parent of `ml/`), not from inside `ml/`.
+
+```bash
+cd /path/to/pickleball_editing
+```
+
+Install the ML dependencies into the project's virtual environment:
+
+```bash
+.venv/bin/pip install -r ml/requirements.txt
+```
+
+This installs PyTorch (with CUDA support), torchaudio, numpy, and scikit-learn.
+
+### Verify GPU is available
+
+```bash
+.venv/bin/python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+```
+
+You should see `CUDA available: True`. Training will still work on CPU if CUDA is not available, but it will be significantly slower.
+
+## Preparing labeled data
+
+The training pipeline reads `.training.json` files that are produced by the Pickleball Video Editor's export function. Each file contains:
+
+- The path to the source video
+- Rally timestamps (when each point starts and ends)
+- Score and winner information for each rally
+
+To generate these files:
+
+1. Open a recorded game in the Pickleball Video Editor
+2. Mark all rallies (start/end of each point) as you normally would
+3. Export via the "Generate" button in Final Review mode
+4. The export creates three files side by side:
+   - `{name}.kdenlive` -- the Kdenlive project file
+   - `{name}.kdenlive.ass` -- the subtitle overlay
+   - `{name}.training.json` -- the ML training data
+
+Collect your `.training.json` files in a directory. They can be nested in subdirectories -- the training script searches recursively. The source video files referenced in each JSON must still exist at their original paths.
+
+**Minimum data:** At least 2 labeled videos are required (for the train/validation split). More is better -- 10+ videos will produce a solid model, 30+ videos is ideal.
+
+## Training
+
+Run the training script, pointing it at the directory containing your `.training.json` files:
+
+```bash
+.venv/bin/python -m ml.train --data-dir ~/Videos/pickleball/
+```
+
+Replace `~/Videos/pickleball/` with wherever your exported `.training.json` files are located.
+
+### What happens during training
+
+1. **Audio extraction** -- ffmpeg extracts mono audio (22050 Hz) from each video. This is cached in `ml/cache/` so it only happens once per video.
+2. **Spectrogram computation** -- mel spectrograms are computed and cached alongside the audio files.
+3. **Train/val split** -- videos are split 80/20 into training and validation sets. The split is done by whole videos (not by individual windows) to prevent data leakage.
+4. **Training loop** -- the model trains for up to 30 epochs with early stopping. Training stops automatically if validation loss doesn't improve for 5 consecutive epochs.
+5. **Checkpointing** -- the best model (lowest validation loss) is saved to `ml/checkpoints/best_model.pt`.
+
+### Training output
+
+The training script prints a table like this:
+
+```
+Epoch | Train Loss  Train Acc | Val Loss Val Acc  Prec Recall
+----------------------------------------------------------------------
+    1 |     0.5234    72.3%  |   0.4102  78.5% 0.756  0.812
+    2 |     0.3891    81.7%  |   0.3254  84.2% 0.823  0.851
+    ...
+       ^ saved best model (val_loss=0.3254)
+```
+
+- **Train/Val Loss** -- lower is better. Watch for val loss diverging from train loss (overfitting).
+- **Accuracy** -- percentage of windows classified correctly.
+- **Precision** -- of the windows predicted as "play", what fraction actually were play. High precision means few false alarms.
+- **Recall** -- of all actual play windows, what fraction were detected. High recall means few missed rallies.
+
+For good results, aim for both precision and recall above 0.85.
+
+### Optional training arguments
+
+```bash
+.venv/bin/python -m ml.train --data-dir ~/Videos/pickleball/ \
+    --epochs 50 \
+    --batch-size 128 \
+    --lr 0.0005
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--data-dir` | (required) | Directory to search for `.training.json` files |
+| `--epochs` | 30 | Maximum number of training epochs |
+| `--batch-size` | 64 | Training batch size (increase if GPU memory allows) |
+| `--lr` | 0.001 | Learning rate |
+
+### Re-training
+
+To re-train from scratch, delete the checkpoint and optionally the cache:
+
+```bash
+# Delete the saved model (required to re-train)
+rm ml/checkpoints/best_model.pt
+
+# Delete cached audio/spectrograms (only needed if source videos changed)
+rm -rf ml/cache/
+```
+
+Then run the training command again. If you've added new labeled videos, you can re-train without clearing the cache -- new videos will be processed and added, while previously cached videos are loaded instantly.
+
+## Prediction
+
+Once you have a trained model, run it on a new (unlabeled) video:
+
+```bash
+.venv/bin/python -m ml.predict --video /path/to/new_game.mp4
+```
+
+This prints detected rally boundaries to stdout as JSON:
+
+```json
+{
+  "video": "/path/to/new_game.mp4",
+  "rallies": [
+    {
+      "start_seconds": 12.5,
+      "end_seconds": 28.75,
+      "duration_seconds": 16.25
+    },
+    {
+      "start_seconds": 45.0,
+      "end_seconds": 61.5,
+      "duration_seconds": 16.5
+    }
+  ],
+  "rally_count": 2
+}
+```
+
+### Save predictions to a file
+
+```bash
+.venv/bin/python -m ml.predict \
+    --video /path/to/new_game.mp4 \
+    --output /path/to/output.json
+```
+
+### Optional prediction arguments
+
+```bash
+.venv/bin/python -m ml.predict \
+    --video /path/to/new_game.mp4 \
+    --model ml/checkpoints/best_model.pt \
+    --threshold 0.5 \
+    --min-rally 3.0 \
+    --output predictions.json
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--video` | (required) | Path to the video file to analyze |
+| `--model` | `ml/checkpoints/best_model.pt` | Path to trained model checkpoint |
+| `--threshold` | 0.5 | Probability threshold for classifying a window as "play". Lower values detect more rallies but may include false positives. Higher values are stricter. |
+| `--min-rally` | 3.0 | Minimum rally duration in seconds. Detected segments shorter than this are discarded as noise. |
+| `--output` | (stdout) | Path to save output JSON. If omitted, prints to terminal. |
+
+### Tuning predictions
+
+If the model is **missing rallies** (low recall):
+- Lower the threshold: `--threshold 0.3`
+- Reduce minimum rally duration: `--min-rally 2.0`
+
+If the model is **detecting false rallies** in dead time (low precision):
+- Raise the threshold: `--threshold 0.7`
+- Increase minimum rally duration: `--min-rally 5.0`
+
+## File structure
+
+```
+ml/
+├── cache/                  # Auto-generated: cached audio and spectrograms
+│   ├── {video_name}.wav
+│   ├── {video_name}_mel.pt
+│   └── {video_name}_labels.npy
+├── checkpoints/            # Auto-generated: saved model weights
+│   └── best_model.pt
+├── __init__.py
+├── config.py               # All hyperparameters (audio, training, inference)
+├── dataset.py              # Audio extraction, spectrogram computation, dataset
+├── model.py                # CNN classifier architecture
+├── train.py                # Training script (entry point)
+├── predict.py              # Inference script (entry point)
+├── requirements.txt        # Python dependencies
+└── GUIDE.md                # This file
+```
+
+The `cache/` and `checkpoints/` directories are created automatically on first run. They can be safely deleted and will be regenerated.
+
+## Troubleshooting
+
+**"No module named 'torch'"** -- Install dependencies: `.venv/bin/pip install -r ml/requirements.txt`
+
+**"ffmpeg failed for ..."** -- Make sure ffmpeg is installed and the video file path in the `.training.json` is correct and accessible.
+
+**"SKIP: video not found"** -- The video file referenced in a `.training.json` has been moved or deleted. The training script skips it and continues with the remaining videos.
+
+**"Need at least 2 videos to create train/val split"** -- You need at least 2 valid videos (where the video file exists) to train. Export more labeled games.
+
+**Training loss not decreasing** -- Try a lower learning rate (`--lr 0.0001`) or check that your labels are correct by re-exporting the `.training.json` files.
+
+**Out of GPU memory** -- Reduce the batch size: `--batch-size 32` or `--batch-size 16`.
