@@ -30,6 +30,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QCloseEvent, QDesktopServices, QKeySequence, QResizeEvent, QShowEvent, QShortcut
 from PyQt6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -87,6 +88,7 @@ from src.ui.widgets import (
     BUTTON_TYPE_SERVER_WINS,
     BUTTON_TYPE_UNDO,
     ClipTimelineWidget,
+    CourtCalibratorWidget,
     PlaybackControls,
     RallyButton,
     StatusOverlay,
@@ -533,6 +535,11 @@ class MainWindow(QMainWindow):
         self.btn_new_game = QPushButton("New Game")
         self.btn_new_game.setToolTip("Start a new game (clears all rallies)")
 
+        # Court corner calibration button
+        self.btn_mark_corners = QPushButton("Mark Court Corners")
+        self.btn_mark_corners.setObjectName("markCornersButton")
+        self.btn_mark_corners.setToolTip("Capture current frame and mark the four court corners for ML training")
+
         # Set object names for styling and prevent focus stealing
         for btn in [self.btn_edit_score, self.btn_force_sideout,
                     self.btn_add_comment, self.btn_time_expired,
@@ -540,6 +547,9 @@ class MainWindow(QMainWindow):
             btn.setObjectName("toolbar_button")
             btn.setFont(Fonts.button_other())
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        self.btn_mark_corners.setFont(Fonts.button_other())
+        self.btn_mark_corners.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         # Hide score-related buttons in highlights mode
         if self._is_highlights_mode:
@@ -559,6 +569,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_time_expired)
         layout.addWidget(self.btn_update_names)
         layout.addWidget(self.btn_new_game)
+        layout.addWidget(self.btn_mark_corners)
 
         layout.addStretch()
 
@@ -664,6 +675,7 @@ class MainWindow(QMainWindow):
         self.btn_edit_score.clicked.connect(self._on_edit_score)
         self.btn_force_sideout.clicked.connect(self._on_force_sideout)
         self.btn_add_comment.clicked.connect(self._on_add_comment)
+        self.btn_mark_corners.clicked.connect(self._on_mark_court_corners)
         self.btn_time_expired.clicked.connect(self._on_time_expired)
         self.btn_update_names.clicked.connect(self._on_update_player_names)
         self.btn_new_game.clicked.connect(self._on_start_new_game)
@@ -1493,6 +1505,51 @@ class MainWindow(QMainWindow):
                 )
 
     @pyqtSlot()
+    def _on_mark_court_corners(self) -> None:
+        """Handle Mark Court Corners button click.
+
+        Captures the current video frame as a pixmap and opens the
+        CourtCalibratorWidget in a modal dialog so the user can mark
+        the four court corners. On confirmation, stores the result in
+        self.config.court_corners and marks the session dirty.
+        """
+        pixmap = self.video_widget.get_current_frame_pixmap()
+        if pixmap is None:
+            ToastManager.show_warning(
+                self,
+                "No frame available — load a video first.",
+                duration_ms=4000,
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Mark Court Corners")
+        dialog.setMinimumSize(900, 600)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        calibrator = CourtCalibratorWidget(pixmap, parent=dialog)
+        layout.addWidget(calibrator)
+
+        captured: list[list[int]] = []
+
+        def _on_corners(corners: list) -> None:
+            captured.extend([list(pt) for pt in corners])
+            dialog.accept()
+
+        calibrator.cornersCaptured.connect(_on_corners)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted and len(captured) == 4:
+            self.config.court_corners = captured
+            self._dirty = True
+            ToastManager.show_success(
+                self,
+                "Court corners saved.",
+                duration_ms=3000,
+            )
+
+    @pyqtSlot()
     def _on_time_expired(self) -> None:
         """Handle Time Expired button click.
 
@@ -1678,6 +1735,7 @@ class MainWindow(QMainWindow):
                 modified_at="",
                 interventions=[],
                 comments=[],
+                court_corners=self.config.court_corners,
             )
         else:
             # Normal mode: get current score snapshot
@@ -1706,6 +1764,7 @@ class MainWindow(QMainWindow):
                 modified_at="",  # Will be set by SessionManager.save()
                 interventions=[],  # TODO: Implement interventions tracking
                 comments=[],  # TODO: Implement comments tracking
+                court_corners=self.config.court_corners,
             )
 
         return session_state
