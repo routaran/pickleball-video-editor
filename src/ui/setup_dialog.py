@@ -21,14 +21,20 @@ Recent Sessions features:
 - Missing video detection with re-link capability
 """
 
+import subprocess
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.ui.dialogs.frame_selector_dialog import FrameSelectorDialog
+from src.video.frame_extract import extract_frame_at
+
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtGui import QKeyEvent, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -40,6 +46,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -62,9 +69,12 @@ from src.ui.styles.colors import (
     TEXT_DISABLED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
+    TEXT_WARNING,
 )
 from src.ui.styles.fonts import RADIUS_MD, SPACE_MD, SPACE_SM, Fonts
+from src.ui.widgets.court_calibrator import CourtCalibratorWidget
 from src.ui.widgets.saved_session_card import SavedSessionCard, SavedSessionInfo
+from src.video.probe import ProbeError, probe_video
 
 
 __all__ = ["GameConfig", "SetupDialog"]
@@ -89,6 +99,8 @@ class GameConfig:
     team1_players: list[str] = field(default_factory=list)
     team2_players: list[str] = field(default_factory=list)
     session_state: SessionState | None = None
+    court_corners: list[list[int]] | None = None
+    auto_mode: bool = False
 
     def has_player_names(self) -> bool:
         """Check if player names have been configured.
@@ -157,6 +169,9 @@ class SetupDialog(QDialog):
 
         # Configuration result (set when accepted)
         self._config: GameConfig | None = None
+
+        # Court corners captured by the calibration step (optional)
+        self._court_corners: list[list[int]] | None = None
 
         # Session manager for checking existing sessions
         self._session_manager = SessionManager()
@@ -522,11 +537,44 @@ class SetupDialog(QDialog):
         self.sessions_layout.setSpacing(16)
         self.sessions_scroll.setWidget(self.sessions_container)
 
+        # Mode selector
+        self.mode_label = QLabel("PROCESSING MODE")
+        self.mode_label.setObjectName("section-label")
+
+        self.mode_manual_radio = QRadioButton("Manual editing")
+        self.mode_manual_radio.setChecked(True)
+        self.mode_manual_radio.setObjectName("mode-radio")
+
+        self.mode_auto_radio = QRadioButton("Auto-process (experimental)")
+        self.mode_auto_radio.setObjectName("mode-radio")
+
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.addButton(self.mode_manual_radio, 0)
+        self._mode_group.addButton(self.mode_auto_radio, 1)
+
+        # Warning label shown when auto mode requires corner calibration
+        self.auto_mode_warning_label = QLabel(
+            "Court corner calibration is required for auto-process mode."
+        )
+        self.auto_mode_warning_label.setObjectName("auto-mode-warning")
+        self.auto_mode_warning_label.setVisible(False)
+
         # Video source section
         self.video_label = QLabel("SOURCE VIDEO")
         self.video_path_edit = QLineEdit()
         self.video_path_edit.setPlaceholderText("Select a video file...")
         self.browse_button = QPushButton("Browse")
+
+        # Court calibration row (optional step for ML auto-process mode)
+        self.calibrate_button = QPushButton("Calibrate Court Corners")
+        self.calibrate_button.setObjectName("calibrate-button")
+        self.calibrate_button.setToolTip(
+            "Optional: mark the 4 court corners for ML-assisted auto-processing"
+        )
+        self.calibrate_button.setEnabled(False)
+
+        self.calibrate_status_label = QLabel("Not calibrated")
+        self.calibrate_status_label.setObjectName("calibrate-status-uncalibrated")
 
         # Game configuration section
         self.game_type_label = QLabel("GAME TYPE")
@@ -627,6 +675,24 @@ class SetupDialog(QDialog):
 
         content_layout.addWidget(self.sessions_section)
 
+        # Mode selector section
+        mode_section = QWidget()
+        mode_section.setObjectName("mode-section")
+        mode_section_layout = QVBoxLayout(mode_section)
+        mode_section_layout.setContentsMargins(16, 16, 16, 16)
+        mode_section_layout.setSpacing(SPACE_SM)
+        mode_section_layout.addWidget(self.mode_label)
+
+        mode_radios_layout = QHBoxLayout()
+        mode_radios_layout.setSpacing(SPACE_MD)
+        mode_radios_layout.addWidget(self.mode_manual_radio)
+        mode_radios_layout.addWidget(self.mode_auto_radio)
+        mode_radios_layout.addStretch()
+        mode_section_layout.addLayout(mode_radios_layout)
+        mode_section_layout.addWidget(self.auto_mode_warning_label)
+
+        content_layout.addWidget(mode_section)
+
         # Video source section
         video_section = QWidget()
         video_section.setMinimumHeight(100)  # Label + input row with comfortable padding
@@ -639,6 +705,14 @@ class SetupDialog(QDialog):
         video_input_layout.addWidget(self.video_path_edit, stretch=1)
         video_input_layout.addWidget(self.browse_button)
         video_layout.addLayout(video_input_layout)
+
+        # Calibration row — button + status label side by side
+        calibrate_row = QHBoxLayout()
+        calibrate_row.setSpacing(SPACE_SM)
+        calibrate_row.addWidget(self.calibrate_button)
+        calibrate_row.addWidget(self.calibrate_status_label)
+        calibrate_row.addStretch()
+        video_layout.addLayout(calibrate_row)
 
         content_layout.addWidget(video_section)
 
@@ -940,6 +1014,74 @@ class SetupDialog(QDialog):
                 color: {TEXT_DISABLED};
                 border-color: {BG_BORDER};
             }}
+
+            #setupDialog QPushButton#calibrate-button {{
+                background-color: {BG_TERTIARY};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BG_BORDER};
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 13px;
+                min-width: 180px;
+            }}
+
+            #setupDialog QPushButton#calibrate-button:hover:!disabled {{
+                border-color: {TEXT_WARNING};
+                color: {TEXT_WARNING};
+            }}
+
+            #setupDialog QPushButton#calibrate-button:disabled {{
+                opacity: 0.4;
+                color: {TEXT_DISABLED};
+                border-color: {BG_BORDER};
+            }}
+
+            #setupDialog QLabel#calibrate-status-uncalibrated {{
+                color: {TEXT_WARNING};
+                font-size: 13px;
+                font-weight: 500;
+            }}
+
+            #setupDialog QLabel#calibrate-status-calibrated {{
+                color: {TEXT_ACCENT};
+                font-size: 13px;
+                font-weight: 500;
+            }}
+
+            #setupDialog QWidget#mode-section {{
+                background-color: {BG_SECONDARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 8px;
+            }}
+
+            #setupDialog QRadioButton#mode-radio {{
+                color: {TEXT_PRIMARY};
+                font-size: 14px;
+                spacing: 8px;
+            }}
+
+            #setupDialog QRadioButton#mode-radio::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                border: 2px solid {BORDER_COLOR};
+                background-color: {BG_TERTIARY};
+            }}
+
+            #setupDialog QRadioButton#mode-radio::indicator:checked {{
+                border-color: {TEXT_ACCENT};
+                background-color: {TEXT_ACCENT};
+            }}
+
+            #setupDialog QRadioButton#mode-radio:hover {{
+                color: {TEXT_ACCENT};
+            }}
+
+            #setupDialog QLabel#auto-mode-warning {{
+                color: {TEXT_WARNING};
+                font-size: 12px;
+                font-weight: 500;
+            }}
         """)
 
     def _connect_signals(self) -> None:
@@ -948,10 +1090,16 @@ class SetupDialog(QDialog):
         self._settings_button.clicked.connect(self._on_settings_clicked)
 
         self.browse_button.clicked.connect(self._browse_video)
+        self.calibrate_button.clicked.connect(self._open_calibrator)
         self.game_type_combo.currentIndexChanged.connect(self._on_game_type_changed)
+
+        # Mode selector
+        self.mode_manual_radio.toggled.connect(self._on_mode_changed)
+        self.mode_auto_radio.toggled.connect(self._on_mode_changed)
 
         # Validation triggers
         self.video_path_edit.textChanged.connect(self._validate)
+        self.video_path_edit.textChanged.connect(self._update_calibrate_button_state)
         self.team1_player1_edit.textChanged.connect(self._validate)
         self.team1_player2_edit.textChanged.connect(self._validate)
         self.team2_player1_edit.textChanged.connect(self._validate)
@@ -1102,13 +1250,21 @@ class SetupDialog(QDialog):
         if hasattr(self, '_victory_container'):
             self._victory_container.setVisible(not is_highlights)
 
+        # Auto-process is incompatible with highlights (no scoring to simulate).
+        # Disable the radio when highlights is selected and force back to manual;
+        # re-enable it when switching away (leave user's prior choice intact).
+        self.mode_auto_radio.setEnabled(not is_highlights)
+        if is_highlights and self.mode_auto_radio.isChecked():
+            self.mode_manual_radio.setChecked(True)
+
         # Revalidate after visibility change
         self._validate()
 
     def _validate(self) -> bool:
         """Validate all fields and update UI state.
 
-        Player names are now optional and can be added anytime during editing.
+        Player names are optional and can be added anytime during editing.
+        In auto-process mode, court corner calibration is additionally required.
 
         Returns:
             True if all validation passes, False otherwise
@@ -1130,6 +1286,11 @@ class SetupDialog(QDialog):
         self.team2_player1_edit.setProperty("invalid", "false")
         self.team2_player2_edit.setProperty("invalid", "false")
 
+        # In auto-process mode, court corners are required
+        auto_mode_active = self.mode_auto_radio.isChecked()
+        if auto_mode_active and self._court_corners is None:
+            is_valid = False
+
         # Update Start Editing button state
         self.start_button.setEnabled(is_valid)
 
@@ -1149,10 +1310,37 @@ class SetupDialog(QDialog):
 
     @pyqtSlot()
     def _on_start_editing(self) -> None:
-        """Handle Start Editing button click or auto-start from session resume."""
+        """Handle Start Editing / Auto-process button click or auto-start from session resume."""
+        auto_mode_active = self.mode_auto_radio.isChecked()
+
         # Skip validation when resuming a session - the session data is authoritative
         if self._session_state is None:
             if not self._validate():
+                return
+
+        # Auto-process mode: additional pre-flight checks
+        if auto_mode_active:
+            # Corners must be calibrated
+            if self._court_corners is None:
+                self.auto_mode_warning_label.setVisible(True)
+                QMessageBox.warning(
+                    self,
+                    "Calibration Required",
+                    "Auto-process mode requires court corner calibration.\n\n"
+                    "Please click 'Calibrate Court Corners' and mark the four "
+                    "corners of the court before continuing.",
+                )
+                return
+
+            # Trained model checkpoint must exist
+            checkpoint_path = self._default_winner_checkpoint()
+            if not checkpoint_path.exists():
+                QMessageBox.warning(
+                    self,
+                    "Model Not Found",
+                    "Auto-process requires a trained model. "
+                    "Please run 'python -m ml train-winner' first.",
+                )
                 return
 
         # Collect configuration
@@ -1203,6 +1391,8 @@ class SetupDialog(QDialog):
             team1_players=team1_players,
             team2_players=team2_players,
             session_state=self._session_state,  # Include loaded session state
+            court_corners=self._court_corners,
+            auto_mode=auto_mode_active,
         )
 
         # Accept the dialog
@@ -1237,3 +1427,173 @@ class SetupDialog(QDialog):
             if result is not None:
                 self._app_settings = result.settings
                 self._app_settings.save()
+
+    @pyqtSlot(str)
+    def _update_calibrate_button_state(self, text: str) -> None:
+        """Enable the calibrate button only when a valid video path is set.
+
+        Args:
+            text: Current text in the video path field.
+        """
+        video_path = Path(text.strip())
+        self.calibrate_button.setEnabled(video_path.exists() and video_path.is_file())
+
+    @pyqtSlot(bool)
+    def _on_mode_changed(self, _checked: bool) -> None:
+        """React to a mode radio button toggle.
+
+        Updates the Start button label, shows/hides the auto-mode warning, and
+        re-runs validation so the Start button enable state is correct.
+        """
+        auto_mode_active = self.mode_auto_radio.isChecked()
+
+        if auto_mode_active:
+            self.start_button.setText("Auto-process")
+            # Show warning if corners not yet set; hide once they are
+            corners_missing = self._court_corners is None
+            self.auto_mode_warning_label.setVisible(corners_missing)
+        else:
+            self.start_button.setText("Start Editing")
+            self.auto_mode_warning_label.setVisible(False)
+
+        self._validate()
+
+    @staticmethod
+    def _default_winner_checkpoint() -> Path:
+        """Return the absolute path of the default WinnerClassifier checkpoint.
+
+        The path is computed relative to this source file so it works regardless
+        of the current working directory.  setup_dialog.py lives at
+        src/ui/setup_dialog.py; the checkpoint is at ml/checkpoints/best_winner.pt.
+        """
+        project_root = Path(__file__).parent.parent.parent
+        return project_root / "ml" / "checkpoints" / "best_winner.pt"
+
+    def _extract_calibration_frame_pixmap(
+        self, video_path: Path, offset_s: float
+    ) -> QPixmap | None:
+        """Thin shim over :func:`~src.video.frame_extract.extract_frame_at`.
+
+        Delegates to the module-level helper so any existing callers continue
+        to work.  Error dialogs are anchored to *self* via ``parent_widget``.
+
+        Args:
+            video_path: Absolute path to the source video file.
+            offset_s: Seek position in seconds (must be >= 0).
+
+        Returns:
+            A valid QPixmap on success, or None on any failure.
+        """
+        return extract_frame_at(video_path, offset_s, parent_widget=self)
+
+    @pyqtSlot()
+    def _open_calibrator(self, frame_pixmap: QPixmap | None = None) -> None:
+        """Open the court calibration dialog, optionally with a pre-supplied frame.
+
+        When *frame_pixmap* is None (the default — including the no-arg call from
+        the calibrate button's ``clicked`` signal), the method probes the selected
+        video for its duration, then calls
+        :meth:`_extract_calibration_frame_pixmap` to extract the frame at the
+        5 % mark via ffmpeg.  When a QPixmap is passed in explicitly the
+        extraction step is skipped and that pixmap is used directly.
+
+        In both cases the frame is shown inside :class:`CourtCalibratorWidget`
+        in a modal QDialog.  On success the corners are stored in
+        ``self._court_corners`` and the status label is updated.
+        """
+        if frame_pixmap is None:
+            video_path_str = self.video_path_edit.text().strip()
+            video_path = Path(video_path_str)
+
+            if not video_path.exists():
+                QMessageBox.warning(
+                    self,
+                    "No Video Selected",
+                    "Please select a video file before calibrating court corners.",
+                )
+                return
+
+            # Get video duration via ffprobe
+            try:
+                info = probe_video(video_path)
+                duration = info.duration
+            except ProbeError as exc:
+                QMessageBox.critical(
+                    self,
+                    "ffprobe Error",
+                    f"Could not read video metadata:\n{exc}",
+                )
+                return
+
+            if duration <= 0:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Duration",
+                    "The video reports a zero or negative duration.  "
+                    "Cannot extract a frame for calibration.",
+                )
+                return
+
+            selector = FrameSelectorDialog(
+                video_path=video_path,
+                video_duration_s=duration,
+                initial_offset_s=duration * 0.05,
+                parent=self,
+            )
+            if selector.exec() != QDialog.DialogCode.Accepted:
+                return  # user cancelled — abort calibration entirely
+            frame_pixmap = selector.get_result()
+            if frame_pixmap is None:
+                QMessageBox.warning(
+                    self,
+                    "No Frame Selected",
+                    "No frame was selected for calibration.",
+                )
+                return
+
+        # Build modal dialog containing the calibrator widget
+        calibrator_dialog = QDialog(self)
+        calibrator_dialog.setWindowTitle("Calibrate Court Corners")
+        calibrator_dialog.setModal(True)
+        calibrator_dialog.resize(900, 680)
+
+        dialog_layout = QVBoxLayout(calibrator_dialog)
+        dialog_layout.setContentsMargins(0, 0, 0, 0)
+
+        calibrator = CourtCalibratorWidget(frame_pixmap, calibrator_dialog)
+        dialog_layout.addWidget(calibrator)
+
+        # Connect signal: on confirmation close dialog and store corners
+        calibrator.cornersCaptured.connect(
+            lambda corners: self._on_corners_captured(corners, calibrator_dialog)
+        )
+
+        calibrator_dialog.exec()
+
+    def _on_corners_captured(
+        self,
+        corners: list[tuple[int, int]],
+        dialog: QDialog,
+    ) -> None:
+        """Store captured court corners and update the status label.
+
+        Args:
+            corners: List of 4 (x, y) tuples in original-image pixel coordinates.
+            dialog: The calibration dialog to close after storing the result.
+        """
+        # Convert tuples to lists for JSON-serialisation compatibility
+        self._court_corners = [[x, y] for x, y in corners]
+
+        # Update status label to calibrated appearance
+        self.calibrate_status_label.setObjectName("calibrate-status-calibrated")
+        self.calibrate_status_label.setText("4 corners set")
+        self._refresh_style(self.calibrate_status_label)
+
+        # In auto mode, hide the "calibration required" warning now that it is done
+        if self.mode_auto_radio.isChecked():
+            self.auto_mode_warning_label.setVisible(False)
+
+        # Re-run validation — auto mode start button can now be enabled
+        self._validate()
+
+        dialog.accept()

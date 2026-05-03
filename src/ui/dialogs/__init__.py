@@ -11,6 +11,7 @@ This package contains reusable dialog windows for:
 - Frame selection: FrameSelectorDialog
 - Player names: PlayerNamesDialog
 - New game: NewGameConfirmDialog
+- Auto-edit pipeline progress: AutoEditProgressDialog
 """
 
 from src.ui.dialogs.game_over import GameOverDialog, GameOverResult
@@ -36,6 +37,10 @@ from src.ui.dialogs.new_game_confirm import (
     NewGameConfirmDialog,
     NewGameResult,
     NewGameSettings,
+)
+from src.ui.dialogs.auto_edit_progress import (
+    AutoEditProgressDialog,
+    AutoEditWorker,
 )
 
 __all__ = [
@@ -77,4 +82,7 @@ __all__ = [
     "NewGameConfirmDialog",
     "NewGameResult",
     "NewGameSettings",
+    # Auto-Edit Progress Dialog
+    "AutoEditProgressDialog",
+    "AutoEditWorker",
 ]

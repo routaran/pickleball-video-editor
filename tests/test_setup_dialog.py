@@ -1,16 +1,56 @@
-"""Tests for SetupDialog session resume functionality.
+"""Tests for SetupDialog session resume functionality and _open_calibrator flow.
 
 Tests that when a user clicks a recent session and chooses to resume:
 1. Session data populates form fields correctly (game type, victory rules, player names)
 2. The _on_start_editing() method is called automatically
 3. The dialog is accepted and returns proper GameConfig
+
+Also covers _open_calibrator():
+- When no pixmap is supplied, FrameSelectorDialog is constructed with the
+  correct (video_path, duration, initial_offset) arguments.
+- When the user accepts FrameSelectorDialog, CourtCalibratorWidget is
+  constructed using the pixmap returned by selector.get_result().
+- When the user rejects FrameSelectorDialog, CourtCalibratorWidget is
+  never constructed.
 """
 
-import pytest
+import os
+import sys
+import types
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, call, patch
 
-from PyQt6.QtWidgets import QApplication
+import pytest
+
+# ---------------------------------------------------------------------------
+# Force Qt into offscreen (headless) mode before any Qt import so the tests
+# run in CI environments without a display.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import QApplication, QDialog
+
+# ---------------------------------------------------------------------------
+# Ensure project root is on sys.path so absolute imports resolve.
+# ---------------------------------------------------------------------------
+_PROJECT_ROOT = Path(__file__).parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+# ---------------------------------------------------------------------------
+# Pre-emptively stub heavy ML/optional deps not present in the base venv.
+# ---------------------------------------------------------------------------
+if "torch" not in sys.modules:
+    sys.modules["torch"] = types.ModuleType("torch")  # type: ignore[assignment]
+
+if "ml.predict" not in sys.modules:
+    sys.modules["ml.predict"] = types.ModuleType("ml.predict")  # type: ignore[assignment]
+
+if "ml.auto_edit" not in sys.modules:
+    _auto_edit_stub = types.ModuleType("ml.auto_edit")
+    _auto_edit_stub.AutoEditSetup = MagicMock  # type: ignore[attr-defined]
+    sys.modules["ml.auto_edit"] = _auto_edit_stub  # type: ignore[assignment]
 
 from src.core.models import SessionState
 from src.ui.setup_dialog import SetupDialog, GameConfig
@@ -18,13 +58,13 @@ from src.ui.dialogs import ResumeSessionResult
 from src.ui.widgets.saved_session_card import SavedSessionInfo
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    """Create QApplication for widget tests."""
+@pytest.fixture(scope="session")
+def qapp() -> QApplication:
+    """Return the singleton QApplication, creating it if necessary."""
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    yield app
+    return app  # type: ignore[return-value]
 
 
 @pytest.fixture
@@ -627,3 +667,327 @@ class TestValidationWithResumedSession:
             # Should be invalid
             assert not is_valid
             assert not dialog.start_button.isEnabled()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_1x1_pixmap() -> QPixmap:
+    """Return a valid non-null 1x1 QPixmap for use in calibrator tests."""
+    px = QPixmap(1, 1)
+    px.fill()
+    return px
+
+
+def _make_dialog(qapp: QApplication) -> SetupDialog:
+    """Return a SetupDialog with session-loading suppressed.
+
+    Args:
+        qapp: Active QApplication instance.
+
+    Returns:
+        SetupDialog ready for use without hitting the file system.
+    """
+    with patch.object(SetupDialog, "_load_saved_sessions"):
+        dialog = SetupDialog()
+    qapp.processEvents()
+    return dialog
+
+
+# ---------------------------------------------------------------------------
+# _StubCalibrator: a real QWidget stand-in for CourtCalibratorWidget.
+#
+# Using a MagicMock for CourtCalibratorWidget causes layout.addWidget() to
+# raise TypeError because Qt requires a real QWidget.  This minimal stub
+# satisfies the Qt type requirement while recording constructor arguments so
+# tests can assert on the pixmap that was passed in.
+# ---------------------------------------------------------------------------
+
+
+class _StubCalibratorWidget(QDialog):
+    """Minimal QWidget stand-in for CourtCalibratorWidget.
+
+    Records the pixmap passed to the constructor and exposes a fake
+    ``cornersCaptured`` attribute so the lambda in _open_calibrator can
+    call ``.connect()`` without error.
+    """
+
+    received_pixmap: QPixmap | None = None
+
+    def __init__(self, pixmap: QPixmap, parent: object = None) -> None:
+        super().__init__(parent)  # type: ignore[arg-type]
+        _StubCalibratorWidget.received_pixmap = pixmap
+        self.cornersCaptured = _FakeSignal()
+
+
+class _FakeSignal:
+    """Minimal stand-in for a PyQt signal — records connect() calls."""
+
+    def __init__(self) -> None:
+        self._slot: object = None
+
+    def connect(self, slot: object) -> None:
+        self._slot = slot
+
+
+def _run_open_calibrator(
+    qapp: QApplication,
+    dialog: SetupDialog,
+    *,
+    selector_accepted: bool,
+    picker_pixmap: QPixmap | None = None,
+    frame_pixmap: QPixmap | None = None,
+    fake_duration: float = 100.0,
+) -> None:
+    """Drive _open_calibrator through a complete cycle with all heavy deps mocked.
+
+    ``FrameSelectorDialog`` is replaced with a plain MagicMock whose
+    ``exec()`` returns Accepted or Rejected depending on *selector_accepted*.
+
+    ``CourtCalibratorWidget`` is replaced with ``_StubCalibratorWidget`` so
+    that ``layout.addWidget()`` receives a real QWidget.  The inner
+    ``calibrator_dialog.exec()`` is suppressed by patching ``QDialog.exec``
+    *only* on instances that are not the FrameSelectorDialog mock (which is
+    already a MagicMock and does not go through QDialog.exec at all).
+
+    Args:
+        qapp: Active QApplication.
+        dialog: The SetupDialog under test.
+        selector_accepted: Whether FrameSelectorDialog should accept.
+        picker_pixmap: Pixmap that the mock selector returns from get_result().
+        frame_pixmap: If set, passed directly to _open_calibrator (bypasses picker).
+        fake_duration: Video duration returned by the mock probe_video call.
+    """
+    mock_info = MagicMock()
+    mock_info.duration = fake_duration
+
+    mock_selector = MagicMock()
+    mock_selector.exec.return_value = (
+        QDialog.DialogCode.Accepted if selector_accepted else QDialog.DialogCode.Rejected
+    )
+    if picker_pixmap is not None:
+        mock_selector.get_result.return_value = picker_pixmap
+
+    # Reset the stub's class-level pixmap record before each run.
+    _StubCalibratorWidget.received_pixmap = None
+
+    with patch("src.ui.setup_dialog.probe_video", return_value=mock_info):
+        with patch(
+            "src.ui.setup_dialog.FrameSelectorDialog",
+            return_value=mock_selector,
+        ):
+            with patch(
+                "src.ui.setup_dialog.CourtCalibratorWidget",
+                side_effect=_StubCalibratorWidget,
+            ):
+                # Suppress calibrator_dialog.exec() — a real QDialog created
+                # inside _open_calibrator — so the test does not block.
+                with patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Accepted):
+                    dialog._open_calibrator(frame_pixmap=frame_pixmap)
+                    qapp.processEvents()
+
+
+# ---------------------------------------------------------------------------
+# Tests for _open_calibrator — FrameSelectorDialog wiring
+# ---------------------------------------------------------------------------
+
+
+class TestOpenCalibrator:
+    """Tests for SetupDialog._open_calibrator and its FrameSelectorDialog integration.
+
+    All tests use ``_run_open_calibrator`` which patches:
+    - ``src.ui.setup_dialog.FrameSelectorDialog`` — the class imported at the
+      top of setup_dialog.py; this is the correct patch target.
+    - ``src.ui.setup_dialog.CourtCalibratorWidget`` — replaced with
+      ``_StubCalibratorWidget`` (a real QWidget) so Qt's addWidget() succeeds.
+    - ``src.ui.setup_dialog.probe_video`` — returns a fake VideoInfo so no
+      subprocess is spawned.
+    - ``QDialog.exec`` — prevents any inner dialog from blocking.
+    """
+
+    # ------------------------------------------------------------------
+    # Accept path: FrameSelectorDialog returns Accepted + valid pixmap
+    # ------------------------------------------------------------------
+
+    def test_frame_selector_constructed_with_correct_args(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """When _open_calibrator is called with no pixmap, FrameSelectorDialog
+        must be constructed with video_path, video_duration_s, and
+        initial_offset_s = duration * 0.05.
+        """
+        video_file = tmp_path / "game.mp4"
+        video_file.touch()
+
+        dialog = _make_dialog(qapp)
+        dialog.video_path_edit.setText(str(video_file))
+
+        fake_duration = 200.0
+        mock_info = MagicMock()
+        mock_info.duration = fake_duration
+
+        mock_selector = MagicMock()
+        mock_selector.exec.return_value = QDialog.DialogCode.Accepted
+        mock_selector.get_result.return_value = _make_1x1_pixmap()
+
+        with patch("src.ui.setup_dialog.probe_video", return_value=mock_info):
+            with patch(
+                "src.ui.setup_dialog.FrameSelectorDialog",
+                return_value=mock_selector,
+            ) as mock_selector_cls:
+                with patch(
+                    "src.ui.setup_dialog.CourtCalibratorWidget",
+                    side_effect=_StubCalibratorWidget,
+                ):
+                    with patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Accepted):
+                        dialog._open_calibrator()
+                        qapp.processEvents()
+
+        mock_selector_cls.assert_called_once()
+        _args, kwargs = mock_selector_cls.call_args
+        assert kwargs["video_path"] == video_file
+        assert kwargs["video_duration_s"] == fake_duration
+        assert abs(kwargs["initial_offset_s"] - fake_duration * 0.05) < 1e-9
+
+    def test_accept_path_opens_calibrator_with_picker_pixmap(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """When FrameSelectorDialog is accepted, CourtCalibratorWidget must be
+        constructed using the pixmap returned by selector.get_result().
+        """
+        video_file = tmp_path / "game2.mp4"
+        video_file.touch()
+
+        dialog = _make_dialog(qapp)
+        dialog.video_path_edit.setText(str(video_file))
+
+        picker_pixmap = _make_1x1_pixmap()
+
+        _run_open_calibrator(
+            qapp,
+            dialog,
+            selector_accepted=True,
+            picker_pixmap=picker_pixmap,
+            fake_duration=100.0,
+        )
+
+        assert _StubCalibratorWidget.received_pixmap is picker_pixmap, (
+            "CourtCalibratorWidget must receive the pixmap from FrameSelectorDialog.get_result()"
+        )
+
+    # ------------------------------------------------------------------
+    # Reject path: FrameSelectorDialog returns Rejected
+    # ------------------------------------------------------------------
+
+    def test_reject_path_does_not_open_calibrator(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """When the user cancels FrameSelectorDialog, CourtCalibratorWidget must
+        never be instantiated.
+        """
+        video_file = tmp_path / "game3.mp4"
+        video_file.touch()
+
+        dialog = _make_dialog(qapp)
+        dialog.video_path_edit.setText(str(video_file))
+
+        mock_info = MagicMock()
+        mock_info.duration = 60.0
+
+        mock_selector = MagicMock()
+        mock_selector.exec.return_value = QDialog.DialogCode.Rejected
+
+        _StubCalibratorWidget.received_pixmap = None
+
+        with patch("src.ui.setup_dialog.probe_video", return_value=mock_info):
+            with patch(
+                "src.ui.setup_dialog.FrameSelectorDialog",
+                return_value=mock_selector,
+            ):
+                with patch(
+                    "src.ui.setup_dialog.CourtCalibratorWidget",
+                    side_effect=_StubCalibratorWidget,
+                ) as mock_calibrator_cls:
+                    dialog._open_calibrator()
+                    qapp.processEvents()
+
+        mock_calibrator_cls.assert_not_called()
+        assert _StubCalibratorWidget.received_pixmap is None
+
+    def test_reject_path_leaves_court_corners_none(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """Cancelling FrameSelectorDialog must leave _court_corners as None."""
+        video_file = tmp_path / "game4.mp4"
+        video_file.touch()
+
+        dialog = _make_dialog(qapp)
+        dialog.video_path_edit.setText(str(video_file))
+        assert dialog._court_corners is None
+
+        _run_open_calibrator(
+            qapp,
+            dialog,
+            selector_accepted=False,
+            fake_duration=60.0,
+        )
+
+        assert dialog._court_corners is None
+
+    # ------------------------------------------------------------------
+    # Pre-supplied pixmap path: FrameSelectorDialog is bypassed entirely
+    # ------------------------------------------------------------------
+
+    def test_pre_supplied_pixmap_bypasses_frame_selector(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """When _open_calibrator is called with an explicit frame_pixmap,
+        FrameSelectorDialog must never be constructed.
+        """
+        video_file = tmp_path / "game5.mp4"
+        video_file.touch()
+
+        dialog = _make_dialog(qapp)
+        dialog.video_path_edit.setText(str(video_file))
+
+        supplied_pixmap = _make_1x1_pixmap()
+
+        with patch(
+            "src.ui.setup_dialog.FrameSelectorDialog"
+        ) as mock_selector_cls:
+            with patch(
+                "src.ui.setup_dialog.CourtCalibratorWidget",
+                side_effect=_StubCalibratorWidget,
+            ):
+                with patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Accepted):
+                    dialog._open_calibrator(frame_pixmap=supplied_pixmap)
+                    qapp.processEvents()
+
+        mock_selector_cls.assert_not_called()
+
+    def test_pre_supplied_pixmap_passed_to_calibrator(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """When frame_pixmap is supplied directly, CourtCalibratorWidget must
+        receive that exact pixmap, not one from the frame selector.
+        """
+        video_file = tmp_path / "game6.mp4"
+        video_file.touch()
+
+        dialog = _make_dialog(qapp)
+        dialog.video_path_edit.setText(str(video_file))
+
+        supplied_pixmap = _make_1x1_pixmap()
+        _StubCalibratorWidget.received_pixmap = None
+
+        with patch(
+            "src.ui.setup_dialog.CourtCalibratorWidget",
+            side_effect=_StubCalibratorWidget,
+        ):
+            with patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Accepted):
+                dialog._open_calibrator(frame_pixmap=supplied_pixmap)
+                qapp.processEvents()
+
+        assert _StubCalibratorWidget.received_pixmap is supplied_pixmap
