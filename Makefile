@@ -8,6 +8,7 @@
 # Fallback Defaults (if config.mk doesn't exist)
 # -----------------------------------------------------------------------------
 APP_NAME ?= pickleball-editor
+ML_APP_NAME ?= rally-trainer
 APP_VERSION ?= 0.1.0
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
@@ -22,11 +23,13 @@ MYPY ?= mypy
 BLACK ?= black
 
 SRC_DIR ?= src
+ML_DIR ?= ml
 TESTS_DIR ?= tests
 RESOURCES_DIR ?= resources
 BUILD_DIR ?= build
 DIST_DIR ?= dist
 SPEC_FILE ?= $(APP_NAME).spec
+ML_SPEC_FILE ?= $(ML_APP_NAME).spec
 
 VENV_DIR ?= .venv
 USE_VENV ?= yes
@@ -34,7 +37,7 @@ USE_VENV ?= yes
 # -----------------------------------------------------------------------------
 # Phony Targets
 # -----------------------------------------------------------------------------
-.PHONY: all build install uninstall clean distclean test lint format run help check-config
+.PHONY: all build build-ml smoke-ml install install-ml uninstall uninstall-ml clean distclean test lint format run help check-config
 
 # Default target
 all: build
@@ -92,6 +95,57 @@ install: check-config build
 	@echo ""
 	@echo "Application installed to: $(DESTDIR)$(DATADIR)/$(APP_NAME)/"
 	@echo "Run with: $(APP_NAME)"
+
+# -----------------------------------------------------------------------------
+# ML Build Target
+# -----------------------------------------------------------------------------
+build-ml: check-config
+	@echo "==> Building $(ML_APP_NAME) v$(APP_VERSION)..."
+	@if [ "$(USE_VENV)" = "yes" ] && [ ! -f "$(VENV_DIR)/bin/activate" ]; then \
+		echo "ERROR: Virtual environment not found at $(VENV_DIR)"; \
+		echo "Please run ./configure --enable-ml to set up the environment."; \
+		exit 1; \
+	fi
+	@$(VENV_DIR)/bin/python -c "import torch" 2>/dev/null || { \
+		echo "ERROR: PyTorch not installed. Run: ./configure --enable-ml"; \
+		exit 1; \
+	}
+	$(PYINSTALLER) --clean --noconfirm $(ML_SPEC_FILE)
+	@echo "==> Build complete: $(DIST_DIR)/$(ML_APP_NAME)"
+
+# -----------------------------------------------------------------------------
+# ML Bundle Smoke Test
+# -----------------------------------------------------------------------------
+smoke-ml:
+	@echo "==> Running bundle smoke test on $(DIST_DIR)/$(ML_APP_NAME)..."
+	@bash scripts/smoke_bundle.sh "$(DIST_DIR)/$(ML_APP_NAME)/$(ML_APP_NAME)"
+
+# -----------------------------------------------------------------------------
+# ML Install Target
+# -----------------------------------------------------------------------------
+install-ml: check-config build-ml
+	@echo "==> Installing $(ML_APP_NAME) to $(DESTDIR)$(PREFIX)..."
+	@# Install application bundle to share directory
+	install -d $(DESTDIR)$(DATADIR)/$(ML_APP_NAME)
+	cp -r $(DIST_DIR)/$(ML_APP_NAME)/* $(DESTDIR)$(DATADIR)/$(ML_APP_NAME)/
+	chmod 755 $(DESTDIR)$(DATADIR)/$(ML_APP_NAME)/$(ML_APP_NAME)
+	@# Create symlink in bin directory
+	install -d $(DESTDIR)$(BINDIR)
+	ln -sf $(DATADIR)/$(ML_APP_NAME)/$(ML_APP_NAME) $(DESTDIR)$(BINDIR)/$(ML_APP_NAME)
+	@echo "==> Installation complete"
+	@echo ""
+	@echo "Application installed to: $(DESTDIR)$(DATADIR)/$(ML_APP_NAME)/"
+	@echo "Run with: $(ML_APP_NAME) train --data-dir <path>"
+	@echo "      or: $(ML_APP_NAME) predict --video <path>"
+
+# -----------------------------------------------------------------------------
+# Uninstall Targets
+# -----------------------------------------------------------------------------
+uninstall-ml:
+	@echo "==> Uninstalling $(ML_APP_NAME) from $(DESTDIR)$(PREFIX)..."
+	rm -f $(DESTDIR)$(BINDIR)/$(ML_APP_NAME)
+	rm -rf $(DESTDIR)$(DATADIR)/$(ML_APP_NAME)
+	@echo "==> Uninstall complete"
 
 # -----------------------------------------------------------------------------
 # Uninstall Target
@@ -175,9 +229,12 @@ help:
 	@echo "Pickleball Video Editor - Build System"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  all/build        Build the executable with PyInstaller (default)"
-	@echo "  install          Install to PREFIX/bin (use DESTDIR for staging)"
-	@echo "  uninstall        Remove installed files"
+	@echo "  all/build        Build the editor executable with PyInstaller (default)"
+	@echo "  build-ml         Build the rally-trainer ML executable"
+	@echo "  install          Install editor to PREFIX/bin (use DESTDIR for staging)"
+	@echo "  install-ml       Install rally-trainer to PREFIX/bin"
+	@echo "  uninstall        Remove installed editor files"
+	@echo "  uninstall-ml     Remove installed rally-trainer files"
 	@echo "  clean            Remove build artifacts (__pycache__, dist/, build/)"
 	@echo "  distclean        Deep clean including venv and config.mk"
 	@echo "  test             Run pytest test suite"
@@ -194,17 +251,24 @@ help:
 	@echo "  APP_VERSION      Application version (from config.mk)"
 	@echo ""
 	@echo "Examples:"
-	@echo "  ./configure && make             # Configure and build"
+	@echo "  ./configure && make             # Configure and build editor"
+	@echo "  ./configure --enable-ml && make build-ml  # Build rally-trainer"
 	@echo "  make test                        # Run tests"
-	@echo "  sudo make install                # Install system-wide"
+	@echo "  sudo make install                # Install editor system-wide"
+	@echo "  sudo make install-ml             # Install rally-trainer system-wide"
 	@echo "  make install PREFIX=~/.local     # Install to user directory"
 	@echo "  make DESTDIR=/tmp/pkg install    # Package to staging area"
 	@echo "  make run                         # Run in development mode"
 	@echo ""
-	@echo "First time setup:"
+	@echo "First time setup (editor):"
 	@echo "  1. ./configure [OPTIONS]"
 	@echo "  2. make"
 	@echo "  3. make test"
 	@echo "  4. sudo make install"
+	@echo ""
+	@echo "First time setup (ML rally-trainer):"
+	@echo "  1. ./configure --enable-ml"
+	@echo "  2. make build-ml"
+	@echo "  3. sudo make install-ml"
 	@echo ""
 	@echo "See ./configure --help for configuration options."

@@ -85,6 +85,24 @@ a = Analysis(
         'src.output.subtitle_generator',
         'src.output.debug_export',
 
+        # ML pipeline modules (imported by src.ui.dialogs.auto_edit_progress
+        # at startup via dialogs/__init__.py)
+        'ml',
+        'ml.auto_edit',
+        'ml.config',
+        'ml.dataset',
+        'ml.model',
+        'ml.predict',
+        'ml.predict_winner',
+        'ml.video_features',
+        'ml.winner_dataset',
+        'ml.winner_model',
+
+        # NumPy (required by ml.* — submodules need explicit hint)
+        'numpy',
+        'numpy.core',
+        'numpy.core.multiarray',
+
         # PyQt6 modules
         'PyQt6.QtCore',
         'PyQt6.QtGui',
@@ -132,18 +150,15 @@ a = Analysis(
         'docutils',
 
         # Unused standard library modules (reduces size)
+        # NOTE: 'unittest' and 'test' cannot be excluded — torch's distributed
+        # / utils modules import them at module load time.
         'tkinter',
         'turtle',
-        'test',
-        'unittest',
         'pydoc',
-        'distutils',
 
         # Other heavy modules not needed
         'matplotlib',
-        'numpy',
         'pandas',
-        'scipy',
     ],
 
     # Disable noarchive for better compression

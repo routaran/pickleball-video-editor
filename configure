@@ -42,8 +42,10 @@ PREFIX="/usr/local"
 PYTHON_CMD="python"
 USE_VENV="yes"
 ENABLE_DEV="no"
+ENABLE_ML="no"
 VENV_DIR=".venv"
 APP_NAME="pickleball-editor"
+ML_APP_NAME="rally-trainer"
 APP_VERSION="0.1.0"
 
 # -----------------------------------------------------------------------------
@@ -62,11 +64,13 @@ Options:
   --with-venv=DIR         Use virtual environment at DIR (default: .venv)
   --disable-venv          Do not create/use a virtual environment
   --enable-dev            Install development dependencies (pytest, ruff, mypy)
+  --enable-ml             Install ML dependencies (PyTorch, torchaudio, scikit-learn)
 
 Examples:
   ./configure
   ./configure --prefix=/opt/pickleball-editor
   ./configure --python=python3 --enable-dev
+  ./configure --enable-ml
   ./configure --disable-venv --prefix=\$HOME/.local
 
 This script will:
@@ -74,7 +78,8 @@ This script will:
   2. Check for required system dependencies (libmpv, ffmpeg, ffprobe, Qt6)
   3. Create a virtual environment (unless --disable-venv)
   4. Install Python dependencies (PyQt6, python-mpv, lxml, PyInstaller)
-  5. Generate config.mk with build configuration
+  5. Optionally install ML dependencies (--enable-ml)
+  6. Generate config.mk with build configuration
 
 EOF
 }
@@ -103,6 +108,9 @@ for arg in "$@"; do
             ;;
         --enable-dev)
             ENABLE_DEV="yes"
+            ;;
+        --enable-ml)
+            ENABLE_ML="yes"
             ;;
         *)
             error "Unknown option: $arg"
@@ -257,6 +265,40 @@ if [ "$ENABLE_DEV" = "yes" ]; then
     success "Development dependencies installed"
 fi
 
+# ML dependencies
+ML_DEPS=(
+    "torch>=2.0.0"
+    "torchaudio>=2.0.0"
+    "torchvision>=0.15.0"
+    "numpy>=1.24.0"
+    "scikit-learn>=1.3.0"
+    "decord>=0.6.0"
+    "opencv-python-headless>=4.8.0"
+    "soundfile>=0.12.0"
+)
+
+if [ "$ENABLE_ML" = "yes" ]; then
+    echo "Installing ML dependencies..."
+    for dep in "${ML_DEPS[@]}"; do
+        echo "  - $dep"
+    done
+
+    $PIP_INSTALL_CMD "${ML_DEPS[@]}" || fatal "Failed to install ML dependencies"
+    success "ML dependencies installed"
+
+    # Verify CUDA availability
+    info "Checking CUDA availability..."
+    CUDA_AVAILABLE=$("$VENV_PYTHON" -c "import torch; print(torch.cuda.is_available())" 2>/dev/null || echo "False")
+    if [ "$CUDA_AVAILABLE" = "True" ]; then
+        CUDA_VERSION=$("$VENV_PYTHON" -c "import torch; print(torch.version.cuda)" 2>/dev/null || echo "unknown")
+        success "CUDA $CUDA_VERSION available (GPU training enabled)"
+    else
+        warning "CUDA not available. Training will use CPU (slower)."
+        warning "For GPU support, install CUDA toolkit and reinstall PyTorch."
+        CUDA_VERSION="not available"
+    fi
+fi
+
 # -----------------------------------------------------------------------------
 # Generate config.mk
 # -----------------------------------------------------------------------------
@@ -270,6 +312,7 @@ cat > "$CONFIG_MK" << EOF
 
 # Application metadata
 APP_NAME = $APP_NAME
+ML_APP_NAME = $ML_APP_NAME
 APP_VERSION = $APP_VERSION
 
 # Installation paths
@@ -292,10 +335,12 @@ QT6_VERSION = $QT6_VERSION
 
 # Build configuration
 ENABLE_DEV = $ENABLE_DEV
+ENABLE_ML = $ENABLE_ML
 PYINSTALLER = $([ "$USE_VENV" = "yes" ] && echo "$VENV_DIR/bin/pyinstaller" || echo "pyinstaller")
 
 # Source paths
 SRC_DIR = src
+ML_DIR = ml
 TESTS_DIR = tests
 RESOURCES_DIR = resources
 
@@ -303,6 +348,7 @@ RESOURCES_DIR = resources
 BUILD_DIR = build
 DIST_DIR = dist
 SPEC_FILE = $APP_NAME.spec
+ML_SPEC_FILE = $ML_APP_NAME.spec
 
 # Test configuration
 PYTEST = $([ "$USE_VENV" = "yes" ] && echo "$VENV_DIR/bin/pytest" || echo "pytest")
@@ -324,18 +370,30 @@ echo "  Prefix:            $PREFIX"
 echo "  Python:            $PYTHON_VERSION ($PYTHON_PATH)"
 echo "  Virtual env:       $([ "$USE_VENV" = "yes" ] && echo "$VENV_DIR" || echo "disabled")"
 echo "  Development mode:  $([ "$ENABLE_DEV" = "yes" ] && echo "enabled" || echo "disabled")"
+echo "  ML pipeline:       $([ "$ENABLE_ML" = "yes" ] && echo "enabled" || echo "disabled")"
 echo ""
 echo -e "${BOLD}System Dependencies:${RESET}"
 echo "  libmpv:            $MPV_VERSION"
 echo "  ffmpeg:            $FFMPEG_VERSION"
 echo "  ffprobe:           $FFPROBE_VERSION"
 echo "  Qt6:               $QT6_VERSION"
+if [ "$ENABLE_ML" = "yes" ]; then
+echo "  CUDA:              ${CUDA_VERSION:-not checked}"
+fi
 echo ""
 echo -e "${BOLD}Next Steps:${RESET}"
-echo -e "  1. Build the application:  ${GREEN}make${RESET}"
+echo -e "  1. Build the editor:       ${GREEN}make${RESET}"
 echo -e "  2. Run tests:              ${GREEN}make test${RESET}"
 echo -e "  3. Install on profile      ${GREEN}make install PREFIX=~/.local${RESET}"
 echo -e "  4. Install system-wide:    ${GREEN}sudo make install${RESET}"
 echo -e "  5. Run in dev mode:        ${GREEN}make run${RESET}"
+if [ "$ENABLE_ML" = "yes" ]; then
+echo ""
+echo -e "  ML rally-trainer:"
+echo -e "  1. Build:                  ${GREEN}make build-ml${RESET}"
+echo -e "  2. Install:                ${GREEN}sudo make install-ml${RESET}"
+echo -e "  3. Train:                  ${GREEN}rally-trainer train --data-dir <path>${RESET}"
+echo -e "  4. Predict:                ${GREEN}rally-trainer predict --video <path>${RESET}"
+fi
 echo ""
 echo -e "See ${BOLD}make help${RESET} for all available targets."
