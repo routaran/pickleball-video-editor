@@ -15,6 +15,8 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from src.video._subprocess_env import clean_subprocess_env
+
 if TYPE_CHECKING:
     from src.core.app_config import EncoderSettings
 
@@ -60,6 +62,7 @@ def detect_nvenc_available() -> bool:
             capture_output=True,
             text=True,
             timeout=10,
+            env=clean_subprocess_env(),
         )
 
         if result.returncode != 0:

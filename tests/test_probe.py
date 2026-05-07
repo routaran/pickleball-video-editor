@@ -1,5 +1,7 @@
 """Unit tests for video probe functionality."""
 
+from unittest.mock import MagicMock
+
 import pytest
 from pathlib import Path
 from src.video.probe import (
@@ -198,6 +200,37 @@ class TestProbeVideo:
     # Note: Testing actual video probing requires a real video file
     # and ffprobe installed. These tests should be run manually or
     # in CI with a test video fixture.
+
+    def test_probe_video_passes_sanitized_env_to_subprocess(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression: ffprobe must be invoked with LD_LIBRARY_PATH stripped of
+        site-packages entries, otherwise the system ffprobe loads the older
+        libavformat bundled inside opencv-python-headless and aborts with
+        ``undefined symbol: av_mime_codec_str``.
+        """
+        monkeypatch.setenv(
+            "LD_LIBRARY_PATH", "/tmp/site-packages/x:/usr/lib"
+        )
+
+        fake_video = tmp_path / "fake.mp4"
+        fake_video.write_bytes(b"")
+
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "forced failure to short-circuit parsing"
+        mock_run = MagicMock(return_value=mock_result)
+        monkeypatch.setattr("src.video.probe.subprocess.run", mock_run)
+
+        with pytest.raises(ProbeError):
+            probe_video(fake_video)
+
+        assert mock_run.call_count == 1
+        env_kwarg = mock_run.call_args.kwargs.get("env")
+        assert env_kwarg is not None, "probe_video must pass env= to subprocess.run"
+        ld_path = env_kwarg.get("LD_LIBRARY_PATH", "")
+        assert "site-packages" not in ld_path
+        assert "/usr/lib" in ld_path
 
 
 if __name__ == "__main__":

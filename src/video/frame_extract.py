@@ -15,6 +15,8 @@ from pathlib import Path
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
+from src.video._subprocess_env import clean_subprocess_env
+
 __all__ = ["extract_frame_at"]
 
 _log = logging.getLogger(__name__)
@@ -82,6 +84,7 @@ def extract_frame_at(
             capture_output=True,
             text=True,
             timeout=30,
+            env=clean_subprocess_env(),
         )
     except FileNotFoundError:
         _report_error(

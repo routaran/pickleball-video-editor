@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.video._subprocess_env import clean_subprocess_env
+
 
 __all__ = ["VideoInfo", "probe_video", "ProbeError", "frames_to_timecode", "timecode_to_frames"]
 
@@ -147,7 +149,8 @@ def probe_video(path: str | Path) -> VideoInfo:
             cmd,
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
+            env=clean_subprocess_env(),
         )
     except FileNotFoundError:
         raise ProbeError(

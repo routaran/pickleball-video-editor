@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from src.core.models import GameCompletionInfo
 from src.output.hardware_detect import get_optimal_config
+from src.video._subprocess_env import clean_subprocess_env
 
 if TYPE_CHECKING:
     from src.core.app_config import EncoderSettings
@@ -427,4 +428,4 @@ class FFmpegExporter:
         ]
 
         # Execute ffmpeg with check=True to raise on non-zero exit
-        subprocess.run(ffmpeg_cmd, check=True)
+        subprocess.run(ffmpeg_cmd, check=True, env=clean_subprocess_env())
