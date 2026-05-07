@@ -1678,6 +1678,10 @@ class MainWindow(QMainWindow):
             result, new_settings = dialog.get_result()
 
             if result == NewGameResult.START_NEW:
+                # Park playhead at end of last cut so user can resume capture
+                # in the same recording. Must run BEFORE clear_all().
+                self._seek_to_last_cut_end()
+
                 # Clear all rallies
                 self.rally_manager.clear_all()
 
@@ -1974,6 +1978,9 @@ class MainWindow(QMainWindow):
         self.rally_controls_panel.show()
         self.toolbar_panel.show()
 
+        # Park playhead at end of last cut so editing resumes where capture left off.
+        self._seek_to_last_cut_end()
+
         # Show feedback
         ToastManager.show_info(
             self,
@@ -2251,6 +2258,25 @@ class MainWindow(QMainWindow):
             f"Playing Rally {index + 1}",
             duration=2.0
         )
+
+    def _seek_to_last_cut_end(self) -> None:
+        """Seek the video player to the end of the last completed rally and pause.
+
+        Used after Exit Review and before clearing rallies in New Game so the user
+        resumes capture at the point they left off — supports recording multiple
+        games into a single video file.
+
+        No-op if there are no rallies yet.
+        """
+        rallies = self.rally_manager.get_rallies()
+        if not rallies:
+            return
+        last_rally = rallies[-1]
+        if last_rally.end_frame is None:
+            return
+        last_end_seconds = last_rally.end_frame / self.video_fps
+        self.video_widget.seek(last_end_seconds, absolute=True)
+        self.video_widget.pause()
 
     @pyqtSlot(bool)
     def _on_game_completed_toggled(self, completed: bool) -> None:
