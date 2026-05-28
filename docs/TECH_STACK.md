@@ -1,0 +1,731 @@
+# Tech Stack Specification
+## Pickleball Video Editor Tool
+
+**Version:** 1.0
+**Date:** 2026-01-14
+**Status:** Approved
+
+---
+
+## 1. Technology Summary
+
+| Component | Technology | Version |
+|-----------|------------|---------|
+| Language | Python | 3.13+ |
+| GUI Framework | PyQt6 | >=6.6.0 |
+| Video Playback | python-mpv (libmpv) | Latest |
+| XML Generation | Built-in xml.etree / lxml | >=5.0.0 |
+| Data Format | JSON | - |
+| Video Probing | ffprobe (FFmpeg) | Latest |
+| Video Export | FFmpeg subprocess (NVENC/x264) | Latest |
+| Frame Extraction | decord, OpenCV (headless) | >=0.6.0 / >=4.8.0 |
+| ML Framework | PyTorch (CNN + ResNet-18) | >=2.0.0 |
+| Audio Loading | torchaudio, soundfile | >=2.0.0 / >=0.12.0 |
+| Numerics | NumPy, scikit-learn | >=1.24.0 / >=1.3.0 |
+| Platform | Manjaro Linux (Arch-based) | - |
+| Qt Platform Plugin | XCB (X11) | Forced |
+
+---
+
+## 2. Core Dependencies
+
+### 2.1 System Packages (pacman)
+
+```bash
+# Core dependencies
+sudo pacman -S python python-pip
+sudo pacman -S mpv
+sudo pacman -S ffmpeg
+sudo pacman -S qt6-base
+
+# For python-mpv
+sudo pacman -S mpv libmpv
+
+# X11/XCB dependencies (required for MPV embedding)
+sudo pacman -S libxcb qt6-wayland
+```
+
+### 2.2 Python Packages (pip)
+
+```bash
+# GUI framework
+pip install PyQt6
+
+# MPV integration
+pip install python-mpv
+
+# Optional: Better XML handling
+pip install lxml
+```
+
+### 2.3 Package Versions (requirements.txt)
+
+```
+PyQt6>=6.6.0
+python-mpv>=1.0.0
+lxml>=5.0.0
+pytest>=7.4.0
+pytest-qt>=4.2.0
+```
+
+ML add-ons (installed with `./configure --enable-ml`, source `ml/requirements.txt`):
+
+```
+torch>=2.0.0
+torchaudio>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+decord>=0.6.0
+opencv-python-headless>=4.8.0
+soundfile>=0.12.0
+```
+
+---
+
+## 3. Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Pickleball Video Editor                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────────┐   │
+│   │                 │   │                 │   │                     │   │
+│   │   GUI Layer     │   │   Video Layer   │   │   Output Layer      │   │
+│   │   (PyQt6)       │   │   (python-mpv)  │   │   (Kdenlive Gen)    │   │
+│   │                 │   │                 │   │                     │   │
+│   └────────┬────────┘   └────────┬────────┘   └──────────┬──────────┘   │
+│            │                     │                       │              │
+│            └─────────────────────┼───────────────────────┘              │
+│                                  │                                      │
+│                    ┌─────────────▼─────────────┐                        │
+│                    │                           │                        │
+│                    │     Application Core      │                        │
+│                    │                           │                        │
+│                    │  • Score State Machine    │                        │
+│                    │  • Rally Manager          │                        │
+│                    │  • Session Manager        │                        │
+│                    │  • Event Store            │                        │
+│                    │                           │                        │
+│                    └─────────────┬─────────────┘                        │
+│                                  │                                      │
+│                    ┌─────────────▼─────────────┐                        │
+│                    │                           │                        │
+│                    │     Data Persistence      │                        │
+│                    │     (JSON Files)          │                        │
+│                    │                           │                        │
+│                    └───────────────────────────┘                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. Component Details
+
+### 4.1 GUI Layer (PyQt6)
+
+**Main Window Structure:**
+```python
+QMainWindow
+├── QWidget (central widget)
+│   ├── QVBoxLayout
+│   │   ├── QWidget (MPV container)  # Video player embedded here
+│   │   ├── QHBoxLayout (playback controls)
+│   │   ├── QFrame (state bar)
+│   │   ├── QHBoxLayout (rally controls)
+│   │   ├── QHBoxLayout (interventions)
+│   │   └── QHBoxLayout (session controls)
+```
+
+**Key PyQt6 Components:**
+- `QMainWindow` - Main application window
+- `QDialog` - Modal dialogs (Setup, Edit Score, etc.)
+- `QPushButton` - All buttons with custom styling
+- `QLabel` - State display, timestamps
+- `QLineEdit` - Text inputs (scores, comments)
+- `QComboBox` - Dropdowns (game type, victory rules)
+- `QFileDialog` - Video file selection
+- `QMessageBox` - Warnings and confirmations
+
+**Styling:**
+- Qt Style Sheets (QSS) for button colors and states
+- Custom palette for dark theme compatibility
+
+### 4.2 Video Layer (python-mpv)
+
+**MPV Embedding in PyQt6:**
+```python
+import mpv
+import locale
+
+class VideoWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+
+        # MPV player is created lazily from load() after widget is visible
+        # to ensure a valid native window ID.
+        self.player = None
+
+    def _create_player(self):
+        locale.setlocale(locale.LC_NUMERIC, "C")
+        self.player = mpv.MPV(
+            wid=str(int(self.winId())),
+            vo='gpu-next',
+            gpu_context='x11',
+            hwdec='auto-safe',
+            input_default_bindings=False,
+            input_vo_keyboard=False,
+            osd_level=1,
+            keep_open=True,
+            idle=True,
+        )
+
+# Runtime renderer selection supports fallback:
+# auto => gpu-next -> gpu -> x11
+```
+
+**CRITICAL Platform Requirements:**
+- **X11/XCB Platform**: Application enforces `QT_QPA_PLATFORM=xcb` before Qt imports (especially important on Wayland systems)
+- **Locale**: `LC_NUMERIC=C` must be set before MPV initialization to prevent numeric parsing issues with locales using comma as decimal separator
+- **Deferred Creation**: MPV player is created lazily after widget is visible (from `load()` / `_create_player()`) to ensure valid window ID
+- **Keyboard Input**: MPV's default keyboard bindings are disabled; all keyboard input is handled by Qt
+
+**Key MPV Features Used:**
+- `wid` parameter for embedding in Qt widget
+- `time-pos` property for current timestamp
+- `duration` property for video length
+- `pause` property for play/pause control
+- `speed` property for playback speed
+- `frame-step` / `frame-back-step` for frame stepping
+- `seek` command for navigation
+- `osd-msg` for on-screen display messages
+
+**Timestamp Precision:**
+- MPV provides timestamps in seconds with millisecond precision
+- Convert to frames: `frame = int(timestamp * fps)`
+- Convert to timecode for Kdenlive: `HH:MM:SS.mmm`
+
+### 4.3 Output Layer (Kdenlive Generation)
+
+**Existing Generator:**
+Located at `.claude/skills/kdenlive-generator/scripts/generate_project.py`
+
+**Input Format (JSON config):**
+```json
+{
+    "video_path": "/absolute/path/to/video.mp4",
+    "segments": [
+        {"in": 150, "out": 450, "score": "0-0-2"},
+        {"in": 600, "out": 900, "score": "1-0-2"}
+    ],
+    "profile": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate_num": 60,
+        "frame_rate_den": 1
+    }
+}
+```
+
+**Output Files:**
+- `.kdenlive` - MLT XML project file
+- `.ass` - ASS subtitle file with scores (Advanced SubStation Alpha format for better styling support in Kdenlive)
+
+**Key Functions to Reuse:**
+- `probe_video()` - Extract video metadata via ffprobe
+- `frames_to_timecode()` - Convert frames to `HH:MM:SS.mmm`
+- `generate_ass()` - Create ASS subtitle content with styling
+- `generate_kdenlive_xml()` - Create MLT XML
+
+### 4.4 Application Core
+
+**Score State Machine:**
+```python
+class ScoreState:
+    """Manages pickleball scoring rules."""
+
+    def __init__(self, game_type: str, victory_rules: str):
+        self.game_type = game_type  # "singles" | "doubles"
+        self.victory_rules = victory_rules  # "11" | "9" | "timed"
+
+        # Score state
+        if game_type == "singles":
+            self.score = [0, 0]  # [server_score, receiver_score]
+        else:
+            self.score = [0, 0, 2]  # [team1, team2, server_num]
+
+        self.serving_team = 0  # 0 or 1
+        self.server_number = 2 if game_type == "doubles" else None
+
+    def server_wins(self) -> None:
+        """Handle server winning a rally."""
+        # Increment serving team's score
+        # Check for game over
+
+    def receiver_wins(self) -> None:
+        """Handle receiver winning a rally."""
+        # Handle side-out logic
+
+    def is_game_over(self) -> tuple[bool, int]:
+        """Check if game is over, return (is_over, winner)."""
+```
+
+**Rally Manager:**
+```python
+@dataclass
+class Rally:
+    start_frame: int
+    end_frame: int
+    score_at_start: str
+    winner: str  # "server" | "receiver"
+    comment: Optional[str] = None
+
+class RallyManager:
+    rallies: list[Rally]
+    current_rally_start: Optional[int]
+
+    def start_rally(self, frame: int) -> None
+    def end_rally(self, frame: int, winner: str) -> None
+    def undo_last_action(self) -> None
+    def get_rally_count(self) -> int
+```
+
+**Session Manager:**
+```python
+@dataclass
+class SessionState:
+    video_path: str
+    game_type: str
+    victory_rules: str
+    player_names: dict
+    rallies: list[Rally]
+    current_score: list[int]
+    serving_team: int
+    server_number: Optional[int]
+    last_position: float
+    created_at: str
+    modified_at: str
+
+class SessionManager:
+    def save(self, path: str) -> None
+    def load(self, path: str) -> SessionState
+    def find_existing(self, video_path: str) -> Optional[str]
+```
+
+---
+
+## 5. Data Persistence
+
+### 5.1 Session File Format
+
+**Location:** `~/.local/share/pickleball-editor/sessions/`
+**Filename:** `{video_hash}.json`
+
+```json
+{
+    "version": "1.0",
+    "video_path": "/home/user/Videos/match.mp4",
+    "video_hash": "abc123...",
+    "game_type": "doubles",
+    "victory_rules": "11",
+    "player_names": {
+        "team1": ["John", "Jane"],
+        "team2": ["Bob", "Alice"]
+    },
+    "rallies": [
+        {
+            "start_frame": 1534,
+            "end_frame": 2610,
+            "score_at_start": "0-0-2",
+            "winner": "server",
+            "comment": null
+        }
+    ],
+    "current_score": [1, 0, 1],
+    "serving_team": 0,
+    "server_number": 1,
+    "last_position": 45.23,
+    "created_at": "2026-01-14T10:30:00",
+    "modified_at": "2026-01-14T11:45:00"
+}
+```
+
+### 5.2 Debug Output Format
+
+**Location:** `~/Videos/debug/`
+**Filename:** `{video_name}.json`
+
+```json
+{
+    "version": "1.0",
+    "video_path": "/home/user/Videos/match.mp4",
+    "game_info": {
+        "type": "doubles",
+        "victory_rules": "11",
+        "winner": "team1",
+        "final_score": "11-9"
+    },
+    "player_names": {
+        "team1": ["John", "Jane"],
+        "team2": ["Bob", "Alice"]
+    },
+    "rallies": [
+        {
+            "number": 1,
+            "start_time": "00:00:25.567",
+            "end_time": "00:00:43.500",
+            "start_frame": 1534,
+            "end_frame": 2610,
+            "score": "0-0-2",
+            "winner": "server",
+            "result_score": "1-0-1",
+            "comment": null
+        }
+    ],
+    "interventions": [
+        {
+            "type": "score_edit",
+            "timestamp": "00:05:30.000",
+            "old_score": "5-3-2",
+            "new_score": "5-4-2",
+            "comment": "Missed a point"
+        }
+    ],
+    "comments": [
+        {
+            "timestamp": "00:03:45.230",
+            "text": "Great rally!",
+            "duration": 5
+        }
+    ]
+}
+```
+
+---
+
+## 6. Directory Structure
+
+```
+pickleball-editor/
+├── src/
+│   ├── __init__.py
+│   ├── main.py                 # Application entry point
+│   ├── app.py                  # QApplication setup
+│   │
+│   ├── ui/
+│   │   ├── __init__.py
+│   │   ├── main_window.py      # Main editing window
+│   │   ├── setup_dialog.py     # Initial setup dialog
+│   │   ├── review_mode.py      # Final review UI
+│   │   ├── dialogs/
+│   │   │   ├── __init__.py
+│   │   │   ├── edit_score.py
+│   │   │   ├── force_sideout.py
+│   │   │   ├── add_comment.py
+│   │   │   ├── game_over.py
+│   │   │   ├── resume_session.py
+│   │   │   └── unsaved_warning.py
+│   │   ├── widgets/
+│   │   │   ├── __init__.py
+│   │   │   ├── video_widget.py     # MPV embed widget
+│   │   │   ├── playback_controls.py
+│   │   │   ├── state_bar.py
+│   │   │   ├── rally_controls.py
+│   │   │   └── rally_button.py     # Custom styled button
+│   │   └── styles/
+│   │       └── theme.qss           # Qt stylesheet
+│   │
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── score_state.py      # Scoring state machine
+│   │   ├── rally_manager.py    # Rally tracking
+│   │   ├── session_manager.py  # Save/load sessions
+│   │   └── models.py           # Data classes
+│   │
+│   ├── video/
+│   │   ├── __init__.py
+│   │   ├── player.py           # MPV player wrapper
+│   │   └── probe.py            # Video metadata extraction
+│   │
+│   └── output/
+│       ├── __init__.py
+│       ├── kdenlive_generator.py   # Kdenlive XML generation
+│       ├── subtitle_generator.py   # ASS subtitle generation
+│       └── debug_export.py         # Debug JSON export
+│
+├── resources/
+│   └── icons/                  # Button icons (optional)
+│
+├── tests/
+│   ├── __init__.py
+│   ├── test_score_state.py
+│   ├── test_rally_manager.py
+│   └── test_kdenlive_generator.py
+│
+├── docs/
+│   ├── PRD.md
+│   ├── UI_SPEC.md
+│   ├── UI_PROTOTYPES.md
+│   └── TECH_STACK.md
+│
+├── requirements.txt
+├── pyproject.toml
+└── README.md
+```
+
+---
+
+## 7. Platform-Specific Requirements
+
+### 7.1 X11/XCB Platform Forcing
+
+**Problem**: On Wayland systems, MPV embedding via window ID (`wid`) requires X11 compatibility mode.
+
+**Solution**: Force Qt to use XCB platform before any Qt imports:
+
+```python
+# main.py - BEFORE importing PyQt6
+import os
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+
+# Now safe to import Qt
+from PyQt6.QtWidgets import QApplication
+```
+
+**Alternative**: Enforce at multiple layers:
+```python
+# app.py - Enforce again at QApplication creation
+def create_application():
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    return QApplication(sys.argv)
+```
+
+### 7.2 Locale Configuration for MPV
+
+**Problem**: MPV's numeric parsing breaks when `LC_NUMERIC` uses comma as decimal separator (e.g., German locale: "1,5" instead of "1.5").
+
+**Solution**: Set `LC_NUMERIC=C` before MPV initialization:
+
+```python
+import locale
+
+# Option 1: Set globally in main.py (before any MPV usage)
+locale.setlocale(locale.LC_NUMERIC, "C")
+
+# Option 2: Set in app.py (application-level)
+def create_application():
+    locale.setlocale(locale.LC_NUMERIC, "C")
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    return QApplication(sys.argv)
+
+# Option 3: Set in player.py (just before MPV creation)
+class VideoWidget(QWidget):
+    def showEvent(self, event):
+        locale.setlocale(locale.LC_NUMERIC, "C")
+        self.player = mpv.MPV(...)
+```
+
+**Recommended**: Set at all three levels for maximum robustness.
+
+### 7.3 MPV Keyboard Input Handling
+
+**Problem**: MPV's default keyboard bindings conflict with Qt's keyboard handling.
+
+**Solution**: Disable MPV keyboard input, let Qt handle everything:
+
+```python
+self.player = mpv.MPV(
+    # Disable MPV's default keyboard bindings (space for pause, arrow keys, etc.)
+    input_default_bindings=False,
+    # Disable MPV's video output keyboard events
+    input_vo_keyboard=False,
+    # ... other options
+)
+```
+
+All keyboard shortcuts (Space, Left/Right arrows, etc.) are now handled by Qt's `keyPressEvent()`.
+
+---
+
+## 8. MPV Integration Details
+
+### 8.1 Embedding MPV in PyQt6
+
+```python
+class VideoWidget(QWidget):
+    """Widget that embeds MPV player."""
+
+    position_changed = pyqtSignal(float)  # Current position in seconds
+    duration_changed = pyqtSignal(float)  # Video duration
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # Required for proper MPV embedding
+        self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors)
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+
+        # MPV player created in showEvent - deferred until widget is shown
+        self.player = None
+
+    def showEvent(self, event):
+        """Initialize MPV player after widget is shown."""
+        super().showEvent(event)
+        if self.player is None:
+            # CRITICAL: Enforce C locale for MPV numeric parsing
+            import locale
+            locale.setlocale(locale.LC_NUMERIC, "C")
+
+            # Create MPV player with embedded window
+            self.player = mpv.MPV(
+                wid=str(int(self.winId())),
+                vo='gpu',
+                hwdec='auto-safe',
+                # CRITICAL: Disable MPV keyboard input - Qt handles all input
+                input_default_bindings=False,
+                input_vo_keyboard=False,
+                osd_level=1,
+                keep_open=True,
+                idle=True
+            )
+
+            # Observe properties
+            self.player.observe_property('time-pos', self._on_position)
+            self.player.observe_property('duration', self._on_duration)
+
+    def load(self, path: str):
+        self.player.play(path)
+
+    def play(self):
+        self.player.pause = False
+
+    def pause(self):
+        self.player.pause = True
+
+    def toggle_pause(self):
+        self.player.pause = not self.player.pause
+
+    def seek(self, seconds: float):
+        self.player.seek(seconds, reference='absolute')
+
+    def frame_step(self):
+        self.player.frame_step()
+
+    def frame_back_step(self):
+        self.player.frame_back_step()
+
+    def set_speed(self, speed: float):
+        self.player.speed = speed
+
+    def show_osd(self, message: str, duration: float = 2.0):
+        self.player.show_text(message, int(duration * 1000))
+
+    @property
+    def position(self) -> float:
+        return self.player.time_pos or 0.0
+
+    @property
+    def duration(self) -> float:
+        return self.player.duration or 0.0
+```
+
+### 8.2 Frame-Accurate Timestamps
+
+```python
+def seconds_to_frame(seconds: float, fps: float) -> int:
+    """Convert seconds to frame number."""
+    return int(seconds * fps)
+
+def frame_to_seconds(frame: int, fps: float) -> float:
+    """Convert frame number to seconds."""
+    return frame / fps
+
+def frame_to_timecode(frame: int, fps: float) -> str:
+    """Convert frame to Kdenlive timecode (HH:MM:SS.mmm)."""
+    total_seconds = frame / fps
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+    seconds = total_seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
+```
+
+---
+
+## 9. Build and Distribution
+
+> **Note:** Development setup instructions (virtual environment, installation, running the app) are in `README.md`.
+
+### 9.1 PyInstaller (Optional)
+
+For standalone executable distribution:
+
+```bash
+pip install pyinstaller
+
+pyinstaller --onefile \
+    --name="pickleball-editor" \
+    --add-data="resources:resources" \
+    src/main.py
+```
+
+---
+
+## 10. Testing Strategy
+
+### 10.1 Unit Tests
+
+- **Score State Machine**: Test all scoring rules for singles/doubles
+- **Rally Manager**: Test rally start/end, undo functionality
+- **Kdenlive Generator**: Test XML output validity
+
+### 10.2 Integration Tests
+
+- **MPV Integration**: Test video loading, seeking, frame stepping
+- **Session Persistence**: Test save/load cycle
+- **End-to-End**: Mark rallies, generate Kdenlive, verify output
+
+### 10.3 Manual Testing
+
+- Test with real pickleball footage
+- Verify Kdenlive opens generated projects without errors
+- Verify subtitle timing matches rallies
+
+---
+
+## 11. Risk Mitigation
+
+| Risk | Mitigation |
+|------|------------|
+| MPV embedding issues | Fall back to IPC socket if embedding fails |
+| Wayland MPV embedding failure | Force XCB platform via `QT_QPA_PLATFORM=xcb` |
+| MPV numeric parsing issues | Enforce `LC_NUMERIC=C` at multiple levels (main.py, app.py, player.py) |
+| Invalid window ID on embed | Defer MPV creation until widget's `showEvent()` |
+| MPV/Qt keyboard conflicts | Disable MPV keyboard bindings, use Qt exclusively |
+| PyQt6 version conflicts | Pin specific version in requirements.txt |
+| Kdenlive XML format changes | Template-based generation, easy to update |
+| Large video file handling | Use memory-mapped file access, lazy loading |
+
+---
+
+## Appendix A: Existing Code Assets
+
+### Kdenlive Generator
+- **Location:** `.claude/skills/kdenlive-generator/scripts/generate_project.py`
+- **Status:** Fully functional, can be imported directly
+- **Capabilities:** Generates valid .kdenlive files with cuts and ASS subtitles
+- **Note:** Updated from SRT to ASS subtitle format for better styling support in Kdenlive
+
+### Template
+- **Location:** `.claude/skills/kdenlive-generator/templates/base_template.kdenlive`
+- **Status:** Reference for XML structure
+- **Note:** Generator creates XML programmatically, template for reference only
+
+---
+
+*Document Version: 1.1*
+*Created: 2026-01-14*
+*Updated: 2026-01-14 - Added platform-specific requirements (X11/XCB forcing, locale handling, keyboard input), deferred MPV creation, ASS subtitle format*
