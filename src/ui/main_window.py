@@ -421,7 +421,7 @@ class MainWindow(QMainWindow):
             Container widget with video player and overlay
         """
         # Create video widget and status overlay
-        self.video_widget = VideoWidget()
+        self.video_widget = VideoWidget(renderer_mode=self._app_settings.video.renderer)
         self.status_overlay = StatusOverlay()
 
         # Use custom container that handles resize events

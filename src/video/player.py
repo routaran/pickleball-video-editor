@@ -20,6 +20,7 @@ Critical MPV/Qt Integration:
 import ctypes
 import locale
 import os
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,9 @@ import mpv  # noqa: E402 - must import after locale setup
 __all__ = ["VideoWidget"]
 
 
+logger = logging.getLogger(__name__)
+
+
 class VideoWidget(QWidget):
     """Widget that embeds the MPV video player.
 
@@ -67,7 +71,7 @@ class VideoWidget(QWidget):
     duration_changed = pyqtSignal(float)  # Video duration in seconds
     playback_finished = pyqtSignal()  # Video ended
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, renderer_mode: str = "auto") -> None:
         """Initialize the video widget.
 
         Args:
@@ -85,10 +89,31 @@ class VideoWidget(QWidget):
         self._position: float = 0.0
         self.fps: float = 60.0  # Default, updated when video loads
 
+        self._renderer_mode = renderer_mode
+
         # Position update timer (more reliable than property observer in Qt)
         self._position_timer = QTimer(self)
         self._position_timer.timeout.connect(self._update_position)
         self._position_timer.setInterval(50)  # 20 FPS updates
+
+    def _renderer_candidates(self) -> list[dict[str, str]]:
+        """Get renderer candidates and MPV options from configured mode."""
+        gpu_next = {"vo": "gpu-next", "gpu_context": "x11"}
+        gpu = {"vo": "gpu", "gpu_context": "x11"}
+        x11 = {"vo": "x11"}
+
+        mode = self._renderer_mode
+        if mode == "auto":
+            return [gpu_next, gpu, x11]
+        if mode == "gpu-next":
+            return [gpu_next]
+        if mode == "gpu":
+            return [gpu]
+        if mode == "x11":
+            return [x11]
+
+        logger.warning("Unknown renderer mode '%s'; falling back to auto", mode)
+        return [gpu_next, gpu, x11]
 
     def _create_player(self) -> None:
         """Create the MPV player instance with embedding configuration."""
@@ -109,45 +134,58 @@ class VideoWidget(QWidget):
             raise RuntimeError(f"LOCALE NOT SET! Got {current}, expected b'C'")
 
         # Ensure the widget has a valid native window ID
-        # Force creation of native window if not already done
         from PyQt6.QtWidgets import QApplication
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
-        self.winId()  # Force window ID creation
-        QApplication.processEvents()  # Process pending events
+        self.winId()
+        QApplication.processEvents()
 
         wid = int(self.winId())
-
-        # Detect display server
-        display_server = os.environ.get("XDG_SESSION_TYPE", "unknown")
-        wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
-        print(f">>> MPV EMBEDDING: winId = {wid}, display = {display_server}, wayland = {wayland_display} <<<")
-
         if wid == 0:
             raise RuntimeError("VideoWidget has invalid winId (0). Widget must be shown first.")
 
-        # Use x11 video output for reliable embedding
-        # gpu/libmpv can have issues with window embedding on some systems
-        self._player = mpv.MPV(
-            wid=str(wid),
-            vo="x11",  # x11 is most reliable for embedding
-            hwdec="auto-safe",
-            input_default_bindings=False,  # Disable MPV keyboard shortcuts
-            input_vo_keyboard=False,  # Let Qt handle all keyboard input
-            osd_level=1,
-            keep_open=True,  # Don't close when video ends
-            idle=True,
+        display_server = os.environ.get("XDG_SESSION_TYPE", "unknown")
+        wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
+        logger.info(
+            "MPV embedding init: winId=%s display=%s wayland_display=%s renderer_mode=%s",
+            wid,
+            display_server,
+            wayland_display,
+            self._renderer_mode,
         )
 
-        # Observe duration property
-        self._player.observe_property("duration", self._on_duration_change)
+        last_error: Exception | None = None
+        for renderer in self._renderer_candidates():
+            vo = renderer["vo"]
+            kwargs: dict[str, str] = {}
+            if "gpu_context" in renderer:
+                kwargs["gpu_context"] = renderer["gpu_context"]
+            try:
+                self._player = mpv.MPV(
+                    wid=str(wid),
+                    vo=vo,
+                    hwdec="auto-safe",
+                    input_default_bindings=False,
+                    input_vo_keyboard=False,
+                    osd_level=1,
+                    keep_open=True,
+                    idle=True,
+                    **kwargs,
+                )
+                self._player.observe_property("duration", self._on_duration_change)
 
-        # Handle end of file
-        @self._player.event_callback("end-file")
-        def on_end_file(event: Any) -> None:
-            # MpvEvent.data returns MpvEventEndFile with reason as int
-            # EOF = 0, RESTARTED = 1, ABORTED = 2
-            if event.data is not None and event.data.reason == 0:  # EOF
-                QTimer.singleShot(0, self.playback_finished.emit)
+                @self._player.event_callback("end-file")
+                def on_end_file(event: Any) -> None:
+                    if event.data is not None and event.data.reason == 0:
+                        QTimer.singleShot(0, self.playback_finished.emit)
+
+                logger.info("MPV renderer selected: vo=%s", vo)
+                return
+            except Exception as exc:
+                last_error = exc
+                logger.warning("MPV init failed for vo=%s: %s", vo, exc)
+                self._player = None
+
+        raise RuntimeError(f"Failed to initialize MPV for all renderers: {last_error}")
 
     def _on_duration_change(self, name: str, value: float | None) -> None:
         """Handle duration property changes from MPV.

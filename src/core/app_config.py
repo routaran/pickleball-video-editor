@@ -13,17 +13,22 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import json
 from functools import cache
+from typing import Final
 
 
 __all__ = [
     "ShortcutConfig",
     "SkipDurationConfig",
     "WindowSizeConfig",
+    "VideoConfig",
     "EncoderProfile",
     "EncoderSettings",
     "AppSettings",
     "get_default_config_dir",
 ]
+
+
+VALID_VIDEO_RENDERERS: Final[set[str]] = {"auto", "gpu-next", "gpu", "x11"}
 
 
 @cache
@@ -183,6 +188,25 @@ class WindowSizeConfig:
 
 
 @dataclass
+class VideoConfig:
+    """Video playback settings."""
+
+    renderer: str = "auto"
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize to dictionary for JSON export."""
+        return {"renderer": self.renderer}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, str]) -> "VideoConfig":
+        """Deserialize from dictionary with validation."""
+        renderer = data.get("renderer", "auto")
+        if renderer not in VALID_VIDEO_RENDERERS:
+            renderer = "auto"
+        return cls(renderer=renderer)
+
+
+@dataclass
 class EncoderProfile:
     """FFmpeg encoder profile configuration.
 
@@ -330,6 +354,7 @@ class AppSettings:
     shortcuts: ShortcutConfig = field(default_factory=ShortcutConfig)
     skip_durations: SkipDurationConfig = field(default_factory=SkipDurationConfig)
     window_size: WindowSizeConfig = field(default_factory=WindowSizeConfig)
+    video: VideoConfig = field(default_factory=VideoConfig)
     encoder: EncoderSettings = field(default_factory=EncoderSettings.get_defaults)
 
     def save(self, config_dir: Path | None = None) -> bool:
@@ -359,6 +384,7 @@ class AppSettings:
             "shortcuts": self.shortcuts.to_dict(),
             "skip_durations": self.skip_durations.to_dict(),
             "window_size": self.window_size.to_dict(),
+            "video": self.video.to_dict(),
             "encoder": self.encoder.to_dict(),
         }
 
@@ -411,17 +437,20 @@ class AppSettings:
         shortcuts_data = data.get("shortcuts", {})
         skip_durations_data = data.get("skip_durations", {})
         window_size_data = data.get("window_size", {})
+        video_data = data.get("video", {})
         encoder_data = data.get("encoder", {})
 
         shortcuts = ShortcutConfig.from_dict(shortcuts_data if isinstance(shortcuts_data, dict) else {})
         skip_durations = SkipDurationConfig.from_dict(skip_durations_data if isinstance(skip_durations_data, dict) else {})
         window_size = WindowSizeConfig.from_dict(window_size_data if isinstance(window_size_data, dict) else {})
+        video = VideoConfig.from_dict(video_data if isinstance(video_data, dict) else {})
         encoder = EncoderSettings.from_dict(encoder_data if isinstance(encoder_data, dict) else {})
 
         return cls(
             shortcuts=shortcuts,
             skip_durations=skip_durations,
             window_size=window_size,
+            video=video,
             encoder=encoder,
         )
 
@@ -431,5 +460,6 @@ class AppSettings:
             "shortcuts": self.shortcuts.to_dict(),
             "skip_durations": self.skip_durations.to_dict(),
             "window_size": self.window_size.to_dict(),
+            "video": self.video.to_dict(),
             "encoder": self.encoder.to_dict(),
         }

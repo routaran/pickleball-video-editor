@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QComboBox,
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
@@ -484,6 +485,29 @@ class ConfigDialog(QDialog):
         self.unlimited_max_checkbox.stateChanged.connect(self._on_unlimited_max_changed)
         layout.addWidget(self.unlimited_max_checkbox)
 
+        # Video renderer settings
+        renderer_group = QGroupBox("Video Renderer")
+        renderer_group.setFont(Fonts.label())
+        renderer_group.setObjectName("config_group")
+        renderer_layout = QGridLayout(renderer_group)
+        renderer_layout.setSpacing(SPACE_MD)
+
+        renderer_layout.addWidget(QLabel("Renderer Mode:"), 0, 0)
+        self.video_renderer_combo = QComboBox()
+        self.video_renderer_combo.addItem("Auto (recommended)", "auto")
+        self.video_renderer_combo.addItem("GPU Next", "gpu-next")
+        self.video_renderer_combo.addItem("GPU", "gpu")
+        self.video_renderer_combo.addItem("X11 (compatibility)", "x11")
+        self.video_renderer_combo.setObjectName("renderer_combo")
+        renderer_layout.addWidget(self.video_renderer_combo, 0, 1)
+
+        renderer_help = QLabel("Use X11 only if GPU modes fail to initialize.")
+        renderer_help.setFont(Fonts.secondary())
+        renderer_help.setWordWrap(True)
+        renderer_help.setObjectName("default_label")
+        renderer_layout.addWidget(renderer_help, 1, 0, 1, 2)
+        layout.addWidget(renderer_group)
+
         layout.addStretch()
 
         return tab
@@ -729,6 +753,13 @@ class ConfigDialog(QDialog):
         )
         self.unlimited_max_checkbox.setChecked(is_unlimited)
 
+        # Video renderer
+        renderer_index = self.video_renderer_combo.findData(self.current_settings.video.renderer)
+        if renderer_index >= 0:
+            self.video_renderer_combo.setCurrentIndex(renderer_index)
+        else:
+            self.video_renderer_combo.setCurrentIndex(0)
+
         # Initial validation
         self._validate_shortcuts()
 
@@ -856,7 +887,12 @@ class ConfigDialog(QDialog):
             shortcuts=shortcuts,
             skip_durations=skip_durations,
             window_size=window_size,
+            video=self.current_settings.video,
+            encoder=self.current_settings.encoder,
         )
+        renderer_data = self.video_renderer_combo.currentData()
+        if isinstance(renderer_data, str):
+            settings.video.renderer = renderer_data
 
         self.result = ConfigDialogResult(settings=settings)
         self.accept()
