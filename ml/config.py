@@ -78,6 +78,10 @@ class WinnerModelConfig:
         canonical_height: Height (pixels) each frame is resized to.
         device: PyTorch device string.  Falls back to CPU automatically when
             CUDA is unavailable.
+        clip_duration_override_s: When set to a non-``None`` value, replaces
+            ``clip_duration_s`` for the current run without changing the
+            stored default.  Intended for clip-window ablation experiments.
+            Use :py:meth:`effective_clip_duration_s` to read the active value.
     """
 
     checkpoint_path: Path = Path("ml/checkpoints/best_winner.pt")
@@ -87,6 +91,41 @@ class WinnerModelConfig:
     canonical_width: int = 256
     canonical_height: int = 128
     device: str = "cuda"
+    clip_duration_override_s: float | None = None
+
+    @property
+    def effective_clip_duration_s(self) -> float:
+        """Return the active clip duration for inference.
+
+        Returns ``clip_duration_override_s`` when it is not ``None``,
+        otherwise falls back to the ``clip_duration_s`` default.  Call-sites
+        should use this property rather than reading ``clip_duration_s``
+        directly so that ablation overrides are honoured transparently.
+        """
+        if self.clip_duration_override_s is not None:
+            return self.clip_duration_override_s
+        return self.clip_duration_s
+
+
+@dataclass
+class FeatureCollectionConfig:
+    """Controls which feature extractors run during the data-collection pass.
+
+    Attributes:
+        metadata_enabled: Collect per-clip metadata (timestamps, labels,
+            source video path).  Enabled by default because it is cheap and
+            required for every downstream task.
+        audio_enabled: Extract audio features (mel spectrograms, etc.).
+            Disabled by default; the audio pipeline is not yet stable and
+            adding it here makes it easy to opt-in without touching callers.
+        features_subdir: Sub-directory under ``PathConfig.cache_dir`` where
+            collected features are stored.  A future FeatureCache class will
+            root itself here.
+    """
+
+    metadata_enabled: bool = True
+    audio_enabled: bool = False
+    features_subdir: str = "features"
 
 
 def _default_data_root() -> Path:
