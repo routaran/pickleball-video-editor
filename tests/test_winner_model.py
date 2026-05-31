@@ -8,9 +8,11 @@ Test classes
 ------------
 TestWinnerClassifierArchitecture  — forward-pass shape, softmax, gradients, param count
 TestPredictWinners                 — inference pipeline via mocks
+TestCheckpointMetadata             — E2: config round-trip, old-format back-compat, mismatch warning
 """
 
 import sys
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -38,6 +40,8 @@ torch = pytest.importorskip("torch")
 
 from ml.winner_model import WinnerClassifier, load_winner_classifier  # noqa: E402
 from ml.predict_winner import predict_winners  # noqa: E402
+from ml.config import WinnerModelConfig  # noqa: E402
+from ml.train_winner import _config_to_dict  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -292,3 +296,121 @@ class TestPredictWinners:
                 [(0.0, 3.0)],
                 nonexistent,
             )
+
+
+# ---------------------------------------------------------------------------
+# TestCheckpointMetadata — E2 config round-trip and mismatch warning
+# ---------------------------------------------------------------------------
+
+
+def _save_checkpoint(path: Path, include_config: bool, cfg: WinnerModelConfig | None = None) -> None:
+    """Helper: save a minimal WinnerClassifier checkpoint to *path*.
+
+    Args:
+        path: Destination ``.pt`` file.
+        include_config: When True, add a ``"config"`` key serialised via
+                        :func:`_config_to_dict`.  When False, omit it to
+                        simulate the old checkpoint format.
+        cfg: WinnerModelConfig to serialise.  Defaults to a fresh instance.
+    """
+    model = WinnerClassifier()
+    effective_cfg = cfg if cfg is not None else WinnerModelConfig()
+    payload: dict = {
+        "model_state_dict": model.state_dict(),
+        "epoch": 1,
+        "val_accuracy": 0.75,
+    }
+    if include_config:
+        payload["config"] = _config_to_dict(effective_cfg)
+    torch.save(payload, path)
+
+
+class TestCheckpointMetadata:
+    """Tests for E2: config metadata round-trip, back-compat, mismatch warning."""
+
+    # ------------------------------------------------------------------
+    # Test 10 — checkpoint WITH config metadata loads without warning
+    # ------------------------------------------------------------------
+
+    def test_checkpoint_with_config_loads_silently(self, tmp_path: Path) -> None:
+        """A checkpoint saved with matching config must load without any warning.
+
+        Saves a checkpoint using the default WinnerModelConfig, then loads it
+        back requesting the same default config.  No UserWarning should fire.
+        """
+        ckpt = tmp_path / "with_config.pt"
+        cfg = WinnerModelConfig()
+        _save_checkpoint(ckpt, include_config=True, cfg=cfg)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            model = load_winner_classifier(ckpt, device="cpu", config=cfg)
+
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        assert len(user_warnings) == 0, (
+            f"Expected no UserWarning on matching config, got: "
+            + "; ".join(str(w.message) for w in user_warnings)
+        )
+        assert isinstance(model, WinnerClassifier)
+
+    # ------------------------------------------------------------------
+    # Test 11 — OLD checkpoint (no config key) loads without warning
+    # ------------------------------------------------------------------
+
+    def test_old_checkpoint_without_config_loads_unchanged(self, tmp_path: Path) -> None:
+        """An old-format checkpoint without a 'config' key must load cleanly.
+
+        Simulates a pre-E2 checkpoint that has only 'model_state_dict'.
+        The loader must not raise and must not emit a UserWarning so that
+        existing inference pipelines are unaffected.
+        """
+        ckpt = tmp_path / "old_format.pt"
+        _save_checkpoint(ckpt, include_config=False)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            model = load_winner_classifier(ckpt, device="cpu")
+
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        assert len(user_warnings) == 0, (
+            f"Expected no UserWarning for old-format checkpoint, got: "
+            + "; ".join(str(w.message) for w in user_warnings)
+        )
+        assert isinstance(model, WinnerClassifier)
+
+    # ------------------------------------------------------------------
+    # Test 12 — config mismatch produces UserWarning, does NOT raise
+    # ------------------------------------------------------------------
+
+    def test_config_mismatch_emits_warning_not_exception(self, tmp_path: Path) -> None:
+        """A config mismatch must emit a UserWarning and still return the model.
+
+        Saves a checkpoint with clip_duration_s=2.5, then loads it requesting
+        clip_duration_s=5.0.  The loader must:
+        - NOT raise any exception
+        - emit at least one UserWarning mentioning the mismatched field
+        - still return a valid WinnerClassifier
+        """
+        ckpt = tmp_path / "mismatch.pt"
+        training_cfg = WinnerModelConfig(clip_duration_s=2.5)
+        _save_checkpoint(ckpt, include_config=True, cfg=training_cfg)
+
+        # Request a different clip_duration_s to trigger the mismatch.
+        inference_cfg = WinnerModelConfig(clip_duration_s=5.0)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            model = load_winner_classifier(ckpt, device="cpu", config=inference_cfg)
+
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        assert len(user_warnings) >= 1, (
+            "Expected at least one UserWarning for config mismatch, got none"
+        )
+        # The warning message should mention the differing field.
+        combined_msg = " ".join(str(w.message) for w in user_warnings)
+        assert "clip_duration_s" in combined_msg, (
+            f"Warning did not mention 'clip_duration_s'. Got: {combined_msg!r}"
+        )
+        assert isinstance(model, WinnerClassifier), (
+            "load_winner_classifier must still return a model despite mismatch"
+        )

@@ -9,19 +9,158 @@ differential learning rates (backbone vs temporal+head).
 
 Saves the best checkpoint to ml/checkpoints/best_winner.pt when val
 accuracy improves.  Early-stopping patience is 5 epochs.
+
+Checkpoint metadata
+-------------------
+The saved ``.pt`` dict now includes a ``"config"`` sub-dict containing the
+serialised ``WinnerModelConfig`` fields (including ``effective_clip_duration_s``)
+so that loaders can detect config mismatches.  See :func:`_config_to_dict`.
 """
 
 import argparse
+import dataclasses
 import sys
 from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from ml.config import PathConfig, WinnerModelConfig
 from ml.winner_dataset import WinnerDataset, load_winner_dataset
 from ml.winner_model import WinnerClassifier
+
+
+# ---------------------------------------------------------------------------
+# Config serialisation (E2 — checkpoint metadata)
+# ---------------------------------------------------------------------------
+
+
+def _config_to_dict(cfg: WinnerModelConfig) -> dict:
+    """Serialise *cfg* to a plain dict suitable for inclusion in a checkpoint.
+
+    All dataclass fields are stored by name, with ``Path`` objects converted to
+    strings so ``torch.save`` / ``torch.load`` round-trips cleanly.
+    ``effective_clip_duration_s`` (the ablation-aware active clip window) is
+    also captured so that the checkpoint is self-documenting regardless of
+    whether an override was active at training time.
+
+    Args:
+        cfg: WinnerModelConfig instance used during this training run.
+
+    Returns:
+        Dict with one key per dataclass field, plus
+        ``"effective_clip_duration_s"`` for the active clip window.
+    """
+    raw: dict = {}
+    for f in dataclasses.fields(cfg):
+        value = getattr(cfg, f.name)
+        if isinstance(value, Path):
+            value = str(value)
+        raw[f.name] = value
+    # Store the ablation-aware value explicitly so loaders see the actual window.
+    raw["effective_clip_duration_s"] = cfg.effective_clip_duration_s
+    return raw
+
+
+# ---------------------------------------------------------------------------
+# Per-video validation report (E1)
+# ---------------------------------------------------------------------------
+
+
+@torch.no_grad()
+def _per_video_validate(
+    model: WinnerClassifier,
+    val_dataset: WinnerDataset,
+    device: torch.device,
+    batch_size: int = 8,
+) -> list[dict]:
+    """Compute per-video validation accuracy over *val_dataset*.
+
+    Groups all rally records by their source video path, runs inference for
+    each group, and returns one summary row per video.  This makes it easy to
+    spot videos where the model is over- or under-fitting.
+
+    Args:
+        model: WinnerClassifier in eval mode (caller is responsible for mode).
+        val_dataset: Validation split whose ``_records`` carry ``video_path``.
+        device: Target compute device.
+        batch_size: Clips to process in each forward pass.
+
+    Returns:
+        List of dicts, one per video, each containing:
+        ``{"video": str, "n_total": int, "n_correct": int, "accuracy": float}``.
+        Sorted by ``video`` key for stable output.
+    """
+    model.eval()
+
+    # Group record indices by video path string.
+    video_to_indices: dict[str, list[int]] = {}
+    for idx, record in enumerate(val_dataset._records):
+        key = str(record.video_path)
+        if key not in video_to_indices:
+            video_to_indices[key] = []
+        video_to_indices[key].append(idx)
+
+    report: list[dict] = []
+
+    for video_key in sorted(video_to_indices.keys()):
+        indices = video_to_indices[video_key]
+        subset = Subset(val_dataset, indices)
+        loader = DataLoader(
+            subset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,  # avoid forking inside a worker context
+        )
+
+        n_total = 0
+        n_correct = 0
+        for clips, labels in loader:
+            clips = clips.to(device)
+            labels_list: list[int] = labels.tolist()
+            logits = model(clips)
+            preds: list[int] = logits.argmax(dim=1).cpu().tolist()
+            for true_label, pred_label in zip(labels_list, preds):
+                n_total += 1
+                if true_label == pred_label:
+                    n_correct += 1
+
+        acc = n_correct / n_total if n_total > 0 else 0.0
+        report.append(
+            {
+                "video": video_key,
+                "n_total": n_total,
+                "n_correct": n_correct,
+                "accuracy": acc,
+            }
+        )
+
+    return report
+
+
+def _print_per_video_report(report: list[dict]) -> None:
+    """Print the per-video validation report to stdout.
+
+    Args:
+        report: List of dicts as returned by :func:`_per_video_validate`.
+    """
+    if not report:
+        print("       (no per-video data — val dataset is empty)")
+        return
+
+    print("\n--- Per-video validation ---")
+    col_w = max(len(r["video"]) for r in report)
+    header = f"  {'Video':<{col_w}}  {'Total':>6}  {'Correct':>7}  {'Acc':>7}"
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+    for row in report:
+        short = Path(row["video"]).name
+        print(
+            f"  {short:<{col_w}}  {row['n_total']:>6}  {row['n_correct']:>7}"
+            f"  {row['accuracy']:>6.1%}"
+        )
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -207,8 +346,21 @@ def train_winner(
     checkpoint_path = paths.checkpoints_dir / "best_winner.pt"
 
     # ---- Data ----
+    # E3: WinnerModelConfig.effective_clip_duration_s honours clip_duration_override_s
+    # so ablation experiments automatically propagate to the dataset pipeline and
+    # to the metadata saved in the checkpoint.
     model_cfg = WinnerModelConfig()
     print("\n=== Loading datasets ===")
+    print(
+        f"Clip window: {model_cfg.effective_clip_duration_s:.2f}s "
+        f"(clip_duration_s={model_cfg.clip_duration_s:.2f}s"
+        + (
+            f", override={model_cfg.clip_duration_override_s:.2f}s"
+            if model_cfg.clip_duration_override_s is not None
+            else ""
+        )
+        + ")"
+    )
     train_dataset = load_winner_dataset(root_dir, model_cfg, split="train")
     val_dataset = load_winner_dataset(root_dir, model_cfg, split="val")
 
@@ -293,6 +445,9 @@ def train_winner(
             best_val_acc = val_acc
             patience_counter = 0
 
+            # E2: embed WinnerModelConfig metadata so loaders can detect
+            # config mismatches.  Stored under the "config" key so that
+            # old-format checkpoints (without "config") remain distinguishable.
             torch.save(
                 {
                     "model_state_dict": model.state_dict(),
@@ -301,6 +456,7 @@ def train_winner(
                     "val_per_class_precision": precision,
                     "val_per_class_recall": recall,
                     "confusion_matrix": conf_matrix,
+                    "config": _config_to_dict(model_cfg),
                 },
                 checkpoint_path,
             )
@@ -311,6 +467,10 @@ def train_winner(
                 f"[[{conf_matrix[0][0]}, {conf_matrix[0][1]}], "
                 f"[{conf_matrix[1][0]}, {conf_matrix[1][1]}]]"
             )
+            # E1: per-video breakdown at each new-best checkpoint so overfitting
+            # to specific videos surfaces immediately in the training log.
+            per_video_report = _per_video_validate(model, val_dataset, device, batch_size)
+            _print_per_video_report(per_video_report)
         else:
             patience_counter += 1
             if patience_counter >= early_stop_patience:
@@ -320,7 +480,13 @@ def train_winner(
                 )
                 break
 
-    print(f"\nBest checkpoint saved to: {checkpoint_path}")
+    # E1: per-video validation report — run once after training completes so
+    # per-video overfitting is visible even when per-epoch output scrolls past.
+    print("\n=== Per-video validation (final epoch) ===")
+    per_video = _per_video_validate(model, val_dataset, device, batch_size)
+    _print_per_video_report(per_video)
+
+    print(f"Best checkpoint saved to: {checkpoint_path}")
     print(f"Best val accuracy: {best_val_acc:.1%}")
 
 

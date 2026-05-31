@@ -17,13 +17,27 @@ Input/output shapes
     returns logits          :  (B, 2)
 
 Total parameters: ~11.2 M (dominated by the ResNet-18 backbone).
+
+Checkpoint compatibility
+------------------------
+Checkpoints saved WITHOUT a ``"config"`` key (pre-E2 format) load unchanged —
+the model weights are applied and no warning is emitted.  Checkpoints saved
+WITH a ``"config"`` key are compared against the requested
+``WinnerModelConfig``; any field mismatch produces a ``UserWarning`` but does
+NOT prevent loading.
 """
+
+import dataclasses
+import warnings
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torchvision.models as tv_models
 
-from pathlib import Path
+if TYPE_CHECKING:
+    from ml.config import WinnerModelConfig
 
 
 __all__ = [
@@ -85,9 +99,62 @@ class WinnerClassifier(nn.Module):
         return self.head(x)
 
 
+def _warn_config_mismatch(
+    saved: dict,
+    requested_cfg: "WinnerModelConfig",
+    checkpoint_path: Path,
+) -> None:
+    """Emit a UserWarning for each field that differs between *saved* and *requested_cfg*.
+
+    Only fields present in the saved dict are compared; extra keys in *saved*
+    that are not dataclass fields (e.g. ``"effective_clip_duration_s"``) are
+    checked individually so the ablation value is also validated.
+
+    Args:
+        saved: The ``"config"`` sub-dict from the checkpoint.
+        requested_cfg: The WinnerModelConfig the caller wants to use now.
+        checkpoint_path: Used in the warning message for context.
+    """
+    mismatches: list[str] = []
+
+    for f in dataclasses.fields(requested_cfg):
+        if f.name not in saved:
+            continue  # field added after checkpoint was saved — skip
+        saved_value = saved[f.name]
+        current_value = getattr(requested_cfg, f.name)
+        # Normalise Path to str for comparison
+        if isinstance(current_value, Path):
+            current_value = str(current_value)
+        if saved_value != current_value:
+            mismatches.append(
+                f"  {f.name}: saved={saved_value!r}, current={current_value!r}"
+            )
+
+    # Also check effective_clip_duration_s if present (ablation key)
+    if "effective_clip_duration_s" in saved:
+        saved_eff = saved["effective_clip_duration_s"]
+        current_eff = requested_cfg.effective_clip_duration_s
+        if saved_eff != current_eff:
+            mismatches.append(
+                f"  effective_clip_duration_s: saved={saved_eff!r}, current={current_eff!r}"
+            )
+
+    if mismatches:
+        mismatch_str = "\n".join(mismatches)
+        warnings.warn(
+            f"WinnerModelConfig mismatch detected when loading checkpoint "
+            f"'{checkpoint_path}'.\nThe following fields differ between the "
+            f"checkpoint and the requested config (model weights are still "
+            f"loaded):\n{mismatch_str}",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 def load_winner_classifier(
     checkpoint_path: Path,
     device: str = "cuda",
+    config: "WinnerModelConfig | None" = None,
 ) -> WinnerClassifier:
     """Load a WinnerClassifier from a saved checkpoint dict.
 
@@ -95,11 +162,26 @@ def load_winner_classifier(
     ``"model_state_dict"``.  The optional keys ``"epoch"`` and
     ``"val_accuracy"`` are accepted but not used after loading.
 
+    Config-mismatch detection (E2)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    If the checkpoint was saved with a ``"config"`` key (produced by the
+    current training script), the saved config is compared against *config*
+    (or a default ``WinnerModelConfig()`` when *config* is ``None``).
+    Any field that differs triggers a ``UserWarning``.  The model is always
+    loaded regardless of mismatches.
+
+    Checkpoints WITHOUT a ``"config"`` key (old format) load unchanged —
+    no warning is emitted.
+
     Args:
         checkpoint_path: Absolute or relative path to the ``.pt`` file.
         device: Target device string, e.g. ``"cuda"``, ``"cpu"``, or
                 ``"cuda:1"``.  Defaults to ``"cuda"``; falls back to CPU
                 automatically when CUDA is unavailable.
+        config: Optional WinnerModelConfig to compare against the saved
+                checkpoint metadata.  When ``None``, a default instance is
+                used for the comparison.  Pass ``False`` to skip comparison
+                entirely (not recommended).
 
     Returns:
         A WinnerClassifier in eval mode with weights loaded and moved to
@@ -131,6 +213,16 @@ def load_winner_classifier(
             f"Checkpoint at {checkpoint_path} is missing 'model_state_dict'. "
             f"Found keys: {list(checkpoint.keys())}"
         )
+
+    # E2 (load side): compare saved config metadata against the requested config.
+    # Old checkpoints that lack "config" silently pass through — back-compat.
+    if "config" in checkpoint:
+        # Import here to avoid a circular-import at module level; config is a
+        # lightweight dataclass module with no ML dependencies.
+        from ml.config import WinnerModelConfig as _WMC  # noqa: PLC0415
+
+        effective_cfg: _WMC = config if config is not None else _WMC()
+        _warn_config_mismatch(checkpoint["config"], effective_cfg, checkpoint_path)
 
     model = WinnerClassifier()
     model.load_state_dict(checkpoint["model_state_dict"])
