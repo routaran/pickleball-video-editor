@@ -39,6 +39,14 @@ __all__ = [
     "load_winner_dataset",
 ]
 
+# Forward-declare for type hints without a circular import at the module level.
+# The actual import is deferred inside the classmethod to keep this module
+# torch-importable without ml.examples dragging in unexpected dependencies.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ml.examples import RallyExample
+
 logger = logging.getLogger(__name__)
 
 
@@ -396,6 +404,157 @@ class WinnerDataset(Dataset):
             n_train,
             n_val,
         )
+
+    # ------------------------------------------------------------------
+    # Alternate constructor: build from pre-parsed RallyExample records
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_rally_examples(
+        cls,
+        records: "list[RallyExample]",
+        config: "WinnerModelConfig",
+        split: str = "train",
+        val_fraction: float = 0.2,
+        augment: bool = True,
+    ) -> "WinnerDataset":
+        """Build a WinnerDataset from a list of RallyExample objects.
+
+        This is an alternate constructor that bypasses JSON-file scanning.
+        It reuses the identical per-rally eligibility rules, video-wise
+        train/val split logic, and internal _RallyRecord machinery as the
+        default __init__, so the two construction paths produce the same
+        sample list for the same underlying data.
+
+        Eligibility mirrors WinnerDataset.__init__ exactly:
+        - Skip rallies where ``is_post_game`` is True.
+        - Skip rallies where ``winning_team`` is None (not applicable to
+          RallyExample which always stores an int, but the guard is kept for
+          consistency).
+        - Skip rallies where ``raw_end`` is 0.0 and ``raw_start`` is 0.0
+          simultaneously (placeholder produced when raw block was absent in
+          the original JSON; mirrors the ``raw is None`` check).
+
+        Video existence is NOT checked here because callers that build
+        RallyExample lists from an index may work with videos that are
+        present on a remote mount or are used for metadata-only tests.
+        Callers that need existence checking should filter before passing.
+
+        Args:
+            records: List of RallyExample instances to build the dataset from.
+                     May include post-game or missing-label records; those are
+                     silently filtered out (same as the JSON path).
+            config: WinnerModelConfig — fps_out, clip_duration_s, canonical size.
+            split: ``"train"`` or ``"val"``.
+            val_fraction: Fraction of videos (by count) reserved for validation.
+            augment: Whether to apply data augmentation (only relevant for
+                     the train split).
+
+        Returns:
+            A WinnerDataset whose ``_records`` list is built from the provided
+            RallyExample objects rather than from JSON files on disk.
+        """
+        # Deferred import so that ml.examples stays torch-free at import time.
+        from ml.examples import RallyExample as _RE  # noqa: F401 (used for isinstance guard only)
+
+        if split not in ("train", "val"):
+            raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+
+        # Create a bare instance, bypassing __init__
+        instance = cls.__new__(cls)
+        instance._config = config
+        instance._split = split
+        instance._do_augment = augment and split == "train"
+
+        rallies_by_video: dict[str, list[_RallyRecord]] = {}
+        n_skipped_rally = 0
+
+        for ex in records:
+            # --- per-rally eligibility (mirrors WinnerDataset.__init__) ---
+            if ex.is_post_game:
+                n_skipped_rally += 1
+                continue
+
+            # winning_team on RallyExample is always int (coerced in from_rally_dict)
+            # but guard against any hand-constructed examples with None-like values.
+            if ex.winning_team is None:  # type: ignore[comparison-overlap]
+                n_skipped_rally += 1
+                continue
+
+            # Mirror the ``raw is None`` check: if both timestamps are 0.0 the
+            # rally came from a missing raw block and is not usable.
+            if ex.raw_end == 0.0 and ex.raw_start == 0.0:
+                n_skipped_rally += 1
+                continue
+
+            video_key = str(ex.video_path)
+            if video_key not in rallies_by_video:
+                rallies_by_video[video_key] = []
+
+            # court_corners on RallyExample is tuple[tuple[int,int],...];
+            # _RallyRecord expects list[tuple[int,int]].
+            corners: list[tuple[int, int]] = list(ex.court_corners)
+
+            rallies_by_video[video_key].append(
+                _RallyRecord(
+                    video_path=ex.video_path,
+                    end_seconds=ex.raw_end,
+                    corners=corners,
+                    winning_team=int(ex.winning_team),
+                )
+            )
+
+        if n_skipped_rally > 0:
+            logger.info(
+                "WinnerDataset.from_rally_examples: skipped %d rally record(s) "
+                "(post_game or winning_team=None or missing raw timestamps)",
+                n_skipped_rally,
+            )
+
+        # Drop videos with zero usable rallies (mirrors __init__ behaviour)
+        n_empty_videos = sum(1 for v in rallies_by_video.values() if not v)
+        if n_empty_videos > 0:
+            logger.info(
+                "WinnerDataset.from_rally_examples: skipped %d video(s) with "
+                "no labeled non-postgame rallies",
+                n_empty_videos,
+            )
+        rallies_by_video = {k: v for k, v in rallies_by_video.items() if v}
+
+        # Video-wise train/val split — identical logic to __init__
+        all_video_keys = sorted(rallies_by_video.keys())
+        n_videos = len(all_video_keys)
+
+        if n_videos == 0:
+            logger.warning(
+                "WinnerDataset.from_rally_examples: no eligible videos found."
+            )
+            instance._records = []
+            return instance
+
+        n_val = max(1, math.floor(n_videos * val_fraction)) if n_videos >= 2 else 0
+        n_train = n_videos - n_val
+
+        train_keys = set(all_video_keys[:n_train])
+        val_keys = set(all_video_keys[n_train:])
+
+        selected_keys = train_keys if split == "train" else val_keys
+
+        instance._records = []
+        for key in sorted(selected_keys):
+            instance._records.extend(rallies_by_video[key])
+
+        logger.info(
+            "WinnerDataset.from_rally_examples [%s]: %d rallies across %d "
+            "video(s) (train=%d / val=%d videos total)",
+            split,
+            len(instance._records),
+            len(selected_keys),
+            n_train,
+            n_val,
+        )
+
+        return instance
 
     def __len__(self) -> int:
         return len(self._records)
