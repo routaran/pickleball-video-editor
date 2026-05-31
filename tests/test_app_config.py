@@ -16,6 +16,7 @@ from src.core.app_config import (
     SkipDurationConfig,
     WindowSizeConfig,
 )
+from ml.config import FeatureCollectionConfig, WinnerModelConfig
 
 
 @pytest.fixture
@@ -642,3 +643,89 @@ class TestAppSettings:
         assert settings4.shortcuts.server_wins == "B"
         assert settings4.shortcuts.receiver_wins == "C"
         assert settings4.shortcuts.undo == "U"  # Default unchanged
+
+
+class TestFeatureCollectionConfig:
+    """Tests for FeatureCollectionConfig defaults and construction."""
+
+    def test_metadata_enabled_by_default(self):
+        """metadata_enabled is True by default."""
+        cfg = FeatureCollectionConfig()
+        assert cfg.metadata_enabled is True
+
+    def test_audio_disabled_by_default(self):
+        """audio_enabled is False by default (pipeline not yet stable)."""
+        cfg = FeatureCollectionConfig()
+        assert cfg.audio_enabled is False
+
+    def test_features_subdir_default(self):
+        """features_subdir defaults to 'features'."""
+        cfg = FeatureCollectionConfig()
+        assert cfg.features_subdir == "features"
+
+    def test_explicit_audio_enabled(self):
+        """Callers can opt-in to audio collection."""
+        cfg = FeatureCollectionConfig(audio_enabled=True)
+        assert cfg.audio_enabled is True
+        # metadata stays enabled
+        assert cfg.metadata_enabled is True
+
+    def test_explicit_metadata_disabled(self):
+        """Callers can turn off metadata collection."""
+        cfg = FeatureCollectionConfig(metadata_enabled=False)
+        assert cfg.metadata_enabled is False
+
+    def test_custom_features_subdir(self):
+        """features_subdir can be overridden for isolated experiments."""
+        cfg = FeatureCollectionConfig(features_subdir="features_v2")
+        assert cfg.features_subdir == "features_v2"
+
+    def test_all_defaults_unchanged_after_construction(self):
+        """Constructing one instance does not mutate a second instance's defaults."""
+        cfg_a = FeatureCollectionConfig(audio_enabled=True)
+        cfg_b = FeatureCollectionConfig()
+        assert cfg_b.audio_enabled is False
+
+
+class TestWinnerModelConfigClipDurationOverride:
+    """Tests for clip-window ablation plumbing on WinnerModelConfig."""
+
+    def test_clip_duration_s_default_unchanged(self):
+        """clip_duration_s default remains 2.5 (backward-compatible)."""
+        cfg = WinnerModelConfig()
+        assert cfg.clip_duration_s == 2.5
+
+    def test_clip_duration_override_s_default_is_none(self):
+        """clip_duration_override_s is None by default (no override active)."""
+        cfg = WinnerModelConfig()
+        assert cfg.clip_duration_override_s is None
+
+    def test_effective_clip_duration_s_uses_default_when_no_override(self):
+        """effective_clip_duration_s returns clip_duration_s when override is None."""
+        cfg = WinnerModelConfig()
+        assert cfg.effective_clip_duration_s == 2.5
+
+    def test_effective_clip_duration_s_uses_override_when_set(self):
+        """effective_clip_duration_s returns the override value when provided."""
+        cfg = WinnerModelConfig(clip_duration_override_s=1.5)
+        assert cfg.effective_clip_duration_s == 1.5
+
+    def test_override_does_not_mutate_clip_duration_s(self):
+        """Setting the override leaves clip_duration_s at its original value."""
+        cfg = WinnerModelConfig(clip_duration_override_s=3.0)
+        assert cfg.clip_duration_s == 2.5
+        assert cfg.effective_clip_duration_s == 3.0
+
+    def test_override_zero_is_honoured(self):
+        """An override of 0.0 is a valid (if unusual) value and is not treated as None."""
+        cfg = WinnerModelConfig(clip_duration_override_s=0.0)
+        assert cfg.effective_clip_duration_s == 0.0
+
+    def test_existing_fields_unchanged(self):
+        """Adding override field leaves all existing WinnerModelConfig defaults intact."""
+        cfg = WinnerModelConfig()
+        assert cfg.fps_out == 8
+        assert cfg.canonical_width == 256
+        assert cfg.canonical_height == 128
+        assert cfg.device == "cuda"
+        assert cfg.confidence_threshold == 0.7

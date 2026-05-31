@@ -43,7 +43,7 @@ try:
 except ImportError:
     _TORCH_DEPENDENT_MODULES = [
         "torch", "torch.nn", "torch.nn.functional", "torch.utils", "torch.utils.data",
-        "torchaudio", "torchvision", "numpy",
+        "torchaudio", "torchvision",
         "ml.predict", "ml.predict_winner", "ml.winner_model",
         "ml.video_features", "ml.model", "ml.dataset",
     ]
