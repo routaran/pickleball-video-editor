@@ -2401,6 +2401,46 @@ class MainWindow(QMainWindow):
                 court_corners=self.config.court_corners,
             )
 
+            # Trigger non-blocking post-export feature collection.
+            # Lazy imports keep ml dependencies out of the UI's import-time
+            # cost.  The thread is daemonised so it never blocks shutdown.
+            # All failures are logged and swallowed — this must not affect
+            # the export result.
+            def _spawn_feature_collection(json_path: Path) -> None:
+                import logging
+                import threading
+
+                from ml.config import FeatureCollectionConfig
+                from ml.features.registry import default_extractors
+                from ml.features.service import collect_features
+
+                _fc_log = logging.getLogger(__name__)
+                cfg = FeatureCollectionConfig()
+                if not default_extractors(cfg):
+                    return
+
+                def _run() -> None:
+                    try:
+                        summary = collect_features(json_path, config=cfg)
+                        if summary.fatal_error:
+                            _fc_log.warning(
+                                "Feature collection fatal error for %s: %s",
+                                json_path,
+                                summary.fatal_error,
+                            )
+                        else:
+                            _fc_log.debug(
+                                "Feature collection complete for %s", json_path
+                            )
+                    except Exception:  # noqa: BLE001 — swallow all; must not affect export
+                        _fc_log.exception(
+                            "Unexpected error in feature collection for %s", json_path
+                        )
+
+                threading.Thread(target=_run, daemon=True, name="fc-post-export").start()
+
+            _spawn_feature_collection(training_json_path)
+
             # Check if session exists
             session_exists = self._session_manager.find_existing(
                 str(self.config.video_path)
