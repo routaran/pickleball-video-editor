@@ -14,6 +14,46 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-05-31] lint | full wiki
+
+- Checks run: 6
+- Checks passed: 6
+- Failures: 0
+- Details: none — sources resolve (check 1), index ↔ disk match 11/11 (check 2), all internal links resolve (check 3), all pages ≤ hard_max 200 (check 4; largest video.md 127), cross-ref rules satisfied (check 5: every domain→gotcha, every gotcha→domain, index lists every page), no orphans (check 6).
+- Status: pass
+
+---
+
+## [2026-05-31] ingest | partial (driven by source-update)
+
+- Trigger: the `wiki-source-update align` below edited 4 source docs. Because `docs/` is `.gitignore`d, git-log staleness cannot see working-tree edits, so the 2 affected pages were recompiled directly (targeted, equivalent to `ingest --page`).
+- Pages checked: 11. Stale (by changed sources): 2 — `domains/ml.md`, `domains/tests.md`.
+- Recompiled:
+  - `domains/ml.md` — checkpoint-config caveat flipped to RESOLVED (config now embedded + mismatch warning, `d9ba004`); new "data/eval tooling layer" Rules bullet (`examples`/`features`/`evaluation`/`review_priority`/`from_rally_examples`/CLIs); per-video validation noted; source descriptions reworded.
+  - `domains/tests.md` — test-file count 25 → 41 (Purpose + Sources); 2026-05 data/eval tooling tests added to the ml Coordinates row.
+- `last_compiled` bumped to 2026-05-31 on both. Line counts within hard_max 200 (ml 100, tests 73).
+- Skipped (sources unchanged): 9.
+- Status: complete (partial).
+
+---
+
+## [2026-05-31] source-update | ml + tests docs (auto-mechanical)
+
+- Baseline: 8 ML-scope commits `e09da78..7eef4c9` (landed after the 2026-05-28 align).
+- Drift items: 6 (factual: 1, structural: 3, editorial: 0, candidate-new: 2)
+- Applied: 5  Skipped: 1  Edited inline: 0
+- Source docs touched (working tree only — see commit note):
+  - `docs/TRAINING_GUIDE.md` — [factual] caveat #1 "Checkpoint stores no model config" marked RESOLVED (`d9ba004`: config embedded under `"config"` + `load_winner_classifier` mismatch warning); [candidate-new, user-approved] new "## Auxiliary tools" section documenting `python -m ml.tools.{audit_training_corpus,collect_features,evaluate_winner}` (`7eef4c9`).
+  - `docs/auto-editor-plan/current-state.md` — [candidate-new, user-approved] new "## Data & evaluation tooling (landed since)" subsection (`6ac5b59,f700643,f71d626,b7d8305,9087838,d9ba004,e09da78`); appended at end of doc to avoid clashing with the stale "What's missing from ml/" block.
+  - `docs/TESTING.md`, `docs/TEST_SUITE_SUMMARY.md` — [structural] test-file count `25 → 41`.
+- Skipped: [structural, low-confidence] `current-state.md:105` config.py class list — folded into the candidate-new subsection instead of editing a row already missing `WinnerModelConfig`.
+- Candidate-new drafts left `<!-- DRAFT -->`-tagged for the user to detag.
+- **Commits: NONE** — all four docs are `.gitignore`d, so Rule 5 per-doc commits are impossible (revert = file restore, not `git revert`). `README.md` (the only tracked source) was clean: its ML-tooling gap is dev-facing CLI, not app features, and its long-standing no-ML-mention is pre-window.
+- Followed by: ingest of [`domains/ml.md`, `domains/tests.md`] (entry above).
+- Status: complete (working tree only).
+
+---
+
 ## [2026-05-28] source-update | all docs
 - Drift items: 2 (factual: 2, structural: 0, editorial: 0, candidate-new: 0)
 - Applied: 2  Skipped: 0  Edited inline: 0
