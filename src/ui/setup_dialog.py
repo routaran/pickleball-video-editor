@@ -31,7 +31,14 @@ from src.ui.dialogs.frame_selector_dialog import FrameSelectorDialog
 from src.video.frame_extract import extract_frame_at
 
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QKeyEvent, QPixmap
+from PyQt6.QtGui import (
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDropEvent,
+    QKeyEvent,
+    QPixmap,
+    QResizeEvent,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -53,6 +60,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.app_config import AppSettings
+from src.ui.styles.geometry import fit_to_screen
 from src.core.models import SessionState, generate_export_basename
 from src.core.session_manager import SessionManager
 from src.ui.dialogs import ResumeSessionDialog, ResumeSessionResult, SessionDetails
@@ -63,18 +71,28 @@ from src.ui.styles.colors import (
     BG_SECONDARY,
     BG_TERTIARY,
     BORDER_COLOR,
+    DANGER_TEXT,
     GLOW_GREEN,
     PRIMARY_ACTION,
+    RALLY_START,
     TEXT_ACCENT,
     TEXT_DISABLED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
+    TEXT_TERTIARY,
     TEXT_WARNING,
+    UNDO,
 )
 from src.ui.styles.fonts import RADIUS_MD, SPACE_MD, SPACE_SM, Fonts
 from src.ui.widgets.court_calibrator import CourtCalibratorWidget
 from src.ui.widgets.saved_session_card import SavedSessionCard, SavedSessionInfo
 from src.video.probe import ProbeError, probe_video
+
+
+_VIDEO_EXTENSIONS: frozenset[str] = frozenset({
+    ".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".m4v",
+    ".webm", ".mpg", ".mpeg", ".ts", ".mts", ".m2ts",
+})
 
 
 __all__ = ["GameConfig", "SetupDialog"]
@@ -164,8 +182,9 @@ class SetupDialog(QDialog):
         self.setObjectName("setupDialog")
         self.setWindowTitle("Pickleball Video Editor")
         self.setModal(True)
+        self.setAcceptDrops(True)
         self.setMinimumWidth(700)
-        self.setMinimumHeight(650)  # Fits all sections with minimal scrolling
+        self.setMinimumHeight(520)  # Content is in a QScrollArea; 520 is enough to show controls
 
         # Configuration result (set when accepted)
         self._config: GameConfig | None = None
@@ -188,11 +207,19 @@ class SetupDialog(QDialog):
         self._apply_styles()
         self._connect_signals()
 
+        # Explicit keyboard Tab order
+        self._setup_tab_order()
+
         # Initial validation state
         self._validate()
 
         # Load saved sessions
         self._load_saved_sessions()
+
+        # Size and center relative to available screen area:
+        # width  = clamp(30% of available, 700, 1000)
+        # height = clamp(85% of available, 520, 900)
+        fit_to_screen(self, 0.30, 0.85, 700, 520, 1000, 900)
 
     @contextmanager
     def _native_file_dialog(self):
@@ -240,6 +267,61 @@ class SetupDialog(QDialog):
 
         # Let parent handle other keys
         super().keyPressEvent(event)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Keep the drag-and-drop overlay sized to the full dialog."""
+        super().resizeEvent(event)
+        if hasattr(self, "_drop_overlay"):
+            self._drop_overlay.setGeometry(self.rect())
+
+    # ------------------------------------------------------------------
+    # Drag-and-drop support
+    # ------------------------------------------------------------------
+
+    def _show_drop_overlay(self) -> None:
+        """Show the drop-feedback overlay, sized to the current dialog rect."""
+        self._drop_overlay.setGeometry(self.rect())
+        self._drop_overlay.show()
+        self._drop_overlay.raise_()
+
+    def _hide_drop_overlay(self) -> None:
+        """Hide the drop-feedback overlay."""
+        self._drop_overlay.hide()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        """Accept a drag that contains exactly one local video file URL.
+
+        Shows a dashed overlay with "Drop video to load" during the drag.
+        """
+        mime = event.mimeData()
+        if mime is not None and mime.hasUrls():
+            urls = mime.urls()
+            if len(urls) == 1 and urls[0].isLocalFile():
+                path = Path(urls[0].toLocalFile())
+                if path.suffix.lower() in _VIDEO_EXTENSIONS:
+                    event.acceptProposedAction()
+                    self._show_drop_overlay()
+                    return
+        event.ignore()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        """Hide the overlay when the drag leaves the dialog boundary."""
+        self._hide_drop_overlay()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        """Load the dropped video path into the video path field."""
+        self._hide_drop_overlay()
+        mime = event.mimeData()
+        if mime is not None and mime.hasUrls():
+            urls = mime.urls()
+            if len(urls) == 1 and urls[0].isLocalFile():
+                path = Path(urls[0].toLocalFile())
+                if path.suffix.lower() in _VIDEO_EXTENSIONS:
+                    self.video_path_edit.setText(str(path))
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
 
     def _load_saved_sessions(self) -> None:
         """Load and display saved session cards.
@@ -560,10 +642,18 @@ class SetupDialog(QDialog):
         self.auto_mode_warning_label.setVisible(False)
 
         # Video source section
-        self.video_label = QLabel("SOURCE VIDEO")
+        self.video_label = QLabel("SOURCE VIDEO *")
         self.video_path_edit = QLineEdit()
         self.video_path_edit.setPlaceholderText("Select a video file...")
         self.browse_button = QPushButton("Browse")
+
+        # Error label shown when a non-empty path does not resolve to an existing file.
+        # Red border alone is insufficient — this provides an accessible text cue.
+        self._video_error_label = QLabel(
+            "Video file not found — check the path or click Browse"
+        )
+        self._video_error_label.setObjectName("video-error-label")
+        self._video_error_label.setVisible(False)
 
         # Court calibration row (optional step for ML auto-process mode)
         self.calibrate_button = QPushButton("Calibrate Court Corners")
@@ -586,7 +676,7 @@ class SetupDialog(QDialog):
         self.victory_combo.addItems(["Game to 11", "Game to 9", "Timed"])
 
         # Team 1 section (first server - highlighted)
-        self.team1_group = QGroupBox("TEAM 1 (First Server)")
+        self.team1_group = QGroupBox("TEAM 1 (First Server) (optional)")
         self.team1_player1_label = QLabel("Player 1")
         self.team1_player1_edit = QLineEdit()
         self.team1_player1_edit.setPlaceholderText("Optional - Serving player")
@@ -595,7 +685,7 @@ class SetupDialog(QDialog):
         self.team1_player2_edit.setPlaceholderText("Optional - Non-serving player")
 
         # Team 2 section
-        self.team2_group = QGroupBox("TEAM 2")
+        self.team2_group = QGroupBox("TEAM 2 (optional)")
         self.team2_player1_label = QLabel("Player 1")
         self.team2_player1_edit = QLineEdit()
         self.team2_player1_edit.setPlaceholderText("Optional - Receiving player")
@@ -706,6 +796,9 @@ class SetupDialog(QDialog):
         video_input_layout.addWidget(self.browse_button)
         video_layout.addLayout(video_input_layout)
 
+        # Error label — appears when a non-empty path does not exist
+        video_layout.addWidget(self._video_error_label)
+
         # Calibration row — button + status label side by side
         calibrate_row = QHBoxLayout()
         calibrate_row.setSpacing(SPACE_SM)
@@ -787,6 +880,16 @@ class SetupDialog(QDialog):
 
         self.setLayout(main_layout)
 
+        # Drag-and-drop overlay: a full-dialog label that floats on top when a
+        # video file is dragged over the window.  Positioned/sized in resizeEvent.
+        self._drop_overlay = QLabel("Drop video to load", self)
+        self._drop_overlay.setObjectName("drop-overlay")
+        self._drop_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._drop_overlay.setGeometry(self.rect())
+        self._drop_overlay.hide()
+        # Overlay must not consume mouse events — drag events go to the dialog.
+        self._drop_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
     def _apply_styles(self) -> None:
         """Apply QSS styling to the dialog."""
         self.setStyleSheet(f"""
@@ -817,8 +920,8 @@ class SetupDialog(QDialog):
             }}
 
             #setupDialog QLabel#count-label {{
-                color: {TEXT_DISABLED};
-                font-size: 11px;
+                color: {TEXT_TERTIARY};
+                font-size: 12px;
                 font-weight: 500;
             }}
 
@@ -906,11 +1009,10 @@ class SetupDialog(QDialog):
 
             #setupDialog QLineEdit:focus {{
                 border-color: {TEXT_ACCENT};
-                outline: none;
             }}
 
             #setupDialog QLineEdit[invalid="true"] {{
-                border-color: #EF5350;
+                border-color: {UNDO};
             }}
 
             #setupDialog QComboBox {{
@@ -993,7 +1095,6 @@ class SetupDialog(QDialog):
             }}
 
             #setupDialog QPushButton:disabled {{
-                opacity: 0.4;
                 color: {TEXT_DISABLED};
                 border-color: {BG_BORDER};
             }}
@@ -1031,7 +1132,6 @@ class SetupDialog(QDialog):
             }}
 
             #setupDialog QPushButton#calibrate-button:disabled {{
-                opacity: 0.4;
                 color: {TEXT_DISABLED};
                 border-color: {BG_BORDER};
             }}
@@ -1082,7 +1182,44 @@ class SetupDialog(QDialog):
                 font-size: 12px;
                 font-weight: 500;
             }}
+
+            #setupDialog QLabel#video-error-label {{
+                color: {DANGER_TEXT};
+                font-size: 12px;
+                font-weight: 400;
+            }}
+
+            QLabel#drop-overlay {{
+                background-color: rgba(37, 42, 51, 0.90);
+                border: 3px dashed {RALLY_START};
+                border-radius: 8px;
+                color: {RALLY_START};
+                font-size: 20px;
+                font-weight: 600;
+            }}
         """)
+
+    def _setup_tab_order(self) -> None:
+        """Set explicit keyboard Tab order for the setup form.
+
+        Order: video path → browse → game-type combo → victory combo
+               → Team 1 player 1 → Team 1 player 2 → Team 2 player 1
+               → Team 2 player 2 → manual-mode radio → auto-mode radio
+               → start button.
+
+        Qt skips hidden/disabled widgets automatically, so doubles-only fields
+        (player 2 inputs) and timed/highlights fields are handled transparently.
+        """
+        QWidget.setTabOrder(self.video_path_edit, self.browse_button)
+        QWidget.setTabOrder(self.browse_button, self.game_type_combo)
+        QWidget.setTabOrder(self.game_type_combo, self.victory_combo)
+        QWidget.setTabOrder(self.victory_combo, self.team1_player1_edit)
+        QWidget.setTabOrder(self.team1_player1_edit, self.team1_player2_edit)
+        QWidget.setTabOrder(self.team1_player2_edit, self.team2_player1_edit)
+        QWidget.setTabOrder(self.team2_player1_edit, self.team2_player2_edit)
+        QWidget.setTabOrder(self.team2_player2_edit, self.mode_manual_radio)
+        QWidget.setTabOrder(self.mode_manual_radio, self.mode_auto_radio)
+        QWidget.setTabOrder(self.mode_auto_radio, self.start_button)
 
     def _connect_signals(self) -> None:
         """Connect widget signals to slots."""
@@ -1116,16 +1253,27 @@ class SetupDialog(QDialog):
         After selection, checks if a session exists for the video and
         prompts the user to resume or start fresh.
         """
+        # Resolve the starting directory from DisplayConfig (added by Task 1),
+        # falling back to ~/Videos when the field is absent or empty.
+        _display = getattr(self._app_settings, "display", None)
+        _last_browse = getattr(_display, "last_browse_dir", "") if _display is not None else ""
+        _browse_dir = _last_browse if _last_browse else str(Path.home() / "Videos")
+
         with self._native_file_dialog():
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select Video File",
-                "/home/rkalluri/Videos/pickleball",
+                _browse_dir,
                 "Video Files (*.mp4 *.MP4);;All Files (*)"
             )
 
         if not file_path:
             return
+
+        # Persist the directory for the next browse session.
+        if _display is not None and hasattr(_display, "last_browse_dir"):
+            _display.last_browse_dir = str(Path(file_path).parent)
+            self._app_settings.save()
 
         self.video_path_edit.setText(file_path)
 
@@ -1271,13 +1419,21 @@ class SetupDialog(QDialog):
         """
         is_valid = True
 
-        # Validate video path (required for all game types)
+        # Validate video path (required for all game types).
+        # Show the error label only when a non-empty path cannot be resolved —
+        # an empty field is simply incomplete, not an erroneous entry.
         video_path = self.video_path_edit.text().strip()
-        if not video_path or not Path(video_path).exists():
+        if not video_path:
+            self.video_path_edit.setProperty("invalid", "false")
+            self._video_error_label.setVisible(False)
+            is_valid = False
+        elif not Path(video_path).exists():
             self.video_path_edit.setProperty("invalid", "true")
+            self._video_error_label.setVisible(True)
             is_valid = False
         else:
             self.video_path_edit.setProperty("invalid", "false")
+            self._video_error_label.setVisible(False)
 
         # Player names are now optional - no validation required
         # Clear any invalid states on player fields
@@ -1551,11 +1707,13 @@ class SetupDialog(QDialog):
                 )
                 return
 
-        # Build modal dialog containing the calibrator widget
+        # Build modal dialog containing the calibrator widget.
+        # Size proportionally to the screen so court corners are clearly visible
+        # on both 1080p and 4K/ultrawide displays.
         calibrator_dialog = QDialog(self)
         calibrator_dialog.setWindowTitle("Calibrate Court Corners")
         calibrator_dialog.setModal(True)
-        calibrator_dialog.resize(900, 680)
+        fit_to_screen(calibrator_dialog, 0.50, 0.70, 700, 520, 1400, 1000)
 
         dialog_layout = QVBoxLayout(calibrator_dialog)
         dialog_layout.setContentsMargins(0, 0, 0, 0)

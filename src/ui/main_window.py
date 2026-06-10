@@ -25,10 +25,12 @@ State Management:
 All actions trigger score state updates and rally manager tracking.
 """
 
+import base64
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QCloseEvent, QDesktopServices, QKeySequence, QResizeEvent, QShowEvent, QShortcut
+from PyQt6.QtCore import Qt, QByteArray, QTimer, QUrl, pyqtSignal, pyqtSlot
+from src.ui.responsive import LayoutMode, ResponsiveManager
+from PyQt6.QtGui import QCloseEvent, QDesktopServices, QGuiApplication, QKeySequence, QResizeEvent, QShowEvent, QShortcut
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -44,6 +46,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.app_config import AppSettings
+from src.ui.styles.geometry import fit_to_screen
 from src.core.export_manager import ExportManager
 from src.core.models import GameCompletionInfo, ScoreSnapshot, SessionState
 from src.core.rally_manager import RallyManager
@@ -78,8 +81,10 @@ from src.ui.styles import (
     RADIUS_LG,
     SPACE_LG,
     SPACE_MD,
+    TEXT_DISABLED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
+    VIDEO_BG,
     Fonts,
 )
 from src.ui.widgets import (
@@ -242,8 +247,10 @@ class MainWindow(QMainWindow):
         # Flag to track if video has been loaded (deferred until showEvent)
         self._video_loaded = False
 
-        # Compact mode state
-        self._compact_mode = False
+        # Responsive layout manager — replaces manual compact-mode font hacking.
+        # Panels are re-homed in _on_layout_mode_changed; _setup_ui builds the
+        # two prebuilt parent containers that receive them.
+        self._responsive_manager = ResponsiveManager(parent=self)
 
         # Touch counters (internal-only, not exported)
         self._ravi_touches: int = 0
@@ -375,12 +382,43 @@ class MainWindow(QMainWindow):
         """
         # Window properties
         self.setWindowTitle(f"Pickleball Video Editor - {self.config.video_path.name}")
-        # Apply window size from config
+        # Apply window size from config, clamping the minimum to at most 90% of
+        # the primary screen so the window is always movable / visible.
         ws = self._app_settings.window_size
-        self.setMinimumSize(ws.min_width, ws.min_height)
+        _primary_screen = QGuiApplication.primaryScreen()
+        if _primary_screen is not None:
+            _avail = _primary_screen.availableGeometry()
+            _min_w = min(ws.min_width, int(_avail.width() * 0.90))
+            _min_h = min(ws.min_height, int(_avail.height() * 0.90))
+        else:
+            _min_w, _min_h = ws.min_width, ws.min_height
+        self.setMinimumSize(_min_w, _min_h)
         if ws.max_width > 0 and ws.max_height > 0:
             self.setMaximumSize(ws.max_width, ws.max_height)
-        self.resize(1600, 1100)
+
+        # Restore geometry from DisplayConfig.last_geometry (Task-1 parallel agent)
+        # if the saved position intersects at least one connected screen.
+        # Fall back to showMaximized() when geometry is absent or off-screen.
+        _geometry_restored = False
+        _display = getattr(self._app_settings, "display", None)
+        if _display is not None:
+            _geo_b64 = getattr(_display, "last_geometry", "")
+            if _geo_b64:
+                _geo_bytes = QByteArray(base64.b64decode(_geo_b64))
+                if self.restoreGeometry(_geo_bytes):
+                    _win_geo = self.geometry()
+                    _on_screen = any(
+                        s.availableGeometry().intersects(_win_geo)
+                        for s in QGuiApplication.screens()
+                    )
+                    if _on_screen:
+                        _geometry_restored = True
+
+        if not _geometry_restored:
+            # Mark as maximized without calling show() — the caller (app.py)
+            # calls main_window.show() after __init__ returns, and Qt honours
+            # this window-state flag at that point.
+            self.setWindowState(Qt.WindowState.WindowMaximized)
 
         # Central widget with main layout
         central_widget = QWidget()
@@ -403,16 +441,89 @@ class MainWindow(QMainWindow):
         self.playback_controls = PlaybackControls()
         main_layout.addWidget(self.playback_controls)
 
-        # Rally controls panel
+        # Rally controls panel and toolbar — created here; placed via the two
+        # prebuilt panel-parent containers below, not directly in main_layout.
         self.rally_controls_panel = self._create_rally_controls()
-        main_layout.addWidget(self.rally_controls_panel)
-
-        # Toolbar (intervention + session buttons)
         self.toolbar_panel = self._create_toolbar()
-        main_layout.addWidget(self.toolbar_panel)
+
+        # Clip timeline lives in the main (left) column so it stays below the
+        # video in BOTH stacked and ultrawide arrangements.  It is created inside
+        # _create_rally_controls (which no longer adds it to the rally panel's
+        # own layout) and added here as a direct child of main_layout.
+        main_layout.addWidget(self.clip_timeline)
+
+        # ── Two prebuilt panel-parent containers ────────────────────────────
+        # Only the PANEL WIDGETS (rally_controls_panel, toolbar_panel) are
+        # re-homed between these containers when the layout mode changes.
+        # _video_container is NEVER touched here.
+
+        # Container #1 — stacked (normal / compact / ultra-compact modes).
+        # Both panels live here initially.
+        self._stacked_panels = QWidget()
+        self._stacked_panels.setObjectName("stacked_panels")
+        _sp_layout = QVBoxLayout(self._stacked_panels)
+        _sp_layout.setContentsMargins(0, 0, 0, 0)
+        _sp_layout.setSpacing(SPACE_MD)
+        _sp_layout.addWidget(self.rally_controls_panel)
+        _sp_layout.addWidget(self.toolbar_panel)
+
+        # Container #2 — ultrawide right column (~520 logical px).
+        # Hidden until LayoutMode.ULTRAWIDE is active.
+        self._ultrawide_right = QWidget()
+        self._ultrawide_right.setObjectName("ultrawide_right_panels")
+        self._ultrawide_right.setFixedWidth(520)
+        _ur_layout = QVBoxLayout(self._ultrawide_right)
+        _ur_layout.setContentsMargins(0, 0, 0, 0)
+        _ur_layout.setSpacing(SPACE_MD)
+        self._ultrawide_right.hide()
+
+        # Panels row — horizontal wrapper so the two containers sit side-by-side.
+        self._panels_row = QWidget()
+        self._panels_row.setObjectName("panels_row")
+        _pr_layout = QHBoxLayout(self._panels_row)
+        _pr_layout.setContentsMargins(0, 0, 0, 0)
+        _pr_layout.setSpacing(SPACE_MD)
+        _pr_layout.addWidget(self._stacked_panels, stretch=1)
+        _pr_layout.addWidget(self._ultrawide_right)
+
+        main_layout.addWidget(self._panels_row)
+
+        # Explicit keyboard tab order (transport handled internally by PlaybackControls;
+        # this chain covers rally controls → toolbar).
+        self._setup_tab_order()
 
         # Apply global stylesheet
         self._apply_styles()
+
+    def _setup_tab_order(self) -> None:
+        """Set explicit keyboard Tab order for the editing interface.
+
+        Order (within this window):
+            rally controls: start → server → receiver → undo
+            toolbar intervention: edit_score → force_sideout → add_comment
+                                  → time_expired → update_names → new_game
+                                  → mark_corners
+            toolbar session: return_to_menu → save_session → final_review
+
+        PlaybackControls manages its own internal focus chain; Qt propagates
+        focus into the first widget of rally_controls_panel automatically.
+        """
+        # Rally controls panel
+        QWidget.setTabOrder(self.btn_rally_start, self.btn_server_wins)
+        QWidget.setTabOrder(self.btn_server_wins, self.btn_receiver_wins)
+        QWidget.setTabOrder(self.btn_receiver_wins, self.btn_undo)
+        # Intervention toolbar
+        QWidget.setTabOrder(self.btn_undo, self.btn_edit_score)
+        QWidget.setTabOrder(self.btn_edit_score, self.btn_force_sideout)
+        QWidget.setTabOrder(self.btn_force_sideout, self.btn_add_comment)
+        QWidget.setTabOrder(self.btn_add_comment, self.btn_time_expired)
+        QWidget.setTabOrder(self.btn_time_expired, self.btn_update_names)
+        QWidget.setTabOrder(self.btn_update_names, self.btn_new_game)
+        QWidget.setTabOrder(self.btn_new_game, self.btn_mark_corners)
+        # Session toolbar
+        QWidget.setTabOrder(self.btn_mark_corners, self.btn_return_to_menu)
+        QWidget.setTabOrder(self.btn_return_to_menu, self.btn_save_session)
+        QWidget.setTabOrder(self.btn_save_session, self.btn_final_review)
 
     def _create_video_area(self) -> QWidget:
         """Create video player with status overlay.
@@ -469,10 +580,34 @@ class MainWindow(QMainWindow):
         self.btn_mark_end = RallyButton("MARK END", BUTTON_TYPE_SERVER_WINS)
         self.btn_undo = RallyButton("UNDO", BUTTON_TYPE_UNDO)
 
-        # Prevent buttons from taking focus (keyboard shortcuts handled by MainWindow)
+        # StrongFocus enables Tab navigation; Space/Enter on a focused button
+        # fires the button normally.  Window-level QShortcuts (C/S/R/U/K/Space)
+        # still fire via QShortcut.activated regardless of which widget owns focus.
         for btn in [self.btn_rally_start, self.btn_server_wins,
                     self.btn_receiver_wins, self.btn_mark_end, self.btn_undo]:
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # Tooltips with shortcut hints — read bound keys from AppConfig so custom
+        # bindings are reflected here automatically (do not hardcode key letters).
+        sc = self._app_settings.shortcuts
+        if self._is_highlights_mode:
+            self.btn_rally_start.setToolTip(
+                f"Mark Start ({sc.rally_start.upper()})"
+            )
+            self.btn_mark_end.setToolTip(
+                f"Mark End ({sc.server_wins.upper()})"
+            )
+        else:
+            self.btn_rally_start.setToolTip(
+                f"Rally Start ({sc.rally_start.upper()})"
+            )
+            self.btn_server_wins.setToolTip(
+                f"Server Wins ({sc.server_wins.upper()})"
+            )
+            self.btn_receiver_wins.setToolTip(
+                f"Receiver Wins ({sc.receiver_wins.upper()})"
+            )
+        self.btn_undo.setToolTip(f"Undo ({sc.undo.upper()})")
 
         button_layout.addWidget(self.btn_rally_start)
         button_layout.addWidget(self.btn_server_wins)
@@ -493,11 +628,13 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(button_layout)
 
-        # Visual clip timeline for ALL match types
+        # Visual clip timeline for ALL match types.
+        # NOTE: clip_timeline is NOT added to this panel's layout; _setup_ui
+        # adds it directly to main_layout so it remains in the left/main column
+        # in both stacked and ultrawide arrangements.
         self.clip_timeline = ClipTimelineWidget()
         self.clip_timeline.clip_clicked.connect(self._on_clip_clicked)
         self.clip_timeline.clip_play_requested.connect(self._on_clip_play_requested)
-        layout.addWidget(self.clip_timeline)
 
         # Ensure rally controls panel remains visible at all screen sizes
         panel.setMinimumHeight(100)
@@ -540,16 +677,16 @@ class MainWindow(QMainWindow):
         self.btn_mark_corners.setObjectName("markCornersButton")
         self.btn_mark_corners.setToolTip("Capture current frame and mark the four court corners for ML training")
 
-        # Set object names for styling and prevent focus stealing
+        # Set object names for styling; StrongFocus for keyboard accessibility.
         for btn in [self.btn_edit_score, self.btn_force_sideout,
                     self.btn_add_comment, self.btn_time_expired,
                     self.btn_update_names, self.btn_new_game]:
             btn.setObjectName("toolbar_button")
             btn.setFont(Fonts.button_other())
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self.btn_mark_corners.setFont(Fonts.button_other())
-        self.btn_mark_corners.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_mark_corners.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # Hide score-related buttons in highlights mode
         if self._is_highlights_mode:
@@ -581,7 +718,7 @@ class MainWindow(QMainWindow):
         for btn in [self.btn_return_to_menu, self.btn_save_session, self.btn_final_review]:
             btn.setObjectName("toolbar_button")
             btn.setFont(Fonts.button_other())
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self.btn_return_to_menu.setToolTip("Return to main menu")
 
@@ -602,7 +739,7 @@ class MainWindow(QMainWindow):
             }}
 
             QWidget#video_container {{
-                background-color: #000000;
+                background-color: {VIDEO_BG};
                 border: 2px solid {BORDER_COLOR};
                 border-radius: {RADIUS_LG}px;
             }}
@@ -641,8 +778,8 @@ class MainWindow(QMainWindow):
             }}
 
             QPushButton#toolbar_button:disabled {{
-                opacity: 0.4;
-                color: {TEXT_SECONDARY};
+                color: {TEXT_DISABLED};
+                border-color: {BG_BORDER};
             }}
         """)
 
@@ -683,6 +820,10 @@ class MainWindow(QMainWindow):
         self.btn_save_session.clicked.connect(self._on_save_session)
         self.btn_final_review.clicked.connect(self._on_final_review)
 
+        # Responsive layout manager — connects after _setup_ui so panel
+        # containers (_stacked_panels, _ultrawide_right) already exist.
+        self._responsive_manager.mode_changed.connect(self._on_layout_mode_changed)
+
     def _key_from_char(self, char: str) -> Qt.Key:
         """Convert single character to Qt.Key.
 
@@ -709,6 +850,12 @@ class MainWindow(QMainWindow):
         # Video control shortcuts (always active)
         self._shortcut_pause = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self._shortcut_pause.activated.connect(self._on_shortcut_pause)
+
+        # K is a secondary play/pause shortcut — familiar from many video editors.
+        # Space fires when focus is not on a button; K fires unconditionally via
+        # QShortcut so either key is always available.
+        self._shortcut_pause_k = QShortcut(QKeySequence(Qt.Key.Key_K), self)
+        self._shortcut_pause_k.activated.connect(self._on_shortcut_pause)
 
         self._shortcut_seek_back = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
         self._shortcut_seek_back.activated.connect(
@@ -1524,7 +1671,9 @@ class MainWindow(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Mark Court Corners")
-        dialog.setMinimumSize(900, 600)
+        # Size proportionally to the screen; setMinimumSize alone forces a tiny
+        # window on normal displays and overflows on 4K.
+        fit_to_screen(dialog, 0.50, 0.70, 700, 500, 1400, 1000)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1856,19 +2005,25 @@ class MainWindow(QMainWindow):
         # Set flag early to prevent race condition from multiple calls
         self._in_review_mode = True
 
-        # Hide editing mode panels
-        self.rally_controls_panel.hide()
-        self.toolbar_panel.hide()
+        # Hide the panels row (rally controls + toolbar) and the clip timeline.
+        # Hiding _panels_row is sufficient — individual panels need not be hidden
+        # separately since they are children of _panels_row.
+        self._panels_row.hide()
+        self.clip_timeline.hide()
 
         # Create review widget if it doesn't exist
         if self._review_widget is None:
             self._review_widget = ReviewModeWidget(self)
-            # Insert after playback controls
             central_widget = self.centralWidget()
             if central_widget is not None:
                 layout = central_widget.layout()
                 if layout is not None:
-                    layout.insertWidget(2, self._review_widget)
+                    # Dynamic insertion: place review widget immediately after
+                    # playback_controls so the index is stable regardless of
+                    # how many widgets _setup_ui added between them.
+                    pc_idx = layout.indexOf(self.playback_controls)
+                    insert_idx = (pc_idx + 1) if pc_idx >= 0 else 2
+                    layout.insertWidget(insert_idx, self._review_widget)
 
             # Connect review widget signals
             self._review_widget.rally_changed.connect(self._on_review_rally_changed)
@@ -1927,10 +2082,12 @@ class MainWindow(QMainWindow):
             winning_team_names = self._get_winning_team_names()
             self._review_widget.set_game_completion_info(final_score, winning_team_names)
 
-            # Auto-detect if game is already over based on current score
+            # Auto-detect if game is already over based on current score.
+            # Use the public API so ReviewModeWidget controls its own internal
+            # checkbox state and can fire the announce toast.
             is_over, winner = self.score_state.is_game_over()
             if is_over:
-                self._review_widget._mark_complete_checkbox.setChecked(True)
+                self._review_widget.set_game_completed(True, announce=True)
 
         # Show review widget
         self._review_widget.show()
@@ -1974,9 +2131,16 @@ class MainWindow(QMainWindow):
         if self._review_widget is not None:
             self._review_widget.hide()
 
-        # Show editing mode panels
-        self.rally_controls_panel.show()
-        self.toolbar_panel.show()
+        # Show editing-mode panels row and clip timeline.
+        self._panels_row.show()
+        self.clip_timeline.show()
+
+        # Re-apply the responsive arrangement.  The mode_changed signal is
+        # suppressed while _in_review_mode is True, so we call the slot
+        # directly now that the flag has been cleared (above) to ensure the
+        # correct stacked / ultrawide arrangement is in effect.
+        if self._responsive_manager.current_mode is not None:
+            self._on_layout_mode_changed(self._responsive_manager.current_mode)
 
         # Park playhead at end of last cut so editing resumes where capture left off.
         self._seek_to_last_cut_end()
@@ -2595,73 +2759,96 @@ class MainWindow(QMainWindow):
             duration_ms=3000
         )
 
-    def _check_compact_mode(self) -> None:
-        """Apply compact styling based on window width.
+    # ── Responsive layout ─────────────────────────────────────────────────────
 
-        Breakpoints:
-        - width < 800: ultra_compact mode
-        - width < 1000: compact mode
-        - width >= 1000: normal mode
-        """
-        width = self.width()
+    @pyqtSlot(LayoutMode)
+    def _on_layout_mode_changed(self, mode: LayoutMode) -> None:
+        """Apply layout arrangement and density styling when the mode changes.
 
-        if width < 800:
-            new_mode = "ultra_compact"
-        elif width < 1000:
-            new_mode = "compact"
-        else:
-            new_mode = "normal"
+        Density is expressed via a ``"density"`` dynamic QSS property on the
+        panel containers so theme.qss ``[density="compact"]`` rules take effect
+        without any per-widget font loops.
 
-        # _compact_mode stores previous state; we use string comparison now
-        old_is_compact = self._compact_mode
-        new_is_compact = new_mode != "normal"
-
-        if new_is_compact != old_is_compact:
-            self._compact_mode = new_is_compact
-            self._apply_compact_styles(new_mode)
-
-    def _apply_compact_styles(self, mode: str = "normal") -> None:
-        """Apply mode-specific styles.
+        Panel re-homing (stacked ↔ ultrawide) is silently skipped while
+        ``_in_review_mode`` is True and deferred to the
+        ``exit_review_mode → _on_layout_mode_changed`` call instead.
 
         Args:
-            mode: One of "normal", "compact", or "ultra_compact"
+            mode: New layout mode from ResponsiveManager.
         """
-        from PyQt6.QtGui import QFont
+        is_compact = mode in (LayoutMode.COMPACT, LayoutMode.ULTRA_COMPACT)
+        density_val = "compact" if is_compact else "normal"
 
-        if mode == "ultra_compact":
-            # Smallest fonts for very narrow windows
-            for btn in [self.btn_rally_start, self.btn_server_wins,
-                        self.btn_receiver_wins, self.btn_undo]:
-                if btn:
-                    btn.setFont(QFont("IBM Plex Sans", 12))
-            # Notify status overlay
-            if hasattr(self, 'status_overlay') and self.status_overlay:
-                self.status_overlay.set_compact_mode(True)
-        elif mode == "compact":
-            # Smaller fonts for compact mode
-            for btn in [self.btn_rally_start, self.btn_server_wins,
-                        self.btn_receiver_wins, self.btn_undo]:
-                if btn:
-                    btn.setFont(QFont("IBM Plex Sans", 14))
-            # Notify status overlay
-            if hasattr(self, 'status_overlay') and self.status_overlay:
-                self.status_overlay.set_compact_mode(True)
+        # Density property on panel containers so QSS rules fire.
+        for container in (self.rally_controls_panel, self.toolbar_panel):
+            container.setProperty("density", density_val)
+            self.style().unpolish(container)
+            self.style().polish(container)
+
+        # Drive status overlay via the existing public API.
+        self.status_overlay.set_compact_mode(is_compact)
+
+        # Guard: never re-home panels while review mode is active.
+        if self._in_review_mode:
+            return
+
+        if mode is LayoutMode.ULTRAWIDE:
+            self._arrange_ultrawide()
         else:
-            # Restore normal fonts
-            for btn in [self.btn_rally_start, self.btn_server_wins,
-                        self.btn_receiver_wins]:
-                if btn:
-                    btn.setFont(QFont("IBM Plex Sans", 18, QFont.Weight.DemiBold))
-            if self.btn_undo:
-                self.btn_undo.setFont(QFont("IBM Plex Sans", 14, QFont.Weight.Medium))
-            # Notify status overlay
-            if hasattr(self, 'status_overlay') and self.status_overlay:
-                self.status_overlay.set_compact_mode(False)
+            self._arrange_stacked(mode)
+
+    def _arrange_ultrawide(self) -> None:
+        """Move rally and toolbar panels into the ultrawide right column.
+
+        Safe to call repeatedly; parent-identity checks make it idempotent.
+        ``_video_container`` is never touched here.
+        """
+        sp_layout = self._stacked_panels.layout()
+        ur_layout = self._ultrawide_right.layout()
+
+        for panel in (self.rally_controls_panel, self.toolbar_panel):
+            if panel.parent() is self._stacked_panels:
+                sp_layout.removeWidget(panel)
+                ur_layout.addWidget(panel)  # addWidget reparents to _ultrawide_right
+
+        self._stacked_panels.hide()
+        self._ultrawide_right.show()
+
+    def _arrange_stacked(self, mode: LayoutMode) -> None:
+        """Move rally and toolbar panels into the stacked (normal) container.
+
+        Also caps the stacked container width to ~1800 logical px in NORMAL
+        mode so the panels don't stretch edge-to-edge on 4K displays.
+
+        Safe to call repeatedly; parent-identity checks make it idempotent.
+        ``_video_container`` is never touched here.
+
+        Args:
+            mode: The current layout mode (used only for the 4K width cap).
+        """
+        sp_layout = self._stacked_panels.layout()
+        ur_layout = self._ultrawide_right.layout()
+
+        for panel in (self.rally_controls_panel, self.toolbar_panel):
+            if panel.parent() is self._ultrawide_right:
+                ur_layout.removeWidget(panel)
+                sp_layout.addWidget(panel)  # addWidget reparents to _stacked_panels
+
+        self._ultrawide_right.hide()
+        self._stacked_panels.show()
+
+        # 4K stacked: cap panel row to ~1800 logical px so it reads comfortably
+        # on a very wide-but-not-ultrawide window; clip_timeline keeps full width.
+        if mode is LayoutMode.NORMAL:
+            self._stacked_panels.setMaximumWidth(1800)
+        else:
+            # Compact / ultra-compact: remove the cap; let the panel fill width.
+            self._stacked_panels.setMaximumWidth(16_777_215)  # QWIDGETSIZE_MAX
 
     def resizeEvent(self, event: QResizeEvent) -> None:
-        """Handle window resize - check compact mode threshold."""
+        """Handle window resize — delegate to ResponsiveManager."""
         super().resizeEvent(event)
-        self._check_compact_mode()
+        self._responsive_manager.evaluate(event.size())
 
     def showEvent(self, event: QShowEvent) -> None:
         """Handle window show event.
@@ -2737,6 +2924,15 @@ class MainWindow(QMainWindow):
                 return
 
             # DONT_SAVE - continue with close without saving
+
+        # Persist window geometry so the next session restores the same size and
+        # position.  Saved as base64-encoded QByteArray into DisplayConfig
+        # (added by the Task-1 parallel agent; guarded with hasattr for safety).
+        _display = getattr(self._app_settings, "display", None)
+        if _display is not None and hasattr(_display, "last_geometry"):
+            _geo_bytes = self.saveGeometry()
+            _display.last_geometry = base64.b64encode(bytes(_geo_bytes)).decode()
+            self._app_settings.save()
 
         # Clean up video player
         self.video_widget.cleanup()
