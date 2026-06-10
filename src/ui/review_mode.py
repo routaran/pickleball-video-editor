@@ -159,17 +159,19 @@ class RallyHeaderWidget(QWidget):
             }}
         """)
 
-    def set_rally(self, current: int, total: int) -> None:
+    def set_rally(self, current: int, total: int, is_post_game: bool = False) -> None:
         """Update the displayed rally count.
 
         Args:
             current: Current rally index (0-based)
             total: Total number of rallies
+            is_post_game: When True, appends " (post-game)" to the counter label
         """
         self._current_rally = current
         self._total_rallies = total
         # Display as 1-based for user
-        self._counter_label.setText(f"Rally {current + 1} of {total}")
+        suffix = " (post-game)" if is_post_game else ""
+        self._counter_label.setText(f"Rally {current + 1} of {total}{suffix}")
 
 
 class TimingControlWidget(QWidget):
@@ -743,12 +745,15 @@ class RallyListWidget(QWidget):
             }}
         """)
 
-    def _create_card_widget(self, rally_num: int, score: str) -> QWidget:
+    def _create_card_widget(
+        self, rally_num: int, score: str, is_post_game: bool = False
+    ) -> QWidget:
         """Create a card widget for a rally item.
 
         Args:
             rally_num: Rally number (1-based for display)
             score: Score string
+            is_post_game: When True, shows a muted "PG" indicator on the card
 
         Returns:
             QWidget containing rally card content
@@ -764,9 +769,19 @@ class RallyListWidget(QWidget):
         num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         num_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent; border: none;")
 
-        score_label = QLabel(score)
-        score_label.setFont(Fonts.display(size=9))
-        score_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; border: none;")
+        # Post-game label replaces the score string with a "PG" tag
+        if is_post_game:
+            score_label = QLabel("PG")
+            score_label.setFont(Fonts.display(size=9))
+            score_label.setStyleSheet(
+                f"color: {TEXT_WARNING}; background: transparent; border: none;"
+            )
+        else:
+            score_label = QLabel(score)
+            score_label.setFont(Fonts.display(size=9))
+            score_label.setStyleSheet(
+                f"color: {TEXT_SECONDARY}; background: transparent; border: none;"
+            )
         score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout.addWidget(num_label)
@@ -788,7 +803,7 @@ class RallyListWidget(QWidget):
         for idx, rally in enumerate(rallies):
             item = QListWidgetItem()
             # Create custom widget for the item
-            widget = self._create_card_widget(idx + 1, rally.score_at_start)
+            widget = self._create_card_widget(idx + 1, rally.score_at_start, rally.is_post_game)
             item.setSizeHint(QSize(62, 42))
             item.setData(Qt.ItemDataRole.UserRole, idx)  # Store index
             self._list_widget.addItem(item)
@@ -875,6 +890,8 @@ class ReviewModeWidget(QWidget):
     timing_adjusted = pyqtSignal(int, str, float)
     score_changed = pyqtSignal(int, str, bool)
     winner_flipped = pyqtSignal(int)  # rally index — emitted when user flips the rally winner
+    delete_rally_requested = pyqtSignal(int)  # rally index — emitted when user requests deletion
+    insert_rally_requested = pyqtSignal(int)  # rally index — emitted when user requests insert after
     exit_requested = pyqtSignal()
     return_to_menu_requested = pyqtSignal()
     generate_requested = pyqtSignal()
@@ -1018,6 +1035,32 @@ class ReviewModeWidget(QWidget):
         )
         self._apply_flip_button_style(low_confidence=False)
         cp_layout.addWidget(self._flip_winner_button)
+
+        # Delete / Insert row
+        edit_row = QHBoxLayout()
+        edit_row.setSpacing(SPACE_SM)
+
+        self._delete_rally_button = QPushButton("Delete Rally")
+        self._delete_rally_button.setFont(Fonts.button_other())
+        self._delete_rally_button.setObjectName("deleteRallyButton")
+        self._delete_rally_button.clicked.connect(self._on_delete_rally_clicked)
+        self._delete_rally_button.setToolTip(
+            "Remove this rally and recalculate all subsequent scores"
+        )
+        self._delete_rally_button.setStyleSheet(ButtonStyles.outline(DANGER_TEXT))
+        edit_row.addWidget(self._delete_rally_button)
+
+        self._insert_rally_button = QPushButton("Insert Rally After")
+        self._insert_rally_button.setFont(Fonts.button_other())
+        self._insert_rally_button.setObjectName("insertRallyButton")
+        self._insert_rally_button.clicked.connect(self._on_insert_rally_clicked)
+        self._insert_rally_button.setToolTip(
+            "Insert a new rally after this one with a placeholder timing and score"
+        )
+        self._insert_rally_button.setStyleSheet(ButtonStyles.compact())
+        edit_row.addWidget(self._insert_rally_button)
+
+        cp_layout.addLayout(edit_row)
 
         # Timing controls
         self._timing_widget = TimingControlWidget()
@@ -1501,6 +1544,24 @@ class ReviewModeWidget(QWidget):
         """
         self.winner_flipped.emit(self._current_index)
 
+    @pyqtSlot()
+    def _on_delete_rally_clicked(self) -> None:
+        """Handle Delete Rally button click.
+
+        Emits delete_rally_requested with the current rally index so MainWindow
+        can confirm, delete from rally_manager, and cascade scores.
+        """
+        self.delete_rally_requested.emit(self._current_index)
+
+    @pyqtSlot()
+    def _on_insert_rally_clicked(self) -> None:
+        """Handle Insert Rally After button click.
+
+        Emits insert_rally_requested with the current rally index so MainWindow
+        can build a placeholder rally, insert it, and cascade scores.
+        """
+        self.insert_rally_requested.emit(self._current_index)
+
     def _apply_flip_button_style(self, low_confidence: bool) -> None:
         """Apply styling to the Flip Winner button.
 
@@ -1532,6 +1593,14 @@ class ReviewModeWidget(QWidget):
         # Re-style button if the current rally is affected
         low_conf = self._current_index in self._low_confidence_indices
         self._apply_flip_button_style(low_confidence=low_conf)
+
+    def get_low_confidence_indices(self) -> set[int]:
+        """Return the current set of low-confidence rally indices.
+
+        Returns:
+            Copy of the set so callers cannot accidentally mutate internal state.
+        """
+        return set(self._low_confidence_indices)
 
     @pyqtSlot(int)
     def _on_rally_selected(self, index: int) -> None:
@@ -1589,10 +1658,11 @@ class ReviewModeWidget(QWidget):
             self._score_widget.show()
             self._score_widget.set_mode(game_mode)
 
-        # Enable export buttons only when there is at least one rally to export.
+        # Enable export buttons and delete button only when there is at least one rally.
         has_rallies = len(rallies) > 0
         self._generate_button.setEnabled(has_rallies)
         self._ffmpeg_button.setEnabled(has_rallies)
+        self._delete_rally_button.setEnabled(has_rallies)
         _no_rallies_tip = "Add at least one rally to export"
         self._generate_button.setToolTip("" if has_rallies else _no_rallies_tip)
         self._ffmpeg_button.setToolTip("" if has_rallies else _no_rallies_tip)
@@ -1613,8 +1683,8 @@ class ReviewModeWidget(QWidget):
         self._current_index = index
         rally = self._rallies[index]
 
-        # Update header
-        self._header.set_rally(index, len(self._rallies))
+        # Update header (pass post-game flag for visual indicator)
+        self._header.set_rally(index, len(self._rallies), is_post_game=rally.is_post_game)
 
         # Update timing controls (convert frames to seconds using actual fps)
         start_seconds = rally.start_frame / self._fps
