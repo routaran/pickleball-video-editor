@@ -11,6 +11,7 @@ Test coverage:
 """
 
 import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -53,6 +54,61 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 
+def _manual_get_perspective_transform(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    """Return a 3x3 homography from four source/destination point pairs."""
+    src64 = np.asarray(src, dtype=np.float64)
+    dst64 = np.asarray(dst, dtype=np.float64)
+
+    A: list[list[float]] = []
+    b: list[float] = []
+    for (x, y), (u, v) in zip(src64, dst64, strict=True):
+        A.append([x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y])
+        b.append(float(u))
+        A.append([0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y])
+        b.append(float(v))
+
+    h = np.linalg.solve(np.asarray(A, dtype=np.float64), np.asarray(b, dtype=np.float64))
+    return np.append(h, 1.0).reshape(3, 3)
+
+
+def _manual_warp_perspective(frame: np.ndarray, M: np.ndarray, dsize: tuple[int, int]) -> np.ndarray:
+    """Nearest-neighbour perspective warp used when real cv2 is unavailable."""
+    w, h = dsize
+    out = np.zeros((h, w, frame.shape[2]), dtype=frame.dtype)
+    inv = np.linalg.inv(np.asarray(M, dtype=np.float64))
+
+    ys, xs = np.indices((h, w), dtype=np.float64)
+    dst = np.stack([xs.ravel(), ys.ravel(), np.ones(h * w, dtype=np.float64)], axis=0)
+    src = inv @ dst
+    src_x = np.rint(src[0] / src[2]).astype(np.int64)
+    src_y = np.rint(src[1] / src[2]).astype(np.int64)
+
+    valid = (
+        (src_x >= 0)
+        & (src_x < frame.shape[1])
+        & (src_y >= 0)
+        & (src_y < frame.shape[0])
+    )
+    out.reshape(-1, frame.shape[2])[valid] = frame[src_y[valid], src_x[valid]]
+    return out
+
+
+def _convex_polygon_mask(height: int, width: int, corners: list[tuple[int, int]]) -> np.ndarray:
+    """Return a boolean mask for points inside a convex polygon."""
+    pts = np.asarray(corners, dtype=np.float64)
+    centroid_x, centroid_y = np.mean(pts, axis=0)
+
+    yy, xx = np.indices((height, width), dtype=np.float64)
+    inside = np.ones((height, width), dtype=bool)
+    for i in range(len(pts)):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % len(pts)]
+        edge_cross_centroid = (centroid_x - x1) * (y2 - y1) - (centroid_y - y1) * (x2 - x1)
+        cross = (xx - x1) * (y2 - y1) - (yy - y1) * (x2 - x1)
+        inside &= cross * edge_cross_centroid >= 0.0
+    return inside
+
+
 # ---------------------------------------------------------------------------
 # cv2 stub
 #
@@ -64,18 +120,24 @@ try:
     import cv2 as _cv2_real  # type: ignore[import-untyped]
     _CV2_AVAILABLE = True
 except ImportError:
+    _cv2_real = None
     _CV2_AVAILABLE = False
 
 if "cv2" not in sys.modules:
-    _cv2_stub = MagicMock(name="cv2")
-    if _CV2_AVAILABLE:
-        # Use real math functions so homography tests are numerically meaningful.
-        _cv2_stub.getPerspectiveTransform = _cv2_real.getPerspectiveTransform
-        _cv2_stub.perspectiveTransform = _cv2_real.perspectiveTransform
-    _cv2_stub.warpPerspective.side_effect = lambda frame, M, dsize: frame
-    _cv2_stub.resize.side_effect = lambda frame, dsize: np.zeros(
-        (dsize[1], dsize[0], 3), dtype=np.uint8
+    _cv2_stub = types.ModuleType("cv2")
+    _cv2_stub.getPerspectiveTransform = (
+        _cv2_real.getPerspectiveTransform
+        if _cv2_real is not None and hasattr(_cv2_real, "getPerspectiveTransform")
+        else _manual_get_perspective_transform
     )
+    if _cv2_real is not None and hasattr(_cv2_real, "perspectiveTransform"):
+        _cv2_stub.perspectiveTransform = _cv2_real.perspectiveTransform
+    _cv2_stub.warpPerspective = (
+        _cv2_real.warpPerspective
+        if _cv2_real is not None and hasattr(_cv2_real, "warpPerspective")
+        else _manual_warp_perspective
+    )
+    _cv2_stub.resize = lambda frame, dsize: np.zeros((dsize[1], dsize[0], 3), dtype=np.uint8)
     sys.modules["cv2"] = _cv2_stub
 
 
@@ -97,13 +159,20 @@ if "decord" not in sys.modules:
 # Import the module under test (after making cv2 and decord available).
 # ---------------------------------------------------------------------------
 
+from ml import video_features as _video_features_module  # noqa: E402
 from ml.video_features import (  # noqa: E402 — must come after stubs
     CANONICAL_SIZE,
     compute_homography,
     extract_clip,
+    get_canonical_clip,
     hash_clip_key,
     warp_clip_to_canonical,
 )
+
+if "getPerspectiveTransform" not in getattr(_video_features_module.cv2, "__dict__", {}):
+    _video_features_module.cv2.getPerspectiveTransform = _manual_get_perspective_transform
+if "warpPerspective" not in getattr(_video_features_module.cv2, "__dict__", {}):
+    _video_features_module.cv2.warpPerspective = _manual_warp_perspective
 
 
 # ---------------------------------------------------------------------------
@@ -123,9 +192,10 @@ def _apply_homography_point(M: np.ndarray, pt: tuple[float, float]) -> tuple[flo
     Returns:
         (x', y') after perspective division.
     """
-    if _CV2_AVAILABLE:
+    import cv2  # type: ignore[import-untyped]
+
+    if "perspectiveTransform" in getattr(cv2, "__dict__", {}):
         src = np.float32([[[pt[0], pt[1]]]])
-        import cv2  # type: ignore[import-untyped]
         dst = cv2.perspectiveTransform(src, M)
         return float(dst[0, 0, 0]), float(dst[0, 0, 1])
 
@@ -145,7 +215,6 @@ def _fake_frames(t: int = 5, h: int = H, w: int = W) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _CV2_AVAILABLE, reason="cv2 not installed")
 class TestComputeHomography:
     """Tests for compute_homography().
 
@@ -196,12 +265,47 @@ class TestComputeHomography:
         with pytest.raises(ValueError, match="4"):
             compute_homography([(0, 0), (W, 0), (W, H), (0, H), (W // 2, H // 2)], (W, H))
 
-    def test_custom_canonical_size_changes_matrix(self) -> None:
-        """Different canonical_size values must produce different matrices."""
+    def test_custom_canonical_size_changes_output_mapping(self) -> None:
+        """Different canonical_size values must change the destination mapping."""
         corners = [(0, 0), (320, 0), (320, 240), (0, 240)]
         M_default = compute_homography(corners, CANONICAL_SIZE)
         M_custom = compute_homography(corners, (320, 240))
-        assert not np.allclose(M_default, M_custom)
+
+        default_br = _apply_homography_point(M_default, (320.0, 240.0))
+        custom_br = _apply_homography_point(M_custom, (320.0, 240.0))
+
+        assert np.allclose(default_br, (W - 1, H - 1), atol=1.0)
+        assert np.allclose(custom_br, (319.0, 239.0), atol=1.0)
+        assert not np.allclose(default_br, custom_br)
+
+    def test_realistic_non_identity_corners_warp_non_empty_content(self) -> None:
+        """A realistic trapezoid should warp into non-empty canonical content.
+
+        Regression guard: when corners are interpreted in the wrong coordinate
+        space, the warped clip becomes mostly black/empty.
+        """
+        source_h = 480
+        source_w = 640
+        corners = [(120, 80), (520, 100), (560, 360), (90, 340)]
+
+        frame = np.zeros((source_h, source_w, 3), dtype=np.uint8)
+        yy, xx = np.indices((source_h, source_w))
+        mask = _convex_polygon_mask(source_h, source_w, corners)
+        frame[mask, 0] = (xx[mask] % 256).astype(np.uint8)
+        frame[mask, 1] = (yy[mask] % 256).astype(np.uint8)
+        frame[mask, 2] = 255
+
+        frames = np.stack([frame], axis=0)
+        homography = compute_homography(corners, CANONICAL_SIZE)
+        warped = warp_clip_to_canonical(frames, homography, CANONICAL_SIZE)
+
+        assert warped.shape == (1, H, W, 3)
+        assert int(warped.sum()) > 0, "Warped frame is unexpectedly empty"
+
+        center_patch = warped[0, H // 4 : 3 * H // 4, W // 4 : 3 * W // 4]
+        assert center_patch.mean() > 10.0, (
+            "Expected substantial non-black content in warped centre region"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +437,180 @@ class TestExtractClipCache:
 # ---------------------------------------------------------------------------
 # hash_clip_key tests
 # ---------------------------------------------------------------------------
+
+
+class TestGetCanonicalClip:
+    """Regression tests for the high-level extract + warp wrapper."""
+
+    def test_uses_native_source_frame_size_for_extraction(self, tmp_path: Path) -> None:
+        """Extraction must use the video's native size, not canonical_size.
+
+        This prevents passing source-space court corners into frames that were
+        prematurely resized to canonical dimensions.
+        """
+        source_size = (640, 480)
+        corners = [(120, 80), (520, 100), (560, 360), (90, 340)]
+        video_path = tmp_path / "native-size.mp4"
+        video_path.write_bytes(b"placeholder")
+
+        frame = np.zeros((source_size[1], source_size[0], 3), dtype=np.uint8)
+        frame[80:360, 120:560, :] = 200
+        extracted = np.stack([frame], axis=0)
+
+        sentinel_homography = np.eye(3, dtype=np.float64)
+
+        def _warp_side_effect(
+            frames: np.ndarray,
+            homography: np.ndarray,
+            canonical_size: tuple[int, int],
+        ) -> np.ndarray:
+            assert frames.shape == (1, source_size[1], source_size[0], 3)
+            assert np.array_equal(frames, extracted)
+            assert np.array_equal(homography, sentinel_homography)
+            assert canonical_size == CANONICAL_SIZE
+            return np.full((1, H, W, 3), 17, dtype=np.uint8)
+
+        with (
+            patch("ml.video_features.get_video_frame_size", return_value=source_size),
+            patch("ml.video_features.extract_clip", return_value=extracted) as mock_extract,
+            patch("ml.video_features.compute_homography", return_value=sentinel_homography) as mock_homography,
+            patch("ml.video_features.warp_clip_to_canonical", side_effect=_warp_side_effect) as mock_warp,
+        ):
+            warped = get_canonical_clip(
+                video_path=video_path,
+                end_s=2.5,
+                corners=corners,
+                fps_out=8,
+                duration_s=2.5,
+                canonical_size=CANONICAL_SIZE,
+            )
+
+        assert mock_extract.call_args.args[4] == source_size
+        mock_homography.assert_called_once_with(corners, CANONICAL_SIZE)
+        mock_warp.assert_called_once()
+        assert warped.shape == (1, H, W, 3)
+        assert int(warped.sum()) > 0
+
+
+# ---------------------------------------------------------------------------
+# _get_video_frame_size_cached / get_video_frame_size tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetVideoFrameSize:
+    """Tests for the tiered native-size probe and its warning behaviour."""
+
+    # Import the cached function directly so we can call .cache_clear().
+    from ml.video_features import _get_video_frame_size_cached as _cached_fn
+
+    def _clear(self) -> None:
+        """Clear lru_cache to avoid cross-test pollution."""
+        from ml.video_features import _get_video_frame_size_cached
+        _get_video_frame_size_cached.cache_clear()
+
+    def test_torchvision_tier_returns_size_from_4d_tensor(self, tmp_path: Path) -> None:
+        """torchvision tier must unpack (T, H, W, C) correctly and return (W, H).
+
+        cv2 and decord are forced to fail so that torchvision is exercised.
+        A fake read_video returns a (2, 720, 1280, 3) tensor → expect (1280, 720).
+        """
+        import types
+        import torch
+
+        self._clear()
+
+        fake_video = tmp_path / "tv_probe_unique.mp4"
+        fake_video.write_bytes(b"placeholder")
+
+        # Build a minimal torchvision.io stub that returns a 4-D tensor.
+        fake_tensor = torch.zeros((2, 720, 1280, 3), dtype=torch.uint8)
+
+        tvio_stub = types.ModuleType("torchvision.io")
+        tvio_stub.read_video = lambda *args, **kwargs: (fake_tensor, None, {})
+
+        tv_stub = types.ModuleType("torchvision")
+        tv_stub.io = tvio_stub
+
+        # Patch cv2 so the first tier fails (isOpened returns False).
+        failing_capture = MagicMock()
+        failing_capture.isOpened.return_value = False
+
+        with (
+            patch("ml.video_features.cv2") as mock_cv2,
+            patch.dict(
+                sys.modules,
+                {"torchvision": tv_stub, "torchvision.io": tvio_stub},
+            ),
+        ):
+            mock_cv2.VideoCapture.return_value = failing_capture
+            mock_cv2.CAP_PROP_FRAME_WIDTH = 3
+            mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
+
+            # Make decord unavailable for this call by removing it temporarily.
+            saved_decord = sys.modules.pop("decord", None)
+            try:
+                # Re-evict the cached function result for this path.
+                self._clear()
+                from ml.video_features import _get_video_frame_size_cached
+                result = _get_video_frame_size_cached(str(fake_video))
+            finally:
+                if saved_decord is not None:
+                    sys.modules["decord"] = saved_decord
+                self._clear()
+
+        assert result == (1280, 720), f"Expected (1280, 720), got {result}"
+
+    def test_all_tiers_fail_returns_none_and_warns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When all probes fail, returns None and emits a WARNING log message."""
+        import logging
+        import types
+
+        self._clear()
+
+        fake_video = tmp_path / "all_fail_unique.mp4"
+        fake_video.write_bytes(b"placeholder")
+
+        # Stub torchvision.io.read_video so it returns an empty tensor (numel==0).
+        import torch
+
+        empty_tensor = torch.zeros((0,), dtype=torch.uint8)
+        tvio_stub = types.ModuleType("torchvision.io")
+        tvio_stub.read_video = lambda *args, **kwargs: (empty_tensor, None, {})
+        tv_stub = types.ModuleType("torchvision")
+        tv_stub.io = tvio_stub
+
+        failing_capture = MagicMock()
+        failing_capture.isOpened.return_value = False
+
+        with (
+            patch("ml.video_features.cv2") as mock_cv2,
+            patch.dict(
+                sys.modules,
+                {"torchvision": tv_stub, "torchvision.io": tvio_stub},
+            ),
+            caplog.at_level(logging.WARNING, logger="ml.video_features"),
+        ):
+            mock_cv2.VideoCapture.return_value = failing_capture
+            mock_cv2.CAP_PROP_FRAME_WIDTH = 3
+            mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
+
+            saved_decord = sys.modules.pop("decord", None)
+            try:
+                self._clear()
+                from ml.video_features import _get_video_frame_size_cached
+                result = _get_video_frame_size_cached(str(fake_video))
+            finally:
+                if saved_decord is not None:
+                    sys.modules["decord"] = saved_decord
+                self._clear()
+
+        assert result is None, f"Expected None when all tiers fail, got {result}"
+        warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any(
+            "Native frame-size probe failed" in str(m) for m in warning_messages
+        ), f"Expected a warning about probe failure, got log records: {caplog.records}"
 
 
 class TestHashClipKey:

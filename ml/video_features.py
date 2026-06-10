@@ -21,6 +21,7 @@ No PyQt6 or other UI imports are used in this module.
 import hashlib
 import logging
 import warnings
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -92,6 +93,82 @@ def _get_cache_dir() -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
+
+@lru_cache(maxsize=256)
+def _get_video_frame_size_cached(video_path_str: str) -> tuple[int, int] | None:
+    """Resolve and cache native frame size for a video as (width, height).
+
+    Returns None when size cannot be resolved via available probes.
+    """
+    video_path = Path(video_path_str)
+    if not video_path.exists():
+        return None
+
+    # Try OpenCV's lightweight reader first (very fast when metadata is present).
+    if hasattr(cv2, "VideoCapture"):
+        capture = cv2.VideoCapture(str(video_path))
+        try:
+            if capture.isOpened():
+                width_prop = getattr(cv2, "CAP_PROP_FRAME_WIDTH", 3)
+                height_prop = getattr(cv2, "CAP_PROP_FRAME_HEIGHT", 4)
+                width = int(capture.get(width_prop))
+                height = int(capture.get(height_prop))
+                if width > 0 and height > 0:
+                    return width, height
+        except Exception:
+            pass
+        finally:
+            capture.release()
+
+    # Fall back to decord metadata if available.
+    try:
+        from decord import VideoReader, cpu  # type: ignore[import-untyped]
+
+        vr = VideoReader(str(video_path), ctx=cpu(0))
+        width = int(getattr(vr, "width", 0))
+        height = int(getattr(vr, "height", 0))
+        if width > 0 and height > 0:
+            return width, height
+
+        # As a final fallback under decord, read the first frame to infer dimensions.
+        sample = vr.get_batch([0]).asnumpy()
+        if sample.size > 0:
+            h, w = sample.shape[1], sample.shape[2]
+            if w > 0 and h > 0:
+                return w, h
+    except Exception:
+        pass
+
+    # torchvision fallback (uses the same backend family already used by extract_clip).
+    try:
+        import torchvision.io as tvio  # type: ignore[import-untyped]
+
+        video, _, _info = tvio.read_video(
+            str(video_path),
+            start_pts=0.0,
+            end_pts=1.0,
+            pts_unit="sec",
+        )
+        if video.numel() > 0:
+            _, h, w, _ = video.shape
+            if w > 0 and h > 0:
+                return w, h
+    except Exception:
+        pass
+
+    logger.warning(
+        "Native frame-size probe failed for '%s' via all available backends "
+        "(cv2, decord, torchvision). Callers will fall back to canonical size "
+        "%s, which likely produces incorrect (near-black) warped clips.",
+        video_path_str,
+        CANONICAL_SIZE,
+    )
+    return None
+
+
+def get_video_frame_size(video_path: Path) -> tuple[int, int] | None:
+    """Return native video frame size as (width, height), or None on failure."""
+    return _get_video_frame_size_cached(str(video_path))
 
 # ---------------------------------------------------------------------------
 # Private extraction helpers
@@ -317,6 +394,10 @@ def get_canonical_clip(
         Array of shape (T, H, W, 3) uint8.
     """
     start_s = max(0.0, end_s - duration_s)
-    frames = extract_clip(video_path, start_s, end_s, fps_out, canonical_size)
+
+    source_size = get_video_frame_size(video_path)
+    extract_size = source_size if source_size is not None else canonical_size
+
+    frames = extract_clip(video_path, start_s, end_s, fps_out, extract_size)
     homography = compute_homography(corners, canonical_size)
     return warp_clip_to_canonical(frames, homography, canonical_size)
