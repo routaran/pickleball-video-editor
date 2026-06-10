@@ -311,19 +311,25 @@ class VideoWidget(QWidget):
     def get_current_frame_pixmap(self) -> QPixmap | None:
         """Capture the current MPV-rendered frame as a QPixmap.
 
-        Uses MPV's screenshot_raw command to retrieve raw RGB pixel data
-        for the currently displayed frame, then converts it to a QPixmap
-        without any intermediate file I/O or re-decode.
+        Uses the raw MPV command ``screenshot-raw`` to retrieve the currently
+        displayed frame as a bgr0 pixel buffer (4 bytes/pixel: B, G, R, padding),
+        then converts it to a QPixmap without any intermediate file I/O or
+        re-decode. The bgr0 format maps directly to ``QImage.Format.Format_RGB32``
+        (the alpha/padding byte is ignored by Qt).
 
         Returns:
             QPixmap of the current frame, or None if no player is active,
-            screenshot_raw returns None, or the returned dict is missing
-            required keys.
+            the command raises an error (e.g. no frame rendered yet or player
+            is shutting down), the result is missing required keys, or the
+            pixel format is not ``bgr0``.
         """
         if self._player is None:
             return None
 
-        raw = self._player.screenshot_raw()
+        try:
+            raw = self._player.command("screenshot-raw")
+        except (mpv.ShutdownError, SystemError):
+            return None
 
         if raw is None:
             return None
@@ -331,8 +337,11 @@ class VideoWidget(QWidget):
         if "data" not in raw or "w" not in raw or "h" not in raw:
             return None
 
-        stride = raw.get("stride", raw["w"] * 3)
-        img = QImage(raw["data"], raw["w"], raw["h"], stride, QImage.Format.Format_RGB888)
+        if raw.get("format") != "bgr0":
+            return None
+
+        stride = raw.get("stride", raw["w"] * 4)
+        img = QImage(raw["data"], raw["w"], raw["h"], stride, QImage.Format.Format_RGB32)
         return QPixmap.fromImage(img)
 
     def get_duration(self) -> float:

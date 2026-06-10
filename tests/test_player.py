@@ -4,10 +4,14 @@
 Sections
 --------
 1. Pytest unit tests (collected automatically by pytest) — cover
-   ``VideoWidget.get_current_frame_pixmap`` with three mock states:
+   ``VideoWidget.get_current_frame_pixmap`` with the following mock states:
    - ``_player`` is ``None`` (no video loaded)
-   - ``screenshot_raw`` returns a well-formed RGB dict
-   - ``screenshot_raw`` returns ``None`` (mpv not ready)
+   - ``command("screenshot-raw")`` returns a well-formed bgr0 dict
+   - ``command("screenshot-raw")`` returns ``None`` (mpv not ready)
+   - ``command("screenshot-raw")`` raises ``SystemError``
+   - ``command("screenshot-raw")`` raises ``mpv.ShutdownError``
+   - returned dict has ``format`` other than ``"bgr0"``
+   - returned dict is missing required keys
 
 2. Manual integration demo (only runs under ``if __name__ == "__main__"``) —
    creates a window with embedded VideoWidget and basic playback controls for
@@ -46,6 +50,8 @@ from PyQt6.QtWidgets import (
 _PROJECT_ROOT = Path(__file__).parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+import mpv  # noqa: E402 — must follow sys.path setup
 
 from src.video.player import VideoWidget
 
@@ -93,6 +99,21 @@ def _make_widget(qapp: QApplication) -> VideoWidget:
     return widget
 
 
+def _bgr0_dict(w: int, h: int, stride: int | None = None) -> dict:
+    """Return a minimal bgr0 raw-command result dict for use in mocks.
+
+    Args:
+        w: Frame width in pixels.
+        h: Frame height in pixels.
+        stride: Row stride in bytes.  Defaults to ``w * 4`` (bgr0 = 4 bytes/pixel).
+
+    Returns:
+        Dict matching the shape returned by ``mpv.command("screenshot-raw")``.
+    """
+    s = stride if stride is not None else w * 4
+    return {"w": w, "h": h, "stride": s, "format": "bgr0", "data": bytes(s * h)}
+
+
 # ---------------------------------------------------------------------------
 # Test class
 # ---------------------------------------------------------------------------
@@ -115,23 +136,16 @@ class TestGetCurrentFramePixmap:
         assert result is None
 
     # ------------------------------------------------------------------
-    # State 2 — screenshot_raw returns a well-formed RGB dict
+    # State 2 — command returns a well-formed bgr0 dict
     # ------------------------------------------------------------------
 
-    def test_returns_pixmap_for_valid_rgb_dict(self, qapp: QApplication) -> None:
-        """Must return a non-null ``QPixmap`` when ``screenshot_raw`` succeeds."""
+    def test_returns_pixmap_for_valid_bgr0_dict(self, qapp: QApplication) -> None:
+        """Must return a non-null ``QPixmap`` when ``command`` succeeds with bgr0."""
         width = 16
         height = 9
-        stride = width * 3
-        raw_bytes = bytes(width * height * 3)  # all-black pixels
 
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = {
-            "data": raw_bytes,
-            "w": width,
-            "h": height,
-            "stride": stride,
-        }
+        mock_player.command.return_value = _bgr0_dict(width, height)
 
         widget = _make_widget(qapp)
         widget._player = mock_player
@@ -140,21 +154,15 @@ class TestGetCurrentFramePixmap:
 
         assert result is not None
         assert isinstance(result, QPixmap)
+        mock_player.command.assert_called_once_with("screenshot-raw")
 
     def test_pixmap_dimensions_round_trip(self, qapp: QApplication) -> None:
         """The returned ``QPixmap`` must have the same width/height as the dict."""
         width = 32
         height = 18
-        stride = width * 3
-        raw_bytes = bytes(width * height * 3)
 
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = {
-            "data": raw_bytes,
-            "w": width,
-            "h": height,
-            "stride": stride,
-        }
+        mock_player.command.return_value = _bgr0_dict(width, height)
 
         widget = _make_widget(qapp)
         widget._player = mock_player
@@ -165,20 +173,13 @@ class TestGetCurrentFramePixmap:
         assert result.width() == width
         assert result.height() == height
 
-    def test_uses_format_rgb888(self, qapp: QApplication) -> None:
-        """Must build the intermediate ``QImage`` with ``Format_RGB888``."""
+    def test_uses_format_rgb32(self, qapp: QApplication) -> None:
+        """Must build the intermediate ``QImage`` with ``Format_RGB32`` for bgr0."""
         width = 4
         height = 4
-        stride = width * 3
-        raw_bytes = bytes(width * height * 3)
 
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = {
-            "data": raw_bytes,
-            "w": width,
-            "h": height,
-            "stride": stride,
-        }
+        mock_player.command.return_value = _bgr0_dict(width, height)
 
         widget = _make_widget(qapp)
         widget._player = mock_player
@@ -199,24 +200,18 @@ class TestGetCurrentFramePixmap:
             QPixmap.fromImage = staticmethod(original_from_image)  # type: ignore[assignment]
 
         assert len(captured_images) == 1
-        assert captured_images[0].format() == QImage.Format.Format_RGB888
+        assert captured_images[0].format() == QImage.Format.Format_RGB32
 
     def test_uses_stride_from_dict_when_present(self, qapp: QApplication) -> None:
-        """When ``stride`` is in the dict it must be used (not recomputed as w*3)."""
-        # Use a padded stride (common in YUV/packed frames) — 20 instead of 12
-        # for a 4-wide image.  The pixmap must still report the correct width.
+        """When ``stride`` is in the dict it must be used (not recomputed as w*4)."""
+        # Use a padded stride — 24 instead of 16 for a 4-wide bgr0 image.
+        # The pixmap must still report the correct width.
         width = 4
         height = 2
-        stride = 20  # padded — wider than width * 3 (= 12)
-        raw_bytes = bytes(stride * height)
+        stride = 24  # padded — wider than width * 4 (= 16)
 
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = {
-            "data": raw_bytes,
-            "w": width,
-            "h": height,
-            "stride": stride,
-        }
+        mock_player.command.return_value = _bgr0_dict(width, height, stride=stride)
 
         widget = _make_widget(qapp)
         widget._player = mock_player
@@ -226,19 +221,20 @@ class TestGetCurrentFramePixmap:
         assert result is not None
         assert result.width() == width
 
-    def test_stride_defaults_to_width_times_3_when_absent(
+    def test_stride_defaults_to_width_times_4_when_absent(
         self, qapp: QApplication
     ) -> None:
-        """When ``stride`` key is absent the method must infer it as ``w * 3``."""
+        """When ``stride`` key is absent the method must infer it as ``w * 4``."""
         width = 8
         height = 4
-        raw_bytes = bytes(width * height * 3)
+        raw_bytes = bytes(width * height * 4)
 
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = {
+        mock_player.command.return_value = {
             "data": raw_bytes,
             "w": width,
             "h": height,
+            "format": "bgr0",
             # "stride" deliberately omitted
         }
 
@@ -252,15 +248,75 @@ class TestGetCurrentFramePixmap:
         assert result.height() == height
 
     # ------------------------------------------------------------------
-    # State 3 — screenshot_raw returns None
+    # State 3 — command returns None
     # ------------------------------------------------------------------
 
-    def test_returns_none_when_screenshot_raw_returns_none(
+    def test_returns_none_when_command_returns_none(
         self, qapp: QApplication
     ) -> None:
-        """Must return ``None`` when ``screenshot_raw()`` itself returns ``None``."""
+        """Must return ``None`` when ``command()`` itself returns ``None``."""
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = None
+        mock_player.command.return_value = None
+
+        widget = _make_widget(qapp)
+        widget._player = mock_player
+
+        result = widget.get_current_frame_pixmap()
+
+        assert result is None
+
+    # ------------------------------------------------------------------
+    # State 4 — command raises SystemError
+    # ------------------------------------------------------------------
+
+    def test_returns_none_when_command_raises_system_error(
+        self, qapp: QApplication
+    ) -> None:
+        """Must return ``None`` when ``command()`` raises ``SystemError``."""
+        mock_player = MagicMock()
+        mock_player.command.side_effect = SystemError("mpv command failed")
+
+        widget = _make_widget(qapp)
+        widget._player = mock_player
+
+        result = widget.get_current_frame_pixmap()
+
+        assert result is None
+
+    # ------------------------------------------------------------------
+    # State 5 — command raises mpv.ShutdownError
+    # ------------------------------------------------------------------
+
+    def test_returns_none_when_command_raises_shutdown_error(
+        self, qapp: QApplication
+    ) -> None:
+        """Must return ``None`` when ``command()`` raises ``mpv.ShutdownError``."""
+        mock_player = MagicMock()
+        mock_player.command.side_effect = mpv.ShutdownError()
+
+        widget = _make_widget(qapp)
+        widget._player = mock_player
+
+        result = widget.get_current_frame_pixmap()
+
+        assert result is None
+
+    # ------------------------------------------------------------------
+    # State 6 — unsupported pixel format
+    # ------------------------------------------------------------------
+
+    def test_returns_none_when_format_is_not_bgr0(self, qapp: QApplication) -> None:
+        """Must return ``None`` when the returned dict has a non-bgr0 format."""
+        width = 8
+        height = 6
+        mock_player = MagicMock()
+        mock_player.command.return_value = {
+            "w": width,
+            "h": height,
+            "stride": width * 3,
+            "format": "rgb24",  # not bgr0
+            "data": bytes(width * height * 3),
+        }
 
         widget = _make_widget(qapp)
         widget._player = mock_player
@@ -276,7 +332,7 @@ class TestGetCurrentFramePixmap:
     def test_returns_none_when_data_key_missing(self, qapp: QApplication) -> None:
         """Must return ``None`` when ``data`` key is absent from the raw dict."""
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = {"w": 16, "h": 9}
+        mock_player.command.return_value = {"w": 16, "h": 9, "format": "bgr0"}
 
         widget = _make_widget(qapp)
         widget._player = mock_player
@@ -288,9 +344,10 @@ class TestGetCurrentFramePixmap:
     def test_returns_none_when_w_key_missing(self, qapp: QApplication) -> None:
         """Must return ``None`` when ``w`` key is absent from the raw dict."""
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = {
-            "data": bytes(16 * 9 * 3),
+        mock_player.command.return_value = {
+            "data": bytes(16 * 9 * 4),
             "h": 9,
+            "format": "bgr0",
         }
 
         widget = _make_widget(qapp)
@@ -303,9 +360,10 @@ class TestGetCurrentFramePixmap:
     def test_returns_none_when_h_key_missing(self, qapp: QApplication) -> None:
         """Must return ``None`` when ``h`` key is absent from the raw dict."""
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = {
-            "data": bytes(16 * 9 * 3),
+        mock_player.command.return_value = {
+            "data": bytes(16 * 9 * 4),
             "w": 16,
+            "format": "bgr0",
         }
 
         widget = _make_widget(qapp)
@@ -315,27 +373,22 @@ class TestGetCurrentFramePixmap:
 
         assert result is None
 
-    def test_screenshot_raw_called_exactly_once_per_invocation(
+    def test_command_called_exactly_once_per_invocation(
         self, qapp: QApplication
     ) -> None:
-        """``screenshot_raw`` must be called exactly once per method call."""
+        """``command("screenshot-raw")`` must be called exactly once per method call."""
         width = 8
         height = 6
-        raw_bytes = bytes(width * height * 3)
 
         mock_player = MagicMock()
-        mock_player.screenshot_raw.return_value = {
-            "data": raw_bytes,
-            "w": width,
-            "h": height,
-        }
+        mock_player.command.return_value = _bgr0_dict(width, height)
 
         widget = _make_widget(qapp)
         widget._player = mock_player
 
         widget.get_current_frame_pixmap()
 
-        mock_player.screenshot_raw.assert_called_once()
+        mock_player.command.assert_called_once_with("screenshot-raw")
 
 
 class PlayerDemoWindow(QMainWindow):
