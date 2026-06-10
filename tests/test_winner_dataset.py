@@ -21,7 +21,9 @@ video files required) so the suite runs on any CI machine.
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 # Ensure project root is importable
@@ -33,7 +35,11 @@ torch = pytest.importorskip("torch")
 
 from ml.config import WinnerModelConfig  # noqa: E402
 from ml.examples import RallyExample, RallyExampleIndex  # noqa: E402
-from ml.winner_dataset import WinnerDataset, _RallyRecord  # noqa: E402
+from ml.winner_dataset import (  # noqa: E402
+    WinnerDataset,
+    _RallyRecord,
+    _horizontal_flip_frames,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -516,3 +522,214 @@ class TestFromRallyExamplesInternalState:
         json_ends = sorted(r.end_seconds for r in json_ds._records)
         ex_ends = sorted(r.end_seconds for r in ex_ds._records)
         assert json_ends == pytest.approx(ex_ends)
+
+
+class TestGetItemAugmentationSemantics:
+    """Regression tests for __getitem__ augmentation label semantics."""
+
+    def _make_dataset(
+        self,
+        *,
+        winning_team: int = 1,
+        augment: bool = True,
+    ) -> WinnerDataset:
+        ds = WinnerDataset.__new__(WinnerDataset)
+        ds._config = WinnerModelConfig()
+        ds._split = "train"
+        ds._do_augment = augment
+        ds._records = [
+            _RallyRecord(
+                video_path=Path("/fake/video.mp4"),
+                end_seconds=12.5,
+                corners=list(_CORNERS_TUPLE),
+                winning_team=winning_team,
+            )
+        ]
+        return ds
+
+    @staticmethod
+    def _asymmetric_frames() -> np.ndarray:
+        frames = np.zeros((2, 4, 6, 3), dtype=np.uint8)
+        frames[:, :, :2, 0] = 255
+        frames[:, :, 4:, 1] = 128
+        frames[:, 1:3, 2:4, 2] = 64
+        return frames
+
+    def test_horizontal_flip_mirrors_pixels_without_swapping_label(self) -> None:
+        """Horizontal mirroring must not change the winning-team label.
+
+        Court left/right mirroring preserves which side of the net won, so only
+        pixel orientation should change.
+
+        The mock returns a 2-frame array (arr_len=2 <= T=20 for default config),
+        so __getitem__ takes the short-video path and random.randint is not
+        invoked — the whole array is used as-is before flipping.
+        """
+        ds = self._make_dataset(winning_team=1, augment=True)
+        frames = self._asymmetric_frames()
+        expected_tensor = torch.from_numpy(_horizontal_flip_frames(frames)).permute(0, 3, 1, 2).float().div(255.0)
+
+        with (
+            patch("ml.winner_dataset._fetch_clip_tensor", return_value=frames),
+            patch("ml.winner_dataset._apply_color_jitter", side_effect=lambda clip, **_: clip),
+            patch("ml.winner_dataset.random.randint", return_value=0),
+            patch("ml.winner_dataset.random.random", return_value=0.0),
+        ):
+            clip_tensor, winning_team = ds[0]
+
+        assert winning_team == 1
+        assert torch.equal(clip_tensor, expected_tensor)
+
+    def test_no_flip_leaves_pixels_and_label_unchanged(self) -> None:
+        """When the flip branch is not taken, __getitem__ must preserve both.
+
+        The mock returns a 2-frame array (arr_len=2 <= T=20 for default config),
+        so __getitem__ takes the short-video path and random.randint is not
+        invoked — the whole array is used as-is.
+        """
+        ds = self._make_dataset(winning_team=0, augment=True)
+        frames = self._asymmetric_frames()
+        expected_tensor = torch.from_numpy(frames).permute(0, 3, 1, 2).float().div(255.0)
+
+        with (
+            patch("ml.winner_dataset._fetch_clip_tensor", return_value=frames),
+            patch("ml.winner_dataset._apply_color_jitter", side_effect=lambda clip, **_: clip),
+            patch("ml.winner_dataset.random.randint", return_value=0),
+            patch("ml.winner_dataset.random.random", return_value=0.9),
+        ):
+            clip_tensor, winning_team = ds[0]
+
+        assert winning_team == 0
+        assert torch.equal(clip_tensor, expected_tensor)
+
+
+class TestGetItemTemporalJitter:
+    """Tests for the frame-index temporal jitter and cache-stable extraction."""
+
+    # Small config: fps_out=2, clip_duration_s=1.0
+    # → T = round(1.0 * 2) = 2, J = max(1, round(0.2 * 2)) = 1
+    # → extended array: T + 2*J = 4 frames; nominal clip at [1:3]
+    _SMALL_CONFIG = WinnerModelConfig(fps_out=2, clip_duration_s=1.0, device="cpu")
+
+    def _make_augmenting_dataset(self, winning_team: int = 1) -> WinnerDataset:
+        ds = WinnerDataset.__new__(WinnerDataset)
+        ds._config = self._SMALL_CONFIG
+        ds._split = "train"
+        ds._do_augment = True
+        ds._records = [
+            _RallyRecord(
+                video_path=Path("/fake/video.mp4"),
+                end_seconds=12.5,
+                corners=list(_CORNERS_TUPLE),
+                winning_team=winning_team,
+            )
+        ]
+        return ds
+
+    def test_extract_clip_called_with_stable_cache_key(self) -> None:
+        """Augmented __getitem__ calls extract_clip with identical (start_s, end_s) every time.
+
+        With fps_out=2, clip_duration_s=1.0, J=1:
+          pad_s   = 1/2 = 0.5
+          start_s = max(0, 12.5 - 1.0 - 0.5) = 11.0
+          end_s   = 12.5 + 0.5               = 13.0
+
+        These are fully deterministic regardless of the randint offset used for
+        the frame-index jitter, so the disk-cache key is stable.
+        """
+        ds = self._make_augmenting_dataset()
+        recorded_calls: list[tuple[float, float]] = []
+
+        def fake_extract(path, start_s, end_s, fps, size):
+            recorded_calls.append((start_s, end_s))
+            # Return a 4-frame (T+2J) dummy array that passes the slicing path.
+            return np.zeros((4, 128, 256, 3), dtype=np.uint8)
+
+        with (
+            patch("ml.winner_dataset.extract_clip", side_effect=fake_extract),
+            patch("ml.winner_dataset.get_video_frame_size", return_value=(256, 128)),
+            patch("ml.winner_dataset.compute_homography", return_value=np.eye(3)),
+            patch("ml.winner_dataset.warp_clip_to_canonical", side_effect=lambda f, h, s: f),
+            patch("ml.winner_dataset._apply_color_jitter", side_effect=lambda f, **_: f),
+            patch("ml.winner_dataset.random.random", return_value=0.9),
+        ):
+            for _ in range(5):
+                ds[0]
+
+        assert len(recorded_calls) == 5
+        first = recorded_calls[0]
+        for call_args in recorded_calls[1:]:
+            assert call_args == pytest.approx(first), (
+                f"Cache key drifted: {first!r} vs {call_args!r}"
+            )
+
+    def test_jitter_offset_produces_different_frame_slices(self) -> None:
+        """Different randint offsets (-J and +J) yield different frame windows.
+
+        With J=1:
+          offset = -1 → base_start=1, start=max(0,min(0,2))=0 → slice [0:2]
+          offset = +1 → base_start=1, start=max(0,min(2,2))=2 → slice [2:4]
+
+        The extended array is constructed so that [0:2] and [2:4] have
+        distinguishable pixel content.
+        """
+        ds = self._make_augmenting_dataset(winning_team=0)
+
+        # Mark the two possible windows with different R-channel values.
+        extended = np.zeros((4, 4, 6, 3), dtype=np.uint8)
+        extended[0:2, :, :, 0] = 50    # early window  — R = 50
+        extended[2:4, :, :, 0] = 200   # late window   — R = 200
+
+        common_patches = [
+            patch("ml.winner_dataset._fetch_clip_tensor", return_value=extended),
+            patch("ml.winner_dataset._apply_color_jitter", side_effect=lambda f, **_: f),
+            patch("ml.winner_dataset.random.random", return_value=0.9),  # no flip
+        ]
+
+        with (
+            patch("ml.winner_dataset._fetch_clip_tensor", return_value=extended),
+            patch("ml.winner_dataset._apply_color_jitter", side_effect=lambda f, **_: f),
+            patch("ml.winner_dataset.random.random", return_value=0.9),
+            patch("ml.winner_dataset.random.randint", return_value=-1),
+        ):
+            tensor_early, _ = ds[0]
+
+        with (
+            patch("ml.winner_dataset._fetch_clip_tensor", return_value=extended),
+            patch("ml.winner_dataset._apply_color_jitter", side_effect=lambda f, **_: f),
+            patch("ml.winner_dataset.random.random", return_value=0.9),
+            patch("ml.winner_dataset.random.randint", return_value=1),
+        ):
+            tensor_late, _ = ds[0]
+
+        assert not torch.equal(tensor_early, tensor_late), (
+            "Different randint offsets must produce different frame slices"
+        )
+
+    def test_eval_path_is_deterministic(self) -> None:
+        """No-augment (val) dataset produces the same clip tensor on every call."""
+        ds = WinnerDataset.__new__(WinnerDataset)
+        ds._config = self._SMALL_CONFIG
+        ds._split = "val"
+        ds._do_augment = False
+        ds._records = [
+            _RallyRecord(
+                video_path=Path("/fake/video.mp4"),
+                end_seconds=12.5,
+                corners=list(_CORNERS_TUPLE),
+                winning_team=1,
+            )
+        ]
+
+        # Extended array with content distinguishable across windows.
+        extended = np.zeros((4, 4, 6, 3), dtype=np.uint8)
+        extended[1:3, :, :, 0] = 100  # nominal window (offset=0) — R = 100
+
+        with patch("ml.winner_dataset._fetch_clip_tensor", return_value=extended):
+            t1, label1 = ds[0]
+            t2, label2 = ds[0]
+            t3, label3 = ds[0]
+
+        assert label1 == label2 == label3 == 1
+        assert torch.equal(t1, t2), "Eval path must be deterministic"
+        assert torch.equal(t1, t3), "Eval path must be deterministic"

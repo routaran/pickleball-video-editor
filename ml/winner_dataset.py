@@ -5,7 +5,7 @@ Handles:
 2. Clip extraction via ml.video_features (decord / torchvision, disk-cached)
 3. Per-frame court homography warp to canonical 256x128 view
 4. Video-wise 80/20 train/val split (no data leakage within a single video)
-5. Augmentation for the train split: horizontal flip + label swap, color jitter,
+5. Augmentation for the train split: horizontal/vertical flips, color jitter,
    temporal jitter
 
 Public API
@@ -30,6 +30,7 @@ from ml.config import WinnerModelConfig
 from ml.video_features import (
     compute_homography,
     extract_clip,
+    get_video_frame_size,
     warp_clip_to_canonical,
 )
 
@@ -48,6 +49,12 @@ if TYPE_CHECKING:
     from ml.examples import RallyExample
 
 logger = logging.getLogger(__name__)
+
+# Maximum temporal jitter expressed in seconds.  During training __getitem__
+# applies jitter as a frame-index offset into a fixed extended window rather
+# than by shifting the extraction timestamps, so the disk-cache key for
+# extract_clip is deterministic — exactly ONE .npy file per rally per run.
+_TEMPORAL_JITTER_S: float = 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +199,20 @@ def _horizontal_flip_frames(frames_hwc: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(np.flip(frames_hwc, axis=2))
 
 
+def _vertical_flip_frames(frames_hwc: np.ndarray) -> np.ndarray:
+    """Flip every frame in the clip vertically (top-bottom mirror).
+
+    Args:
+        frames_hwc: Shape (T, H, W, 3) uint8.
+
+    Returns:
+        Mirrored array with the same shape.
+    """
+    # np.flip on axis=1 (height) is zero-copy; ascontiguousarray makes it safe
+    # to pass to downstream code that expects C-contiguous memory.
+    return np.ascontiguousarray(np.flip(frames_hwc, axis=1))
+
+
 # ---------------------------------------------------------------------------
 # Core per-sample fetch
 # ---------------------------------------------------------------------------
@@ -199,42 +220,62 @@ def _horizontal_flip_frames(frames_hwc: np.ndarray) -> np.ndarray:
 def _fetch_clip_tensor(
     record: _RallyRecord,
     config: WinnerModelConfig,
-    temporal_jitter_s: float = 0.0,
 ) -> np.ndarray:
-    """Extract, warp, and return one clip as (T, H, W, 3) uint8.
+    """Extract, warp, and return one EXTENDED clip as (T_ext, H, W, 3) uint8.
 
-    The clip window is ``[end - duration + jitter, end + jitter]`` clamped
-    to ``[0, video_end]``.  The warp uses the four corners stored in *record*
-    to produce a perspective-corrected canonical view.
+    Extracts a FIXED extended window per rally so that ``extract_clip``'s disk
+    cache yields exactly ONE cache entry per rally, regardless of whether
+    augmentation is active.  Temporal jitter is applied by the caller
+    (``__getitem__``) as a frame-index offset into this returned array rather
+    than by shifting the extraction window — keeping the ``hash_clip_key`` used
+    by ``extract_clip`` stable across all augmented calls for a given rally.
+
+    Extended window definition::
+
+        J        = max(1, round(_TEMPORAL_JITTER_S * config.fps_out))
+        pad_s    = J / config.fps_out
+        start_s  = max(0, end_seconds - effective_clip_duration - pad_s)
+        end_s    = end_seconds + pad_s
+
+    The returned array nominally contains ``T + 2*J`` frames, where
+    ``T = round(effective_clip_duration * fps_out)``.  When the rally is near
+    the start of the video, video-start clamping may shorten the array; the
+    caller handles this gracefully via the short-video fallback in
+    ``__getitem__``.
+
+    Previously cached non-extended clips (produced by the previous
+    random-jitter-at-extraction approach) become orphaned cache entries; they
+    are harmless and will be evicted naturally if/when the cache is pruned.
 
     Args:
-        record: Rally metadata including video path, timestamps, corners.
+        record: Rally metadata including video path, timestamps, and corners.
         config: WinnerModelConfig specifying fps_out, clip_duration_s, etc.
-        temporal_jitter_s: Shift (seconds) to apply to the clip start.
-                           Positive shifts the window later; negative earlier.
 
     Returns:
-        Numpy array of shape (T, H_canon, W_canon, 3), dtype uint8.
+        Numpy array of shape (T_ext, H_canon, W_canon, 3), dtype uint8.
+        T_ext equals T + 2*J in the unclamped case, potentially shorter when
+        the rally falls near the start of the video.
     """
     canonical_size = (config.canonical_width, config.canonical_height)
+    effective_duration = config.effective_clip_duration_s
+    J = max(1, round(_TEMPORAL_JITTER_S * config.fps_out))
+    pad_s = J / config.fps_out
 
-    raw_start = record.end_seconds - config.clip_duration_s + temporal_jitter_s
-    start_s = max(0.0, raw_start)
-    end_s = record.end_seconds + temporal_jitter_s
-    # Ensure end_s is always after start_s (temporal jitter can shift both together)
-    end_s = max(end_s, start_s + 0.1)
+    start_s = max(0.0, record.end_seconds - effective_duration - pad_s)
+    end_s = record.end_seconds + pad_s
+
+    extract_size = get_video_frame_size(record.video_path) or canonical_size
 
     frames = extract_clip(
         record.video_path,
         start_s,
         end_s,
         config.fps_out,
-        canonical_size,
+        extract_size,
     )
-
     homography = compute_homography(record.corners, canonical_size)
     warped = warp_clip_to_canonical(frames, homography, canonical_size)
-    return warped  # (T, H_canon, W_canon, 3) uint8
+    return warped  # (T_ext, H_canon, W_canon, 3) uint8
 
 
 def _to_float_tensor(frames_hwc: np.ndarray) -> torch.Tensor:
@@ -278,7 +319,7 @@ class WinnerDataset(Dataset):
     _JITTER_BRIGHTNESS: float = 0.2
     _JITTER_CONTRAST: float = 0.2
     _JITTER_SATURATION: float = 0.2
-    _TEMPORAL_JITTER_S: float = 0.2
+    # Temporal jitter magnitude is defined at module level as _TEMPORAL_JITTER_S
 
     def __init__(
         self,
@@ -406,8 +447,58 @@ class WinnerDataset(Dataset):
         )
 
     # ------------------------------------------------------------------
-    # Alternate constructor: build from pre-parsed RallyExample records
+    # Alternate constructors: build from pre-parsed RallyExample records
     # ------------------------------------------------------------------
+
+    @classmethod
+    def _from_rally_examples_no_split(
+        cls,
+        records: "list[RallyExample]",
+        config: "WinnerModelConfig",
+        split: str = "train",
+        augment: bool = True,
+    ) -> "WinnerDataset":
+        """Build a :class:`WinnerDataset` from an explicit RallyExample list.
+
+        Unlike :meth:`from_rally_examples`, this constructor does not re-run the
+        video-wise split or apply RallyExample-level filtering. The provided
+        records are treated as the exact evaluation/training set.
+
+        Args:
+            records: RallyExample instances to include.
+            config: WinnerModelConfig — fps_out, clip_duration_s, etc.
+            split: ``"train"`` or ``"val"``.
+            augment: Whether to apply data augmentation (only for train split).
+
+        Returns:
+            A WinnerDataset exposing ``records`` directly.
+        """
+        if split not in ("train", "val"):
+            raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+
+        # Create a bare instance, bypassing __init__.
+        instance = cls.__new__(cls)
+        instance._config = config
+        instance._split = split
+        instance._do_augment = augment and split == "train"
+
+        instance._records = [
+            _RallyRecord(
+                video_path=Path(ex.video_path),
+                end_seconds=float(ex.raw_end),
+                corners=list(ex.court_corners),
+                winning_team=int(ex.winning_team),
+            )
+            for ex in records
+        ]
+
+        if not instance._records:
+            logger.info(
+                "WinnerDataset.from_rally_examples_no_split: no records provided; "
+                "returning empty dataset."
+            )
+
+        return instance
 
     @classmethod
     def from_rally_examples(
@@ -563,9 +654,19 @@ class WinnerDataset(Dataset):
         """Return a single (clip_tensor, winning_team) pair.
 
         Augmentation (training split only when ``augment=True``):
-        - With 50% probability: horizontal flip all frames and swap label.
+        - 50% chance to apply a flip augmentation, split evenly between
+          horizontal (label preserved) and vertical (label swapped).
         - Color jitter (brightness, contrast, saturation ±0.2).
-        - Temporal jitter: clip start shifted by U(-0.2, +0.2) seconds.
+        - Temporal jitter: a frame-index offset of ``random.randint(-J, +J)``
+          is applied to the base slice of the pre-cached extended clip, where
+          ``J = max(1, round(_TEMPORAL_JITTER_S * fps_out))``.
+
+        The temporal jitter is deliberately implemented as a frame-index offset
+        rather than a floating-point time shift.  ``_fetch_clip_tensor`` always
+        extracts the same deterministic extended window (one per rally), so
+        ``extract_clip``'s ``hash_clip_key`` is stable across all augmented
+        calls — producing exactly one .npy cache entry per rally rather than
+        one per augmented call.
 
         Args:
             idx: Index into this split's rally list.
@@ -578,21 +679,45 @@ class WinnerDataset(Dataset):
         record = self._records[idx]
         winning_team = record.winning_team
 
-        # Temporal jitter: applied at extraction time (shifts the clip window)
-        temporal_jitter_s = 0.0
-        if self._do_augment:
-            temporal_jitter_s = random.uniform(
-                -self._TEMPORAL_JITTER_S,
-                +self._TEMPORAL_JITTER_S,
-            )
+        # _fetch_clip_tensor returns a FIXED extended window — cache-stable.
+        frames_ext = _fetch_clip_tensor(record, self._config)
+        # frames_ext: (T_ext, H, W, 3) uint8
 
-        frames = _fetch_clip_tensor(record, self._config, temporal_jitter_s)
-        # frames: (T, H, W, 3) uint8
+        # Slice a T-frame window from the extended array.
+        T = round(self._config.effective_clip_duration_s * self._config.fps_out)
+        J = max(1, round(_TEMPORAL_JITTER_S * self._config.fps_out))
+        arr_len = len(frames_ext)
+
+        if arr_len <= T:
+            # Short video near the start of the file — return all frames as-is.
+            # This preserves existing behavior for clips shorter than T frames.
+            frames = frames_ext
+        else:
+            # Nominal clip ends J frames before the array end.
+            # base_start is the start index of the offset=0 (centered) slice.
+            # Clamped to 0 in case video-start clamping shortened the array.
+            base_start = max(0, arr_len - J - T)
+
+            if self._do_augment:
+                offset_frames = random.randint(-J, J)
+                start = base_start + offset_frames
+                # Shift inward rather than shrinking: preserve slice length = T.
+                start = max(0, min(start, arr_len - T))
+            else:
+                start = base_start
+
+            frames = frames_ext[start : start + T]
 
         if self._do_augment:
-            # Horizontal flip (50% probability) + swap label
-            if random.random() < 0.5:
+            # Flip branch: 50% overall (horizontal or vertical) and
+            # deterministic label semantics:
+            # - Horizontal mirror: preserves label
+            # - Vertical mirror: swaps label
+            flip_random = random.random()
+            if flip_random < 0.25:
                 frames = _horizontal_flip_frames(frames)
+            elif flip_random < 0.5:
+                frames = _vertical_flip_frames(frames)
                 winning_team = 1 - winning_team
 
             # Color jitter (applied after potential flip — order does not matter)
