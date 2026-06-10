@@ -24,6 +24,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from ml.config import PathConfig, WinnerModelConfig
@@ -196,6 +197,106 @@ def _compute_class_weights(dataset: WinnerDataset) -> torch.Tensor:
     return torch.tensor([w0, w1], dtype=torch.float32)
 
 
+def _print_batch_sanity(clips: torch.Tensor, labels: torch.Tensor) -> None:
+    """Print concise sanity stats for a sampled training batch."""
+    label_counts = torch.bincount(labels.to(torch.int64), minlength=2)
+    batch_n = int(label_counts.sum())
+    n_team0 = int(label_counts[0].item())
+    n_team1 = int(label_counts[1].item())
+    p0 = n_team0 / batch_n if batch_n else 0.0
+    p1 = n_team1 / batch_n if batch_n else 0.0
+
+    print(
+        f"       Batch sanity: intensity(min/mean/max)="
+        f"{clips.min().item():.4f}/{clips.mean().item():.4f}/{clips.max().item():.4f} "
+        f"| labels: team0={n_team0} ({p0:.1%}) "
+        f"team1={n_team1} ({p1:.1%})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Temperature scaling helpers
+# ---------------------------------------------------------------------------
+
+
+def fit_temperature(logits: torch.Tensor, labels: torch.Tensor) -> float:
+    """Fit a scalar temperature T on held-out logits via cross-entropy minimisation.
+
+    Optimises ``log_T`` with LBFGS (50 iterations) so the procedure is fast and
+    deterministic.  The resulting ``T = exp(log_T)`` is clamped to ``[0.05, 20]``
+    to prevent degenerate solutions.
+
+    A well-calibrated model returns T ≈ 1.  An overconfident model (softmax
+    probabilities too extreme) returns T > 1.  An underconfident model returns
+    T < 1.
+
+    Args:
+        logits: Raw (uncalibrated) model logits, shape ``(N, C)``.
+        labels: Ground-truth integer class labels, shape ``(N,)``.
+
+    Returns:
+        Fitted temperature scalar as a Python float.  Returns ``1.0`` for empty
+        inputs.
+    """
+    if logits.numel() == 0 or labels.numel() == 0:
+        return 1.0
+
+    logits = logits.float().detach()
+    labels = labels.long().detach()
+
+    log_t = torch.zeros(1, requires_grad=True)
+    optimizer = torch.optim.LBFGS([log_t], lr=0.1, max_iter=50)
+
+    def _closure() -> torch.Tensor:
+        optimizer.zero_grad()
+        t = log_t.exp().clamp(0.05, 20.0)
+        loss = F.cross_entropy(logits / t, labels)
+        loss.backward()
+        return loss
+
+    optimizer.step(_closure)
+
+    fitted_t = float(log_t.exp().clamp(0.05, 20.0).item())
+    return fitted_t
+
+
+@torch.no_grad()
+def _collect_val_logits_labels(
+    model: WinnerClassifier,
+    loader: DataLoader,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Collect raw logits and ground-truth labels from a validation DataLoader.
+
+    Unlike :func:`_validate`, this function returns the raw logits so that
+    temperature scaling can be fitted on them.
+
+    Args:
+        model: WinnerClassifier set to eval mode by the caller.
+        loader: DataLoader for the validation split.
+        device: Target compute device.
+
+    Returns:
+        Tuple of ``(logits, labels)`` as CPU tensors concatenated across all
+        batches.  Returns ``(empty (0,2), empty (0,))`` when the loader is
+        empty.
+    """
+    model.eval()
+    all_logits: list[torch.Tensor] = []
+    all_labels: list[torch.Tensor] = []
+
+    for clips, labels in loader:
+        clips = clips.to(device)
+        raw_logits = model(clips)  # (B, 2)
+        all_logits.append(raw_logits.cpu())
+        all_labels.append(labels.cpu())
+
+    if not all_logits:
+        return torch.empty(0, 2), torch.empty(0, dtype=torch.long)
+
+    return torch.cat(all_logits, dim=0), torch.cat(all_labels, dim=0)
+
+
 # ---------------------------------------------------------------------------
 # Per-epoch passes
 # ---------------------------------------------------------------------------
@@ -207,6 +308,7 @@ def _train_one_epoch(
     criterion: nn.CrossEntropyLoss,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    log_batch_sanity: bool = False,
 ) -> float:
     """Run one full training pass over *loader*.
 
@@ -216,6 +318,7 @@ def _train_one_epoch(
         criterion: CrossEntropyLoss (with class weights already embedded).
         optimizer: Adam with two parameter groups.
         device: Target compute device.
+        log_batch_sanity: If True, print statistics for the first batch only.
 
     Returns:
         Average cross-entropy loss over all batches in the epoch.
@@ -224,9 +327,12 @@ def _train_one_epoch(
     total_loss = 0.0
     n_samples = 0
 
-    for clips, labels in loader:
+    for batch_idx, (clips, labels) in enumerate(loader):
         clips = clips.to(device)
         labels = labels.to(device)
+
+        if log_batch_sanity and batch_idx == 0:
+            _print_batch_sanity(clips, labels)
 
         optimizer.zero_grad()
         logits = model(clips)  # (B, 2)
@@ -431,7 +537,14 @@ def train_winner(
     print("-" * len(header))
 
     for epoch in range(1, epochs + 1):
-        train_loss = _train_one_epoch(model, train_loader, loss_fn, optimizer, device)
+        train_loss = _train_one_epoch(
+            model,
+            train_loader,
+            loss_fn,
+            optimizer,
+            device,
+            log_batch_sanity=(epoch == 1),
+        )
         val_acc, precision, recall, conf_matrix = _validate(model, val_loader, device)
 
         print(
@@ -485,6 +598,59 @@ def train_winner(
     print("\n=== Per-video validation (final epoch) ===")
     per_video = _per_video_validate(model, val_dataset, device, batch_size)
     _print_per_video_report(per_video)
+
+    # ---- Temperature scaling ----
+    # Reload the best checkpoint weights, collect val logits, and fit a scalar
+    # temperature T that minimises cross-entropy of logits/T on the val set.
+    # The fitted T is stored back in the checkpoint so predict_winner can apply
+    # it at inference time for calibrated confidence values.
+    print("\n=== Temperature scaling ===")
+    if best_val_acc > -1.0 and checkpoint_path.exists():
+        best_ckpt: dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        model.load_state_dict(best_ckpt["model_state_dict"])
+        model.eval()
+
+        val_logits, val_labels = _collect_val_logits_labels(model, val_loader, device)
+
+        if val_logits.numel() > 0:
+            nll_before = float(F.cross_entropy(val_logits, val_labels).item())
+
+            temperature = fit_temperature(val_logits, val_labels)
+
+            nll_after = float(F.cross_entropy(val_logits / temperature, val_labels).item())
+            print(f"Fitted temperature : {temperature:.4f}")
+            print(f"Val NLL            : before={nll_before:.4f}  after={nll_after:.4f}")
+
+            # Optional ECE reporting when calibration module is available.
+            try:
+                from ml.evaluation.confidence import calibration_stats  # noqa: PLC0415
+
+                probs_before = torch.softmax(val_logits, dim=1)
+                preds_before = probs_before.argmax(dim=1)
+                confs_before = probs_before.max(dim=1).values.tolist()
+                correct_flags = (preds_before == val_labels).tolist()
+                cal_before = calibration_stats(confs_before, correct_flags)
+
+                probs_after = torch.softmax(val_logits / temperature, dim=1)
+                confs_after = probs_after.max(dim=1).values.tolist()
+                cal_after = calibration_stats(confs_after, correct_flags)
+
+                print(
+                    f"Val ECE            : before={cal_before.ece:.4f}"
+                    f"  after={cal_after.ece:.4f}"
+                )
+            except Exception:
+                pass  # calibration reporting is best-effort
+
+            best_ckpt["temperature"] = temperature
+            torch.save(best_ckpt, checkpoint_path)
+            print(f"Checkpoint re-saved with temperature={temperature:.4f}")
+        else:
+            print("Val set empty — storing temperature=1.0")
+            best_ckpt["temperature"] = 1.0
+            torch.save(best_ckpt, checkpoint_path)
+    else:
+        print("No best checkpoint available — skipping temperature scaling")
 
     print(f"Best checkpoint saved to: {checkpoint_path}")
     print(f"Best val accuracy: {best_val_acc:.1%}")

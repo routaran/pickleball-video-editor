@@ -5,7 +5,13 @@ warps to a canonical court view, and runs WinnerClassifier to produce a
 (winning_team, confidence) prediction.
 
 winning_team: 0 = server wins, 1 = receiver wins
-confidence:   softmax max probability (no temperature scaling in v1)
+confidence:   calibrated softmax max probability in [0.5, 1.0].
+              Confidences are temperature-scaled using the scalar ``T`` stored
+              in the checkpoint (fitted on the validation set during training).
+              When the checkpoint has no ``"temperature"`` key, T defaults to
+              1.0 (no-op).  The low-confidence flag threshold in
+              WinnerModelConfig.confidence_threshold is therefore applied to
+              calibrated probabilities.
 
 Public API
 ----------
@@ -22,8 +28,13 @@ import torch
 import torch.nn.functional as F
 
 from ml.config import WinnerModelConfig
-from ml.video_features import compute_homography, extract_clip, warp_clip_to_canonical
-from ml.winner_model import WinnerClassifier, load_winner_classifier
+from ml.video_features import (
+    compute_homography,
+    extract_clip,
+    get_video_frame_size,
+    warp_clip_to_canonical,
+)
+from ml.winner_model import WinnerClassifier
 
 
 __all__ = ["predict_winners"]
@@ -86,6 +97,7 @@ def predict_winners(
         resolved_device = "cpu"
 
     canonical_size: tuple[int, int] = (config.canonical_width, config.canonical_height)
+    extract_size = get_video_frame_size(video_path) or canonical_size
 
     # Compute homography once — it is the same for every rally in this video.
     homography = compute_homography(corners, canonical_size)
@@ -95,11 +107,30 @@ def predict_winners(
         config.canonical_height,
     )
 
-    # Load model to the resolved device.
-    # load_winner_classifier already handles the CUDA fallback internally,
-    # but we pass the already-resolved device to keep behavior consistent.
-    model: WinnerClassifier = load_winner_classifier(checkpoint_path, resolved_device)
+    # Load checkpoint once for both model weights and the calibration temperature.
+    # Using a single torch.load avoids reading the file twice.
     device = torch.device(resolved_device)
+    checkpoint: dict = torch.load(
+        checkpoint_path,
+        map_location=resolved_device,
+        weights_only=True,
+    )
+
+    # Temperature scalar fitted on the validation set during training.
+    # Defaults to 1.0 (no-op) for checkpoints produced before temperature
+    # scaling was introduced.
+    temperature: float = float(checkpoint.get("temperature", 1.0))
+    logger.debug(
+        "WinnerClassifier temperature=%.4f from checkpoint %s",
+        temperature,
+        checkpoint_path,
+    )
+
+    # Build and initialise the model from the loaded checkpoint dict.
+    model = WinnerClassifier()
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+    model.to(device)
     logger.debug("WinnerClassifier loaded from %s on %s", checkpoint_path, resolved_device)
 
     results: list[tuple[int, float]] = []
@@ -122,7 +153,7 @@ def predict_winners(
             clip_start,
             clip_end,
             config.fps_out,
-            canonical_size,
+            extract_size,
         )
 
         # Warp to canonical court view: (T, canonical_height, canonical_width, 3) uint8.
@@ -139,9 +170,12 @@ def predict_winners(
             .to(device)
         )  # shape: (1, T, 3, H, W)
 
-        # Forward pass: (1, 2) logits → softmax probabilities.
+        # Forward pass: (1, 2) logits → temperature-scaled softmax probabilities.
+        # Dividing by T before softmax gives calibrated confidence values when
+        # T > 1 (overconfident model) and leaves predictions unchanged (argmax
+        # is scale-invariant).
         logits = model(clip_tensor)                          # (1, 2)
-        probs = F.softmax(logits, dim=1)                    # (1, 2)
+        probs = F.softmax(logits / temperature, dim=1)      # (1, 2) calibrated
 
         confidence_tensor = probs.max(dim=1).values         # (1,)
         team_tensor = probs.argmax(dim=1)                   # (1,)

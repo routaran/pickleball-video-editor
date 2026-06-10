@@ -150,14 +150,14 @@ class TestPredictWinners:
     def test_empty_intervals_returns_empty_list(self, tmp_path: Path) -> None:
         """predict_winners with [] rally_intervals returns [] immediately.
 
-        The model must not be loaded (load_winner_classifier should not be
-        called) because there is nothing to predict.
+        torch.load must not be called because the early-return guard fires
+        before any checkpoint I/O.
         """
         # Use a real path so the checkpoint existence check doesn't fire.
         fake_checkpoint = tmp_path / "model.pt"
         fake_checkpoint.write_bytes(b"placeholder")
 
-        with patch("ml.predict_winner.load_winner_classifier") as mock_load:
+        with patch("ml.predict_winner.torch.load") as mock_load:
             result = predict_winners(
                 self._VIDEO_PATH,
                 self._CORNERS,
@@ -186,9 +186,11 @@ class TestPredictWinners:
         mock_model.return_value = torch.tensor([[2.0, 1.0]])
 
         rally_intervals = [(0.0, 3.0), (5.0, 8.0), (10.0, 13.0)]
+        fake_ckpt = {"model_state_dict": {}, "temperature": 1.0}
 
         with (
-            patch("ml.predict_winner.load_winner_classifier", return_value=mock_model),
+            patch("ml.predict_winner.torch.load", return_value=fake_ckpt),
+            patch("ml.predict_winner.WinnerClassifier", return_value=mock_model),
             patch("ml.predict_winner.extract_clip", return_value=fake_frames),
             patch("ml.predict_winner.warp_clip_to_canonical", return_value=fake_frames),
             patch("ml.predict_winner.compute_homography", return_value=None),
@@ -221,9 +223,11 @@ class TestPredictWinners:
         mock_model.return_value = torch.tensor([[2.0, 1.0]])
 
         rally_intervals = [(0.0, 3.0), (5.0, 8.0), (10.0, 13.0)]
+        fake_ckpt = {"model_state_dict": {}, "temperature": 1.0}
 
         with (
-            patch("ml.predict_winner.load_winner_classifier", return_value=mock_model),
+            patch("ml.predict_winner.torch.load", return_value=fake_ckpt),
+            patch("ml.predict_winner.WinnerClassifier", return_value=mock_model),
             patch("ml.predict_winner.extract_clip", return_value=fake_frames),
             patch("ml.predict_winner.warp_clip_to_canonical", return_value=fake_frames),
             patch("ml.predict_winner.compute_homography", return_value=None),
@@ -257,9 +261,11 @@ class TestPredictWinners:
         mock_model.return_value = torch.tensor([[2.0, 1.0]])
 
         rally_intervals = [(0.0, 3.0), (5.0, 8.0), (10.0, 13.0)]
+        fake_ckpt = {"model_state_dict": {}, "temperature": 1.0}
 
         with (
-            patch("ml.predict_winner.load_winner_classifier", return_value=mock_model),
+            patch("ml.predict_winner.torch.load", return_value=fake_ckpt),
+            patch("ml.predict_winner.WinnerClassifier", return_value=mock_model),
             patch("ml.predict_winner.extract_clip", return_value=fake_frames),
             patch("ml.predict_winner.warp_clip_to_canonical", return_value=fake_frames),
             patch("ml.predict_winner.compute_homography", return_value=None),
