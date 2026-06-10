@@ -228,7 +228,13 @@ fi
 # -----------------------------------------------------------------------------
 info "Installing Python dependencies..."
 
-PIP_INSTALL_CMD="$VENV_PIP install --upgrade"
+# Plain "install" is a fast no-op when requirements are already satisfied.
+# Use UPGRADE=yes ./configure ... to force upgrading all dependencies.
+if [ "${UPGRADE:-no}" = "yes" ]; then
+    PIP_INSTALL_CMD="$VENV_PIP install --upgrade"
+else
+    PIP_INSTALL_CMD="$VENV_PIP install"
+fi
 
 # Core dependencies
 CORE_DEPS=(

@@ -65,7 +65,7 @@ build: check-config
 		echo "Please run ./configure to set up the environment."; \
 		exit 1; \
 	fi
-	$(PYINSTALLER) --clean --noconfirm $(SPEC_FILE)
+	$(PYINSTALLER) --noconfirm $(SPEC_FILE)
 	@echo "✓ Build complete: $(DIST_DIR)/$(APP_NAME)"
 
 # -----------------------------------------------------------------------------
@@ -80,7 +80,7 @@ install: check-config build
 	@echo "==> Installing $(APP_NAME) to $(DESTDIR)$(PREFIX)..."
 	@# Install application bundle to share directory
 	install -d $(DESTDIR)$(DATADIR)/$(APP_NAME)
-	cp -r $(DIST_DIR)/$(APP_NAME)/* $(DESTDIR)$(DATADIR)/$(APP_NAME)/
+	rsync -a --delete $(DIST_DIR)/$(APP_NAME)/ $(DESTDIR)$(DATADIR)/$(APP_NAME)/
 	chmod 755 $(DESTDIR)$(DATADIR)/$(APP_NAME)/$(APP_NAME)
 	@# Create symlink in bin directory
 	install -d $(DESTDIR)$(BINDIR)
@@ -110,7 +110,7 @@ build-ml: check-config
 		echo "ERROR: PyTorch not installed. Run: ./configure --enable-ml"; \
 		exit 1; \
 	}
-	$(PYINSTALLER) --clean --noconfirm $(ML_SPEC_FILE)
+	$(PYINSTALLER) --noconfirm $(ML_SPEC_FILE)
 	@echo "==> Build complete: $(DIST_DIR)/$(ML_APP_NAME)"
 
 # -----------------------------------------------------------------------------
@@ -127,7 +127,7 @@ install-ml: check-config build-ml
 	@echo "==> Installing $(ML_APP_NAME) to $(DESTDIR)$(PREFIX)..."
 	@# Install application bundle to share directory
 	install -d $(DESTDIR)$(DATADIR)/$(ML_APP_NAME)
-	cp -r $(DIST_DIR)/$(ML_APP_NAME)/* $(DESTDIR)$(DATADIR)/$(ML_APP_NAME)/
+	rsync -a --delete $(DIST_DIR)/$(ML_APP_NAME)/ $(DESTDIR)$(DATADIR)/$(ML_APP_NAME)/
 	chmod 755 $(DESTDIR)$(DATADIR)/$(ML_APP_NAME)/$(ML_APP_NAME)
 	@# Create symlink in bin directory
 	install -d $(DESTDIR)$(BINDIR)
