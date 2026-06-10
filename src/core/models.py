@@ -89,6 +89,14 @@ class Rally:
         raw_end_seconds: Original user-marked end time before padding (seconds)
         raw_start_frame: Original user-marked start frame before padding
         raw_end_frame: Original user-marked end frame before padding
+        score_snapshot_at_start: Absolute score snapshot at rally start
+        predicted_team: Absolute team index (0 or 1) the winner model predicted
+            for this rally, or None for manually-marked rallies
+        prediction_confidence: Softmax confidence of predicted_team in [0.5, 1.0],
+            or None for manually-marked rallies
+        winner_overridden: True once the user has explicitly set/flipped the
+            winner; cascades must never recompute winner from predicted_team
+            for an overridden rally
 
     Note:
         winning_team (0 or 1) is NOT stored on the Rally; it is derived at
@@ -106,6 +114,10 @@ class Rally:
     raw_end_seconds: float | None = None
     raw_start_frame: int | None = None
     raw_end_frame: int | None = None
+    score_snapshot_at_start: ScoreSnapshot | None = None
+    predicted_team: int | None = None
+    prediction_confidence: float | None = None
+    winner_overridden: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for JSON export.
@@ -126,6 +138,16 @@ class Rally:
             d["raw_end_seconds"] = self.raw_end_seconds
             d["raw_start_frame"] = self.raw_start_frame
             d["raw_end_frame"] = self.raw_end_frame
+
+        if self.score_snapshot_at_start is not None:
+            d["score_snapshot_at_start"] = self.score_snapshot_at_start.to_dict()
+
+        if self.predicted_team is not None:
+            d["predicted_team"] = self.predicted_team
+            d["prediction_confidence"] = self.prediction_confidence
+        if self.winner_overridden:
+            d["winner_overridden"] = True
+
         return d
 
     @classmethod
@@ -149,6 +171,14 @@ class Rally:
             raw_end_seconds=data.get("raw_end_seconds"),
             raw_start_frame=data.get("raw_start_frame"),
             raw_end_frame=data.get("raw_end_frame"),
+            score_snapshot_at_start=(
+                ScoreSnapshot.from_dict(data["score_snapshot_at_start"])
+                if isinstance(data.get("score_snapshot_at_start"), dict)
+                else None
+            ),
+            predicted_team=data.get("predicted_team"),
+            prediction_confidence=data.get("prediction_confidence"),
+            winner_overridden=data.get("winner_overridden", False),
         )
 
 

@@ -5,12 +5,13 @@ Usage:
     python -m ml.tools.backfill_winner_labels --root ~/Videos/pickleball/
 
 For each .training.json that is missing winning_team on its scored rallies, the tool:
-1. Re-syncs ScoreState from the recorded score_at_start per rally (absorbs any
-   lost Edit Score / Force Side-Out interventions whose history was not persisted).
-2. Derives winning_team (0 = team1, 1 = team2) from the serving_team at the start
+1. Uses each rally's persisted rally-start score snapshot when present.
+2. Falls back to re-syncing ScoreState from score_at_start for legacy files
+   without snapshots.
+3. Derives winning_team (0 = team1, 1 = team2) from the serving_team at the start
    of each rally combined with the rally's winner field.
-3. Sets winning_team = null for post-game rallies (no score change, no team attribution).
-4. Writes the result back to the same file and bumps schema_version to "1.1".
+4. Sets winning_team = null for post-game rallies (no score change, no team attribution).
+5. Writes the result back to the same file and bumps schema_version to "1.1".
 
 Files where every non-post-game rally already carries winning_team are skipped.
 """
@@ -21,6 +22,7 @@ import json
 import sys
 from pathlib import Path
 
+from src.core.models import ScoreSnapshot
 from src.core.score_state import ScoreState
 
 
@@ -62,9 +64,8 @@ def _already_labeled(data: dict) -> bool:
 def _backfill_game(game_section: dict, rallies: list[dict]) -> str | None:
     """Compute and assign winning_team for each rally in a single game.
 
-    Re-syncs ScoreState from score_at_start on every rally, which absorbs the
-    effects of any Edit Score or Force Side-Out interventions whose action
-    history was not persisted in the JSON.
+    Prefers each rally's persisted score snapshot when present, with
+    ScoreState replay fallback for legacy files lacking snapshots.
 
     Post-game rallies (is_post_game == true) receive winning_team = null because
     they represent footage captured after the game ended, not scored play.
@@ -74,9 +75,9 @@ def _backfill_game(game_section: dict, rallies: list[dict]) -> str | None:
         rallies: The "rallies" list from the training JSON (mutated in place).
 
     Returns:
-        None on success, or an error message string if a score_at_start value
-        could not be parsed (in which case the rallies list is left partially
-        mutated — callers must discard it).
+        None on success, or an error message string if rally data is missing
+        required fields (in which case the rallies list is left partially mutated
+        — callers must discard it).
     """
     score = ScoreState(
         game_type=game_section["type"],
@@ -92,22 +93,35 @@ def _backfill_game(game_section: dict, rallies: list[dict]) -> str | None:
             rally["winning_team"] = None
             continue
 
-        score_at_start = rally.get("score_at_start", "")
-        if not score_at_start:
-            return f"rally index {rally.get('index')}: missing score_at_start"
+        snapshot_data = rally.get("score_snapshot_at_start")
+        if isinstance(snapshot_data, dict):
+            # Prefer persisted rally-start snapshot.
+            try:
+                snapshot = ScoreSnapshot.from_dict(snapshot_data)
+            except (KeyError, TypeError, ValueError) as exc:
+                return f"rally index {rally.get('index')}: invalid score_snapshot_at_start ({exc})"
 
-        # Validate the score string before calling set_score so we can produce
-        # a clear error message rather than letting ValueError propagate raw.
-        parts = score_at_start.split("-")
-        expected_parts = 2 if game_section["type"] == "singles" else 3
-        if len(parts) != expected_parts:
-            return (
-                f"rally index {rally.get('index')}: score_at_start "
-                f"{score_at_start!r} has wrong part count for {game_section['type']}"
-            )
+            # Re-sync state from snapshot.
+            score.restore_snapshot(snapshot)
+        else:
+            # Legacy fallback for files generated before rally-start snapshots were
+            # persisted.
+            score_at_start = rally.get("score_at_start", "")
+            if not score_at_start:
+                return f"rally index {rally.get('index')}: missing score_at_start"
 
-        # Re-sync state — absorbs interventions
-        score.set_score(score_at_start)
+            # Validate the score string before calling set_score so we can produce
+            # a clear error message rather than letting ValueError propagate raw.
+            parts = score_at_start.split("-")
+            expected_parts = 2 if game_section["type"] == "singles" else 3
+            if len(parts) != expected_parts:
+                return (
+                    f"rally index {rally.get('index')}: score_at_start "
+                    f"{score_at_start!r} has wrong part count for {game_section['type']}"
+                )
+
+            # Re-sync state.
+            score.set_score(score_at_start)
 
         serving = score.serving_team
         winner_field = rally.get("winner")

@@ -14,6 +14,8 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from src.output.subtitle_generator import SubtitleGenerator
 from src.output.kdenlive_generator import KdenliveGenerator
+from src.output.training_data_generator import TrainingDataGenerator
+from src.core.models import Rally, ScoreSnapshot
 from src.video.probe import VideoInfo
 
 
@@ -456,3 +458,59 @@ class TestGetSegmentOutFrame:
 
         # Last segment without game completion - no extension
         assert gen._get_segment_out_frame(segments[1], 1) == 900
+
+
+class TestTrainingDataGeneratorWinningTeam:
+    """winning_team generation prefers persisted rally-start snapshots."""
+
+    def test_snapshot_preserves_absolute_team_identity(self):
+        """A snapshot-backed rally exports winning_team from the absolute serving team."""
+        rally = Rally(
+            start_frame=0,
+            end_frame=60,
+            score_at_start="0-2-2",
+            winner="receiver",
+            score_snapshot_at_start=ScoreSnapshot(
+                score=(2, 0),
+                serving_team=1,
+                server_number=2,
+                first_server_player_index=0,
+            ),
+        )
+
+        data = TrainingDataGenerator.generate(
+            video_path="/tmp/test.mp4",
+            fps=60.0,
+            duration_seconds=10.0,
+            resolution=(1920, 1080),
+            game_type="doubles",
+            victory_rules="11",
+            team1_players=["Alice", "Bob"],
+            team2_players=["Carol", "Dave"],
+            rallies=[rally],
+        )
+
+        assert data["rallies"][0]["winning_team"] == 0
+
+    def test_missing_snapshot_falls_back_to_legacy_relative_score_behavior(self):
+        """Older Rally data without a snapshot still uses score_at_start replay."""
+        rally = Rally(
+            start_frame=0,
+            end_frame=60,
+            score_at_start="0-2-2",
+            winner="receiver",
+        )
+
+        data = TrainingDataGenerator.generate(
+            video_path="/tmp/test.mp4",
+            fps=60.0,
+            duration_seconds=10.0,
+            resolution=(1920, 1080),
+            game_type="doubles",
+            victory_rules="11",
+            team1_players=["Alice", "Bob"],
+            team2_players=["Carol", "Dave"],
+            rallies=[rally],
+        )
+
+        assert data["rallies"][0]["winning_team"] == 1

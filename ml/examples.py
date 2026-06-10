@@ -97,6 +97,17 @@ class RallyExample:
     schema_version: str
     generated_by: str
     is_post_game: bool
+    serving_team: int | None = None
+    """Absolute serving team index at rally start (0 or 1).
+
+    Populated from ``score_snapshot_at_start.serving_team`` in the rally dict
+    when that snapshot is present.  ``None`` for legacy files written before
+    the snapshot block was added to the schema.
+
+    Score strings like ``"5-3-2"`` are always perspective-relative
+    (serving_score-receiving_score-server_num), so this field is required to
+    convert ``score_parts`` into absolute team-indexed scores.
+    """
 
     # ------------------------------------------------------------------
     # Constructor
@@ -145,6 +156,13 @@ class RallyExample:
         is_post_game: bool = bool(rally_dict.get("is_post_game", False))
         rally_index: int = int(rally_dict.get("index", 0))
 
+        # -- serving_team from score snapshot --------------------------------
+        # score_snapshot_at_start is a dict with keys: score, serving_team,
+        # server_number, first_server_player_index.  It is only present in
+        # files written after the snapshot block was added to the schema.
+        snap = rally_dict.get("score_snapshot_at_start")
+        serving_team: int | None = snap.get("serving_team") if isinstance(snap, dict) else None
+
         return cls(
             source_json_path=source_json_path,
             video_path=video_path,
@@ -160,6 +178,7 @@ class RallyExample:
             schema_version=schema_version,
             generated_by=generated_by,
             is_post_game=is_post_game,
+            serving_team=serving_team,
         )
 
     @classmethod
@@ -255,7 +274,7 @@ def _parse_score(
     score_parts: tuple[int, ...] = tuple(parsed)
 
     if len(parsed) == 3:
-        # Doubles: (team1_score, team2_score, server_number)
+        # Doubles: (serving_score, receiving_score, server_number)
         server_num: int | None = parsed[2]
     elif len(parsed) == 2:
         # Singles: (server_score, receiver_score)

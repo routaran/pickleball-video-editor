@@ -5,8 +5,8 @@ for machine learning training. The JSON includes:
 - Video metadata (path, fps, duration, resolution, optional court corners)
 - Game metadata (type, teams, victory rules, completion)
 - Rally labels with both raw (unpadded) and padded timestamps
-- winning_team field (0 or 1) derived by re-syncing ScoreState from
-  score_at_start per rally, which absorbs any score interventions.
+- winning_team field (0 or 1) derived from each rally's recorded
+  rally-start snapshot when available, with ScoreState replay fallback.
 
 Raw timestamps represent the exact moments the user marked rally
 start/end events. Padded timestamps include editorial padding
@@ -74,11 +74,8 @@ class TrainingDataGenerator:
         Returns:
             Complete training data dictionary ready for JSON serialization
         """
-        # Build a ScoreState to re-sync serving_team from score_at_start per
-        # rally.  This absorbs any Edit Score / Force Side-Out interventions
-        # that happened during editing — score_at_start is always recorded
-        # before the rally result is applied, so it reflects ground truth.
-        # Only instantiated for scored game types; highlights skip this.
+        # Build a ScoreState used for re-syncing rallies that do not carry
+        # a rally-start snapshot.
         score_state: ScoreState | None = None
         if game_type in ("singles", "doubles"):
             score_state = ScoreState(
@@ -96,9 +93,15 @@ class TrainingDataGenerator:
             # Post-game segments and highlights have no meaningful winning_team.
             winning_team: int | None = None
             if score_state is not None and not rally.is_post_game:
-                # Re-sync state from the recorded score string so that any
-                # intervening score edits or force side-outs are absorbed.
-                score_state.set_score(rally.score_at_start)
+                start_snapshot = getattr(rally, "score_snapshot_at_start", None)
+                if start_snapshot is not None:
+                    # Prefer persisted rally-start snapshot when available.
+                    score_state.restore_snapshot(start_snapshot)
+                else:
+                    # Fallback to historical behavior for older Rally objects / JSON
+                    # exports that lacked rally-start snapshots.
+                    score_state.set_score(rally.score_at_start)
+
                 serving = score_state.serving_team
 
                 if rally.winner == "server":

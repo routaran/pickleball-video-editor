@@ -13,6 +13,7 @@ import copy
 import pytest
 
 from ml.tools.backfill_winner_labels import _already_labeled, _backfill_game
+from src.core.models import ScoreSnapshot
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +138,42 @@ class TestSimpleDoublesGame:
 # ---------------------------------------------------------------------------
 # Test 2: Intervention handling — re-sync works
 # ---------------------------------------------------------------------------
+
+
+class TestSnapshotPreferredOverRelativeScore:
+    """Persisted snapshots preserve absolute team identity for backfill labels."""
+
+    @pytest.fixture()
+    def game_section(self) -> dict:
+        return _make_game_section()
+
+    def test_snapshot_overrides_relative_score_string_team_identity(self, game_section):
+        """winning_team follows the snapshot, not the ambiguous relative score string."""
+        rallies = [
+            {
+                **_make_rally(0, "0-2-2", "receiver"),
+                "score_snapshot_at_start": ScoreSnapshot(
+                    score=(2, 0),
+                    serving_team=1,
+                    server_number=2,
+                    first_server_player_index=0,
+                ).to_dict(),
+            }
+        ]
+
+        error = _backfill_game(game_section, rallies)
+
+        assert error is None
+        assert rallies[0]["winning_team"] == 0
+
+    def test_legacy_fallback_without_snapshot_preserves_old_behavior(self, game_section):
+        """Older exports without snapshots still derive winning_team from score_at_start."""
+        rallies = [_make_rally(0, "0-2-2", "receiver")]
+
+        error = _backfill_game(game_section, rallies)
+
+        assert error is None
+        assert rallies[0]["winning_team"] == 1
 
 
 class TestInterventionReSync:
