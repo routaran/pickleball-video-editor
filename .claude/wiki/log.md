@@ -14,6 +14,17 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-06-10] ingest | stale pages
+
+- Pages checked: 11
+- Pages stale: 2
+- Recompiled: [`domains/video.md`, `architecture/tech-stack.md`]
+- Skipped (up-to-date): 9
+- Sources triggering staleness: `docs/TESTING_PLAYER.md` (commit `5d5b105`), `docs/TECH_STACK.md` (commit `b0c35e9`)
+- Status: complete
+
+---
+
 ## [2026-05-31] lint | full wiki
 
 - Checks run: 6
