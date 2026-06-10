@@ -8,6 +8,7 @@ Handles:
 5. Train/val splitting by video (no data leakage)
 """
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -55,6 +56,46 @@ def load_training_json(path: Path) -> dict[str, Any]:
             raise ValueError(f"Missing required key '{key}' in {path}")
 
     return data
+
+
+
+def _stable_hash(payload: Any) -> str:
+    """Return a deterministic hash for cache-key payloads.
+
+    Uses JSON-canonicalized text so changes in key order do not alter the hash.
+    """
+    payload_text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.md5(payload_text.encode("utf-8")).hexdigest()
+
+
+def _audio_config_cache_key(audio_config: AudioConfig) -> str:
+    """Cache key for artifacts derived from audio processing configuration."""
+    return _stable_hash(
+        {
+            "hop_length": audio_config.hop_length,
+            "hop_seconds": audio_config.hop_seconds,
+            "n_fft": audio_config.n_fft,
+            "n_mels": audio_config.n_mels,
+            "sample_rate": audio_config.sample_rate,
+            "window_seconds": audio_config.window_seconds,
+        }
+    )
+
+
+def _label_cache_key(training_data: dict[str, Any], audio_config: AudioConfig) -> str:
+    """Cache key for labels based on label-bearing training fields.
+
+    Includes rally timing content plus audio-rate dependent settings.
+    """
+    video_data = training_data.get("video", {})
+    return _stable_hash(
+        {
+            "fps": video_data.get("fps"),
+            "duration_seconds": video_data.get("duration_seconds"),
+            "sample_rate": audio_config.sample_rate,
+            "rallies": training_data.get("rallies", []),
+        }
+    )
 
 
 def extract_audio(video_path: str | Path, output_path: Path, sample_rate: int = 22050) -> Path:
@@ -262,31 +303,56 @@ def prepare_video(
         Tuple of (spectrogram, labels, training_data) or None if video missing
     """
     data = load_training_json(training_json_path)
+
+    if data.get("generated_by") == "auto_edit":
+        print(f"  SKIP: generated_by=auto_edit: {training_json_path}")
+        return None
+
     video_path = Path(data["video"]["path"])
 
     if not video_path.exists():
         print(f"  SKIP: video not found: {video_path}")
         return None
 
+    audio_cache_key = _audio_config_cache_key(audio_config)
+    labels_cache_key = _label_cache_key(data, audio_config)
+
     video_id = video_path.stem
-    wav_path = cache_dir / f"{video_id}.wav"
-    spec_path = cache_dir / f"{video_id}_mel.pt"
-    labels_path = cache_dir / f"{video_id}_labels.npy"
+    wav_path = cache_dir / f"{video_id}_{audio_cache_key}.wav"
+    spec_path = cache_dir / f"{video_id}_{audio_cache_key}_mel.pt"
+    labels_path = cache_dir / f"{video_id}_{labels_cache_key}_labels.npy"
 
-    # Extract audio
-    extract_audio(video_path, wav_path, audio_config.sample_rate)
-
-    # Compute or load cached spectrogram
+    spectrogram: torch.Tensor | None = None
     if spec_path.exists():
-        spectrogram = torch.load(spec_path, weights_only=True)
-    else:
+        try:
+            cached_spectrogram = torch.load(spec_path, weights_only=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"  MISS: invalid spectrogram cache for {video_id} ({exc})")
+            spectrogram = None
+        else:
+            if isinstance(cached_spectrogram, torch.Tensor):
+                spectrogram = cached_spectrogram
+            else:
+                print(f"  MISS: invalid spectrogram cache type for {video_id}")
+
+    labels: np.ndarray | None = None
+    if labels_path.exists():
+        try:
+            cached_labels = np.load(labels_path)
+        except (OSError, ValueError) as exc:
+            print(f"  MISS: invalid label cache for {video_id} ({exc})")
+        else:
+            if isinstance(cached_labels, np.ndarray):
+                labels = cached_labels
+            else:
+                print(f"  MISS: invalid label cache type for {video_id}")
+
+    if spectrogram is None:
+        extract_audio(video_path, wav_path, audio_config.sample_rate)
         spectrogram = compute_mel_spectrogram(wav_path, audio_config)
         torch.save(spectrogram, spec_path)
 
-    # Build or load cached labels
-    if labels_path.exists():
-        labels = np.load(labels_path)
-    else:
+    if labels is None:
         labels = build_labels_from_rallies(
             rallies=data["rallies"],
             fps=data["video"]["fps"],
@@ -295,6 +361,8 @@ def prepare_video(
         )
         np.save(labels_path, labels)
 
+    assert spectrogram is not None
+    assert labels is not None
     return spectrogram, labels, data
 
 
