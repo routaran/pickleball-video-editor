@@ -20,6 +20,7 @@ __all__ = [
     "ShortcutConfig",
     "SkipDurationConfig",
     "WindowSizeConfig",
+    "DisplayConfig",
     "VideoConfig",
     "EncoderProfile",
     "EncoderSettings",
@@ -48,7 +49,7 @@ class ShortcutConfig:
     server_wins: str = "S"
     receiver_wins: str = "R"
     undo: str = "U"
-    ravi_touch: str = "R"
+    ravi_touch: str = "J"
     partner_touch: str = "E"
 
     def validate(self) -> list[str]:
@@ -110,7 +111,7 @@ class ShortcutConfig:
             server_wins=data.get("server_wins", "S"),
             receiver_wins=data.get("receiver_wins", "R"),
             undo=data.get("undo", "U"),
-            ravi_touch=data.get("ravi_touch", "R"),
+            ravi_touch=data.get("ravi_touch", "J"),
             partner_touch=data.get("partner_touch", "E"),
         )
 
@@ -165,7 +166,7 @@ class WindowSizeConfig:
     """
 
     min_width: int = 800
-    min_height: int = 600
+    min_height: int = 540
     max_width: int = 0  # 0 = unlimited
     max_height: int = 0  # 0 = unlimited
 
@@ -181,7 +182,7 @@ class WindowSizeConfig:
         """
         return cls(
             min_width=data.get("min_width", 800),
-            min_height=data.get("min_height", 600),
+            min_height=data.get("min_height", 540),
             max_width=data.get("max_width", 0),
             max_height=data.get("max_height", 0),
         )
@@ -204,6 +205,83 @@ class VideoConfig:
         if renderer not in VALID_VIDEO_RENDERERS:
             renderer = "auto"
         return cls(renderer=renderer)
+
+
+@dataclass
+class DisplayConfig:
+    """Display and UI scaling configuration.
+
+    Persists user-chosen UI scale, window geometry, and last-used browse path
+    so the application can restore its visual state across sessions.
+
+    Attributes:
+        ui_scale: Qt scale factor. 0.0 = auto-detect; explicit values are
+            1.0 / 1.25 / 1.5 / 1.75 / 2.0.  Set via the Config dialog and
+            applied at next launch via QT_SCALE_FACTOR.
+        last_geometry: Base64-encoded QWidget.saveGeometry() blob for the
+            main window.  Empty string means no saved geometry.
+        review_splitter_v: Saved vertical splitter proportions for review
+            mode (list of int sizes from QSplitter.sizes()).
+        review_splitter_h: Saved horizontal splitter proportions for review
+            mode.
+        last_browse_dir: Last directory path used in file-open dialogs.
+            Empty string falls back to ~/Videos.
+    """
+
+    ui_scale: float = 0.0
+    last_geometry: str = ""
+    review_splitter_v: list[int] = field(default_factory=list)
+    review_splitter_h: list[int] = field(default_factory=list)
+    last_browse_dir: str = ""
+
+    def to_dict(self) -> dict[str, float | str | list[int]]:
+        """Serialize to dictionary for JSON export."""
+        return {
+            "ui_scale": self.ui_scale,
+            "last_geometry": self.last_geometry,
+            "review_splitter_v": self.review_splitter_v,
+            "review_splitter_h": self.review_splitter_h,
+            "last_browse_dir": self.last_browse_dir,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DisplayConfig":
+        """Deserialize from dictionary.
+
+        Missing or invalid fields fall back to defaults (LBYL style).
+        """
+        raw_scale = data.get("ui_scale", 0.0)
+        ui_scale = float(raw_scale) if isinstance(raw_scale, (int, float)) else 0.0
+
+        last_geometry = data.get("last_geometry", "")
+        if not isinstance(last_geometry, str):
+            last_geometry = ""
+
+        raw_v = data.get("review_splitter_v", [])
+        review_splitter_v: list[int] = (
+            [int(v) for v in raw_v if isinstance(v, (int, float))]
+            if isinstance(raw_v, list)
+            else []
+        )
+
+        raw_h = data.get("review_splitter_h", [])
+        review_splitter_h: list[int] = (
+            [int(v) for v in raw_h if isinstance(v, (int, float))]
+            if isinstance(raw_h, list)
+            else []
+        )
+
+        last_browse_dir = data.get("last_browse_dir", "")
+        if not isinstance(last_browse_dir, str):
+            last_browse_dir = ""
+
+        return cls(
+            ui_scale=ui_scale,
+            last_geometry=last_geometry,
+            review_splitter_v=review_splitter_v,
+            review_splitter_h=review_splitter_h,
+            last_browse_dir=last_browse_dir,
+        )
 
 
 @dataclass
@@ -354,6 +432,7 @@ class AppSettings:
     shortcuts: ShortcutConfig = field(default_factory=ShortcutConfig)
     skip_durations: SkipDurationConfig = field(default_factory=SkipDurationConfig)
     window_size: WindowSizeConfig = field(default_factory=WindowSizeConfig)
+    display: DisplayConfig = field(default_factory=DisplayConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
     encoder: EncoderSettings = field(default_factory=EncoderSettings.get_defaults)
 
@@ -384,6 +463,7 @@ class AppSettings:
             "shortcuts": self.shortcuts.to_dict(),
             "skip_durations": self.skip_durations.to_dict(),
             "window_size": self.window_size.to_dict(),
+            "display": self.display.to_dict(),
             "video": self.video.to_dict(),
             "encoder": self.encoder.to_dict(),
         }
@@ -437,12 +517,14 @@ class AppSettings:
         shortcuts_data = data.get("shortcuts", {})
         skip_durations_data = data.get("skip_durations", {})
         window_size_data = data.get("window_size", {})
+        display_data = data.get("display", {})
         video_data = data.get("video", {})
         encoder_data = data.get("encoder", {})
 
         shortcuts = ShortcutConfig.from_dict(shortcuts_data if isinstance(shortcuts_data, dict) else {})
         skip_durations = SkipDurationConfig.from_dict(skip_durations_data if isinstance(skip_durations_data, dict) else {})
         window_size = WindowSizeConfig.from_dict(window_size_data if isinstance(window_size_data, dict) else {})
+        display = DisplayConfig.from_dict(display_data if isinstance(display_data, dict) else {})
         video = VideoConfig.from_dict(video_data if isinstance(video_data, dict) else {})
         encoder = EncoderSettings.from_dict(encoder_data if isinstance(encoder_data, dict) else {})
 
@@ -450,6 +532,7 @@ class AppSettings:
             shortcuts=shortcuts,
             skip_durations=skip_durations,
             window_size=window_size,
+            display=display,
             video=video,
             encoder=encoder,
         )
@@ -460,6 +543,7 @@ class AppSettings:
             "shortcuts": self.shortcuts.to_dict(),
             "skip_durations": self.skip_durations.to_dict(),
             "window_size": self.window_size.to_dict(),
+            "display": self.display.to_dict(),
             "video": self.video.to_dict(),
             "encoder": self.encoder.to_dict(),
         }

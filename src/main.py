@@ -33,17 +33,83 @@ _libc = ctypes.CDLL("libc.so.6")
 _libc.setlocale.restype = ctypes.c_char_p
 _result = _libc.setlocale(1, b"C")  # LC_NUMERIC = 1 on Linux
 
+# Load AppSettings here (pure Python, no Qt dependency) so QT_SCALE_FACTOR
+# can be set before QApplication is constructed.  AppSettings uses only
+# stdlib (json, pathlib, dataclasses) — importing it does not touch Qt.
+from src.core.app_config import AppSettings
+
+_startup_settings = AppSettings.load()
+if _startup_settings.display.ui_scale > 0:
+    os.environ["QT_SCALE_FACTOR"] = str(_startup_settings.display.ui_scale)
+# PassThrough avoids Qt rounding the scale to the nearest int, which would
+# break fractional values like 1.25 or 1.5 on X11.
+os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
+
 import logging
 import sys
 
 from src import __version__
 from src.app import create_application
-from src.core.app_config import AppSettings
 from src.core.export_manager import ExportManager
 from src.ui.setup_dialog import SetupDialog
 from src.ui.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
+
+
+def restart_app() -> None:
+    """Restart the application process to apply environment-level changes.
+
+    Uses os.execv to replace the current process image so the new process
+    inherits the updated environment (e.g. QT_SCALE_FACTOR written just
+    before this call).  Does not return.
+    """
+    os.execv(sys.executable, [sys.executable, "-m", "src.main"] + sys.argv[1:])
+
+
+def _maybe_prompt_hidpi(settings: AppSettings) -> None:
+    """Prompt the user to enable 150% UI scale when a high-DPI display is found.
+
+    Only runs on the first launch when ui_scale is still 0.0 (auto).  If the
+    screen pixel height is >= 2000 *and* physical DPI exceeds 130, the user is
+    offered a one-click "apply 150% and restart" shortcut.  If they decline the
+    scale stays at 0 (no change, no restart).
+
+    Args:
+        settings: Current AppSettings instance.  ui_scale and save() are
+            mutated/called only when the user confirms.
+    """
+    from PyQt6.QtGui import QGuiApplication
+    from PyQt6.QtWidgets import QMessageBox
+
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return
+
+    dpi = screen.physicalDotsPerInch()
+    pixel_height = screen.size().height()
+
+    if pixel_height < 2000 or dpi <= 130:
+        return
+
+    reply = QMessageBox.question(
+        None,
+        "High-DPI Display Detected",
+        (
+            f"Your display appears to be high-DPI "
+            f"({pixel_height}px tall, {dpi:.0f} DPI).\n\n"
+            "Apply 150% UI scale for better readability?\n"
+            "The application will restart to apply the change."
+        ),
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+    )
+
+    if reply != QMessageBox.StandardButton.Yes:
+        return
+
+    settings.display.ui_scale = 1.5
+    settings.save()
+    restart_app()
 
 
 def main() -> int:
@@ -67,8 +133,13 @@ def main() -> int:
 
     logger.info("Pickleball Video Editor v%s", __version__)
 
-    # Load application settings
-    app_settings = AppSettings.load()
+    # Re-use settings loaded at module level to avoid a redundant disk read.
+    # _startup_settings was already used to set QT_SCALE_FACTOR before Qt init.
+    app_settings = _startup_settings
+
+    # First-run high-DPI detection: prompt once when no explicit scale is set.
+    if app_settings.display.ui_scale == 0.0:
+        _maybe_prompt_hidpi(app_settings)
 
     # Create application-level export manager (survives MainWindow lifecycle)
     export_manager = ExportManager()

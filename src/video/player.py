@@ -169,6 +169,7 @@ class VideoWidget(QWidget):
                     osd_level=1,
                     keep_open=True,
                     idle=True,
+                    keepaspect=True,
                     **kwargs,
                 )
                 self._player.observe_property("duration", self._on_duration_change)
