@@ -17,6 +17,19 @@ Dialog Dimensions:
 - Min width: 480px
 - Padding: 24px
 - Border radius: 12px (per UI_SPEC.md Section 6.1)
+
+Cancel lifecycle
+----------------
+Esc, the Cancel button, and programmatic reject() all converge on
+_request_cancel(), which sets the worker's threading.Event and updates the
+UI.  The dialog does NOT close until the worker acknowledges cancellation by
+emitting ``cancelled`` (or ``error`` with the cancel event set).  This prevents
+"QThread: Destroyed while thread is still running" aborts and eliminates the
+race window where a second run could start while the first is still writing
+output files.
+
+The worker's built-in QThread.finished signal is intentionally left alone.
+The result-carrying signal is named ``result_ready`` to avoid shadowing it.
 """
 
 import logging
@@ -24,6 +37,7 @@ import threading
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QCloseEvent, QKeyEvent
 from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -75,16 +89,23 @@ class AutoEditWorker(QThread):
     may have to wait for the current heavy stage to finish before the cancel
     takes effect.
 
+    Cooperative cancellation: ``cancel_check=self._cancel_event.is_set`` is
+    passed to ``auto_edit()``.  When auto_edit detects the flag it raises
+    ``AutoEditCancelled``; the worker treats that as a cancelled (not error)
+    outcome and emits ``cancelled``.
+
     Signals:
         phase_changed: Emitted with a human-readable stage description.
-        finished: Emitted with the AutoEditResult on successful completion.
+        result_ready: Emitted with the AutoEditResult on successful completion.
+            Named ``result_ready`` (not ``finished``) to avoid shadowing
+            QThread's built-in ``finished`` signal.
         error: Emitted with an error message string on failure.
         cancelled: Emitted when cooperative cancellation was requested and
             honoured before or after the pipeline call.
     """
 
     phase_changed = pyqtSignal(str)
-    finished = pyqtSignal(object)  # object because AutoEditResult is from ml/
+    result_ready = pyqtSignal(object)  # object because AutoEditResult is from ml/
     error = pyqtSignal(str)
     cancelled = pyqtSignal()
 
@@ -95,7 +116,7 @@ class AutoEditWorker(QThread):
         corners: list[tuple[int, int]],
         output_dir: Path,
         checkpoint_path: Path,
-        confidence_threshold: float = 0.75,
+        confidence_threshold: float | None = None,
         parent: QWidget | None = None,
     ) -> None:
         """Initialise the worker with all arguments required by auto_edit().
@@ -107,7 +128,8 @@ class AutoEditWorker(QThread):
             output_dir: Directory where all output files will be written.
             checkpoint_path: Path to the WinnerClassifier ``.pt`` checkpoint.
             confidence_threshold: Minimum softmax confidence to accept a winner
-                prediction without flagging it as low-confidence.
+                prediction without flagging it as low-confidence.  ``None``
+                delegates to ``WinnerModelConfig.confidence_threshold`` (0.75).
             parent: Parent QObject for memory management.
         """
         super().__init__(parent)
@@ -122,9 +144,10 @@ class AutoEditWorker(QThread):
     def cancel(self) -> None:
         """Request cooperative cancellation.
 
-        Sets an internal threading.Event that is checked between stages.
-        The pipeline call itself is not interrupted mid-stage; the worker
-        checks the flag at safe points.
+        Sets an internal threading.Event that is checked between stages and
+        passed to auto_edit() as ``cancel_check``.  The pipeline call itself
+        is not interrupted mid-stage; the worker checks the flag at safe
+        points and auto_edit() raises AutoEditCancelled at stage boundaries.
         """
         self._cancel_event.set()
 
@@ -132,12 +155,13 @@ class AutoEditWorker(QThread):
         """Execute the auto-edit pipeline in the background thread.
 
         Emits phase_changed before each stage description and checks the
-        cancel flag between stages. On success emits finished; on failure
-        emits error. If cancelled, emits cancelled instead.
+        cancel flag between stages. On success emits result_ready; on failure
+        emits error. If cancelled (either by the event being set or by
+        AutoEditCancelled being raised inside auto_edit), emits cancelled.
         """
         # Import lazily inside the thread to avoid import-time side effects
         # at module load and to keep Qt startup fast.
-        from ml.auto_edit import auto_edit  # noqa: PLC0415
+        from ml.auto_edit import AutoEditCancelled, auto_edit  # noqa: PLC0415
 
         # Stage 1 — notify then check cancel before the heavy work.
         self.phase_changed.emit("Detecting rallies from audio...")
@@ -155,8 +179,8 @@ class AutoEditWorker(QThread):
 
         try:
             # Run stages 1-4 synchronously inside auto_edit().
-            # We emit synthetic labels before calling so the dialog always
-            # shows something informative even for the long-running stages.
+            # Pass cancel_check so auto_edit() can raise AutoEditCancelled at
+            # stage boundaries before writing any output files.
             result = auto_edit(
                 video_path=self._video_path,
                 setup=self._setup,
@@ -164,7 +188,13 @@ class AutoEditWorker(QThread):
                 output_dir=self._output_dir,
                 checkpoint_path=self._checkpoint_path,
                 confidence_threshold=self._confidence_threshold,
+                cancel_check=self._cancel_event.is_set,
             )
+        except AutoEditCancelled:
+            # auto_edit() detected the cancel flag and aborted cleanly before
+            # writing output files — treat as user-initiated cancellation.
+            self.cancelled.emit()
+            return
         except Exception as exc:  # noqa: BLE001 — boundary: surface to UI
             if self._cancel_event.is_set():
                 # Cancel was requested while the pipeline was running;
@@ -182,7 +212,7 @@ class AutoEditWorker(QThread):
             return
 
         self.phase_changed.emit("Writing output...")
-        self.finished.emit(result)
+        self.result_ready.emit(result)
 
 
 class AutoEditProgressDialog(QDialog):
@@ -191,6 +221,15 @@ class AutoEditProgressDialog(QDialog):
     Manages an AutoEditWorker internally; callers only need to construct the
     dialog and call exec(). After exec() returns, call get_result() to obtain
     the AutoEditResult or None if the run was cancelled/failed.
+
+    Cancel lifecycle
+    ----------------
+    Esc, the Cancel button, reject(), and closeEvent all converge on
+    _request_cancel().  While the worker thread is running the dialog refuses
+    to close; it only calls super().reject() after the worker has emitted
+    ``cancelled`` or ``error``.  Before any accept() / super().reject() that
+    closes the dialog the worker thread is joined via _wait_for_worker() so
+    Qt never destroys the QThread while it is still running.
 
     Usage::
 
@@ -219,7 +258,7 @@ class AutoEditProgressDialog(QDialog):
         corners: list[tuple[int, int]],
         output_dir: Path,
         checkpoint_path: Path,
-        confidence_threshold: float = 0.75,
+        confidence_threshold: float | None = None,
         parent: QWidget | None = None,
     ) -> None:
         """Initialise the dialog and start the background worker immediately.
@@ -230,7 +269,8 @@ class AutoEditProgressDialog(QDialog):
             corners: Four (x, y) court corner coordinates.
             output_dir: Directory where output files will be written.
             checkpoint_path: Path to the WinnerClassifier checkpoint.
-            confidence_threshold: Minimum winner-prediction confidence.
+            confidence_threshold: Minimum winner-prediction confidence.  ``None``
+                delegates to ``WinnerModelConfig.confidence_threshold`` (0.75).
             parent: Parent widget for dialog positioning.
         """
         super().__init__(parent)
@@ -253,7 +293,7 @@ class AutoEditProgressDialog(QDialog):
             parent=self,
         )
         self._worker.phase_changed.connect(self._on_phase_changed)
-        self._worker.finished.connect(self._on_finished)
+        self._worker.result_ready.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
         self._worker.cancelled.connect(self._on_cancelled)
 
@@ -346,6 +386,86 @@ class AutoEditProgressDialog(QDialog):
         """)
 
     # ------------------------------------------------------------------
+    # Cancel helpers
+    # ------------------------------------------------------------------
+
+    def _request_cancel(self) -> None:
+        """Request cooperative cancellation and update UI.
+
+        Idempotent — safe to call multiple times (e.g. both Esc and the Cancel
+        button pressed in quick succession).  Only takes effect while the
+        worker is running; the dialog will close once the worker emits
+        ``cancelled`` or ``error``.
+        """
+        self._cancel_btn.setEnabled(False)
+        self._phase_label.setText("Cancelling...")
+        self._worker.cancel()
+
+    def _wait_for_worker(self) -> None:
+        """Block until the worker thread has fully stopped.
+
+        Called immediately before any accept() / super().reject() that would
+        close the dialog so the QThread object is never destroyed while still
+        running.  The worker emits its result signals from the very end of
+        run(), so by the time a slot fires run() has returned; a short wait
+        timeout is normally sufficient.  A logged warning is emitted if the
+        first timeout fires; we then wait longer rather than killing the thread.
+        """
+        if not self._worker.isRunning():
+            return
+        if not self._worker.wait(5000):
+            logger.warning(
+                "Worker thread did not finish within 5 s after result signal; "
+                "waiting an additional 30 s before closing the dialog."
+            )
+            self._worker.wait(30000)
+
+    # ------------------------------------------------------------------
+    # QDialog lifecycle overrides
+    # ------------------------------------------------------------------
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Intercept Esc to route it through the cancel path while running.
+
+        While the worker is active, Esc triggers _request_cancel() rather than
+        immediately closing the dialog.  All other keys (and Esc when the worker
+        has already stopped) fall through to QDialog's default handling.
+        """
+        if event.key() == Qt.Key.Key_Escape and self._worker.isRunning():
+            self._request_cancel()
+            return
+        super().keyPressEvent(event)
+
+    def reject(self) -> None:
+        """Guard against closing while the worker is running.
+
+        If the worker thread is active, treat the reject request as a cancel
+        signal (same path as the Cancel button) and return without closing.
+        The dialog will close once the worker emits ``cancelled`` or ``error``
+        and the corresponding slot calls super().reject().
+
+        When the worker is no longer running the call proceeds to QDialog's
+        default rejection (closes the dialog).
+        """
+        if self._worker.isRunning():
+            self._request_cancel()
+            return
+        super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Prevent window close while the worker is running.
+
+        The window X button (or any external close request) is ignored while
+        the pipeline is active; the user must Cancel and wait for the worker
+        to acknowledge before the dialog closes.
+        """
+        if self._worker.isRunning():
+            self._request_cancel()
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    # ------------------------------------------------------------------
     # Worker signal handlers
     # ------------------------------------------------------------------
 
@@ -362,17 +482,24 @@ class AutoEditProgressDialog(QDialog):
     def _on_finished(self, result: object) -> None:
         """Store the result and accept the dialog on successful completion.
 
+        Waits for the worker thread to fully stop before calling accept() so
+        the QThread object is never destroyed while its run() loop is active.
+
         Args:
             result: AutoEditResult returned by auto_edit().
         """
         self._result = result
         self._progress_bar.setRange(0, 1)
         self._progress_bar.setValue(1)
+        self._wait_for_worker()
         self.accept()
 
     @pyqtSlot(str)
     def _on_error(self, message: str) -> None:
         """Show an error message box and reject the dialog on pipeline failure.
+
+        Waits for the worker thread to stop before closing so the QThread
+        object is not destroyed while still running.
 
         Args:
             message: Error description from the worker.
@@ -387,12 +514,18 @@ class AutoEditProgressDialog(QDialog):
         error_box.setStandardButtons(QMessageBox.StandardButton.Ok)
         error_box.exec()
 
-        self.reject()
+        self._wait_for_worker()
+        super().reject()
 
     @pyqtSlot()
     def _on_cancelled(self) -> None:
-        """Reject the dialog when the worker honours a cancellation request."""
-        self.reject()
+        """Reject the dialog when the worker honours a cancellation request.
+
+        Waits for the worker thread to stop before closing so the QThread
+        object is not destroyed while still running.
+        """
+        self._wait_for_worker()
+        super().reject()
 
     # ------------------------------------------------------------------
     # UI interaction
@@ -406,9 +539,7 @@ class AutoEditProgressDialog(QDialog):
         signals the worker to stop. The dialog will close via _on_cancelled
         when the worker acknowledges the request.
         """
-        self._cancel_btn.setEnabled(False)
-        self._phase_label.setText("Cancelling...")
-        self._worker.cancel()
+        self._request_cancel()
 
     # ------------------------------------------------------------------
     # Public API
