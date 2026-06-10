@@ -7,24 +7,31 @@ This package provides:
 - Utility functions for theming
 """
 
-from .colors import (
+from src.ui.styles.colors import (
     # Background colors
     BG_PRIMARY,
     BG_SECONDARY,
     BG_TERTIARY,
     BG_BORDER,
+    BG_HOVER,
     # Action colors
     RALLY_START,
     SERVER_WINS,
     RECEIVER_WINS,
+    RECEIVER_WINS_HOVER,
     UNDO,
     PRIMARY_ACTION,
+    PRIMARY_HOVER,
+    # Focus ring
+    FOCUS_RING,
     # Text colors
     TEXT_PRIMARY,
     TEXT_SECONDARY,
+    TEXT_TERTIARY,
     TEXT_ACCENT,
     TEXT_WARNING,
     TEXT_DISABLED,
+    DANGER_TEXT,
     # Glow effects
     GLOW_GREEN,
     GLOW_BLUE,
@@ -37,13 +44,15 @@ from .colors import (
     PANEL_BG,
     BUTTON_BG,
     BORDER_COLOR,
+    VIDEO_BG,
     ACTION_PRIMARY,
     ACTION_SUCCESS,
     ACTION_INFO,
     ACTION_WARNING,
     ACTION_DANGER,
 )
-from .fonts import (
+from src.ui.styles.icons import icon, pixmap
+from src.ui.styles.fonts import (
     # Font families
     FONT_DISPLAY,
     FONT_BODY,
@@ -80,23 +89,33 @@ from .fonts import (
 )
 
 __all__ = [
+    # Icon API
+    "icon",
+    "pixmap",
     # Background colors
     "BG_PRIMARY",
     "BG_SECONDARY",
     "BG_TERTIARY",
     "BG_BORDER",
+    "BG_HOVER",
     # Action colors
     "RALLY_START",
     "SERVER_WINS",
     "RECEIVER_WINS",
+    "RECEIVER_WINS_HOVER",
     "UNDO",
     "PRIMARY_ACTION",
+    "PRIMARY_HOVER",
+    # Focus ring
+    "FOCUS_RING",
     # Text colors
     "TEXT_PRIMARY",
     "TEXT_SECONDARY",
+    "TEXT_TERTIARY",
     "TEXT_ACCENT",
     "TEXT_WARNING",
     "TEXT_DISABLED",
+    "DANGER_TEXT",
     # Glow effects
     "GLOW_GREEN",
     "GLOW_BLUE",
@@ -109,6 +128,7 @@ __all__ = [
     "PANEL_BG",
     "BUTTON_BG",
     "BORDER_COLOR",
+    "VIDEO_BG",
     "ACTION_PRIMARY",
     "ACTION_SUCCESS",
     "ACTION_INFO",

@@ -5,6 +5,14 @@ including background colors, action colors, text colors, and utility functions
 for working with Qt color objects.
 
 All colors follow the design system specified in docs/UI_SPEC.md Section 2.2.
+
+TEXT_DISABLED vs TEXT_TERTIARY — usage rule
+-------------------------------------------
+TEXT_DISABLED (#5A6270, ~2.1:1 on BG_TERTIARY) is ONLY for genuinely disabled
+interactive controls (buttons, inputs) where WCAG exempts the contrast
+requirement.  Do NOT use it for informational or read-only text — use
+TEXT_TERTIARY (#98A2B3, 4.9:1 on BG_TERTIARY) instead so the text remains
+legible for all users.
 """
 
 from PyQt6.QtGui import QColor
@@ -18,17 +26,20 @@ BG_PRIMARY = "#1A1D23"      # Deep Slate - Main window background
 BG_SECONDARY = "#252A33"    # Elevated Surface - Panels, containers
 BG_TERTIARY = "#2D3340"     # Card Surface - Buttons, input fields
 BG_BORDER = "#3D4450"       # Subtle Edge - Dividers, borders
+BG_HOVER = "#353C4A"        # Hover Surface - Interactive element hover state
 
 
 # ============================================================================
 # Action Colors
 # ============================================================================
 
-RALLY_START = "#3DDC84"     # Pickle Green - Rally start button
-SERVER_WINS = "#4FC3F7"     # Court Blue - Server wins button
-RECEIVER_WINS = "#FFB300"   # Ball Orange - Receiver wins button
-UNDO = "#EF5350"            # Coral Red - Undo button
-PRIMARY_ACTION = "#3DDC84"  # Accent Green - Primary action buttons
+RALLY_START = "#3DDC84"          # Pickle Green - Rally start button
+SERVER_WINS = "#4FC3F7"          # Court Blue - Server wins button
+RECEIVER_WINS = "#FFB300"        # Ball Orange - Receiver wins button
+RECEIVER_WINS_HOVER = "#FFC940"  # Lighter Orange - Receiver wins button hover state
+UNDO = "#EF5350"                 # Coral Red - Undo button
+PRIMARY_ACTION = "#3DDC84"       # Accent Green - Primary action buttons
+PRIMARY_HOVER = "#4DE494"        # Lighter Green - Primary button hover state
 
 
 # ============================================================================
@@ -37,9 +48,25 @@ PRIMARY_ACTION = "#3DDC84"  # Accent Green - Primary action buttons
 
 TEXT_PRIMARY = "#F5F5F5"    # Off White - Primary text
 TEXT_SECONDARY = "#9E9E9E"  # Muted Gray - Secondary text, labels
+TEXT_TERTIARY = "#98A2B3"   # Blue-Gray - De-emphasised informational text
+                             # (4.9:1 on BG_TERTIARY — WCAG AA compliant)
 TEXT_ACCENT = "#3DDC84"     # Pickle Green - Highlighted text
 TEXT_WARNING = "#FFE082"    # Amber - Warning messages
-TEXT_DISABLED = "#5A6270"   # Disabled text and controls
+# WCAG-exempt: use only for genuinely disabled controls, not for readable text.
+# For readable de-emphasised text, use TEXT_TERTIARY above.
+TEXT_DISABLED = "#5A6270"   # Disabled text and controls (~2.1:1 — exempt)
+DANGER_TEXT = "#F87171"     # Soft Red - Error / destructive informational text
+                             # (4.6:1 on BG_TERTIARY — WCAG AA compliant)
+
+
+# ============================================================================
+# Focus Ring
+# ============================================================================
+
+# Alias of RALLY_START — used by painted widgets (RallyButton, clip cells) to
+# draw the keyboard-focus indicator.  Defined here so callers can import a
+# single semantic name rather than coupling to the action-color constant.
+FOCUS_RING = RALLY_START    # "#3DDC84" — 3.0:1 min on BG_PRIMARY (WCAG AA non-text)
 
 
 # ============================================================================
@@ -141,6 +168,7 @@ WINDOW_BG = BG_PRIMARY
 PANEL_BG = BG_SECONDARY
 BUTTON_BG = BG_TERTIARY
 BORDER_COLOR = BG_BORDER
+VIDEO_BG = "#000000"        # Letterbox black — video container background
 
 ACTION_PRIMARY = PRIMARY_ACTION
 ACTION_SUCCESS = RALLY_START
@@ -155,20 +183,28 @@ __all__ = [
     "BG_SECONDARY",
     "BG_TERTIARY",
     "BG_BORDER",
+    "BG_HOVER",
 
     # Action colors
     "RALLY_START",
     "SERVER_WINS",
     "RECEIVER_WINS",
+    "RECEIVER_WINS_HOVER",
     "UNDO",
     "PRIMARY_ACTION",
+    "PRIMARY_HOVER",
+
+    # Focus ring
+    "FOCUS_RING",
 
     # Text colors
     "TEXT_PRIMARY",
     "TEXT_SECONDARY",
+    "TEXT_TERTIARY",
     "TEXT_ACCENT",
     "TEXT_WARNING",
     "TEXT_DISABLED",
+    "DANGER_TEXT",
 
     # Glow effects
     "GLOW_GREEN",
@@ -184,6 +220,7 @@ __all__ = [
     "PANEL_BG",
     "BUTTON_BG",
     "BORDER_COLOR",
+    "VIDEO_BG",
     "ACTION_PRIMARY",
     "ACTION_SUCCESS",
     "ACTION_INFO",

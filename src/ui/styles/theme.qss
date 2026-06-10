@@ -98,6 +98,100 @@ QLabel.disabled {
 }
 
 
+/* ---------------------------------------------------------------------------
+   Text-role system: assign via set_label_role(label, role) (components.py)
+   or directly: label.setProperty("textRole", "body"); style().unpolish/polish.
+
+   Available roles and their resolved palette values:
+     caption      — 12px / 400 / #98A2B3  (TEXT_TERTIARY, 4.9:1 on BG_TERTIARY)
+     body         — 14px / 400 / #9E9E9E  (TEXT_SECONDARY)
+     bodyPrimary  — 14px / 400 / #F5F5F5  (TEXT_PRIMARY)
+     heading      — 16px / 600 / #F5F5F5  (TEXT_PRIMARY)
+     subheading   — 18px / 600 / #F5F5F5  (TEXT_PRIMARY)
+     score        — 24px / 700 / #F5F5F5  (TEXT_PRIMARY)
+     display      — 32px / 700 / #F5F5F5  (TEXT_PRIMARY)
+     danger       — 14px / 400 / #F87171  (DANGER_TEXT, 4.6:1 on BG_TERTIARY)
+     warning      — 14px / 400 / #FFE082  (TEXT_WARNING)
+     accent       — 14px / 400 / #3DDC84  (TEXT_ACCENT)
+     sectionLabel — 12px / 600 / #9E9E9E  (TEXT_SECONDARY)
+                    Must also call Fonts.section_label() for letter-spacing and
+                    label.setText(text.upper()) — Qt QSS has no text-transform
+                    or letter-spacing support.
+   Type scale lock: 12 / 14 / 16 / 18 / 24 / 32 px only.
+   --------------------------------------------------------------------------- */
+
+QLabel[textRole="caption"] {
+    color: #98A2B3;  /* TEXT_TERTIARY — 4.9:1 on BG_TERTIARY */
+    font-size: 12px;
+    font-weight: 400;
+}
+
+QLabel[textRole="body"] {
+    color: #9E9E9E;  /* TEXT_SECONDARY */
+    font-size: 14px;
+    font-weight: 400;
+}
+
+QLabel[textRole="bodyPrimary"] {
+    color: #F5F5F5;  /* TEXT_PRIMARY */
+    font-size: 14px;
+    font-weight: 400;
+}
+
+QLabel[textRole="heading"] {
+    color: #F5F5F5;  /* TEXT_PRIMARY */
+    font-size: 16px;
+    font-weight: 600;
+}
+
+QLabel[textRole="subheading"] {
+    color: #F5F5F5;  /* TEXT_PRIMARY */
+    font-size: 18px;
+    font-weight: 600;
+}
+
+QLabel[textRole="score"] {
+    color: #F5F5F5;  /* TEXT_PRIMARY */
+    font-size: 24px;
+    font-weight: 700;
+}
+
+QLabel[textRole="display"] {
+    color: #F5F5F5;  /* TEXT_PRIMARY */
+    font-size: 32px;
+    font-weight: 700;
+}
+
+QLabel[textRole="danger"] {
+    color: #F87171;  /* DANGER_TEXT — 4.6:1 on BG_TERTIARY */
+    font-size: 14px;
+    font-weight: 400;
+}
+
+QLabel[textRole="warning"] {
+    color: #FFE082;  /* TEXT_WARNING */
+    font-size: 14px;
+    font-weight: 400;
+}
+
+QLabel[textRole="accent"] {
+    color: #3DDC84;  /* TEXT_ACCENT */
+    font-size: 14px;
+    font-weight: 400;
+}
+
+/* sectionLabel: uppercase de-emphasised section header (e.g. "RALLY CONTROLS").
+   Qt QSS does not support text-transform or letter-spacing.
+   Callers MUST: (1) set Fonts.section_label() as the widget font to get
+   12px/WEIGHT_SEMIBOLD/+0.5px AbsoluteSpacing, and (2) pass the display text
+   as label.setText(text.upper()) — QSS alone cannot uppercase the string. */
+QLabel[textRole="sectionLabel"] {
+    color: #9E9E9E;  /* TEXT_SECONDARY */
+    font-size: 12px;
+    font-weight: 600;
+}
+
+
 /* =============================================================================
    3. SURFACES & CONTAINERS
    ============================================================================= */
@@ -160,8 +254,20 @@ QPushButton:disabled {
 }
 
 QPushButton:focus {
-    outline: 2px solid #3DDC84;
-    outline-offset: 2px;
+    /* Border-swap focus ring: Qt does not render `outline:` so we swap the
+       border to 2px green and shrink padding by 1px to avoid layout shift
+       (same pattern as QLineEdit:focus at lines 336-339). */
+    border: 2px solid #3DDC84;
+    padding: 7px 15px;
+}
+
+/* Focus indicators for checkbox and radio button indicators */
+QCheckBox:focus::indicator {
+    border: 2px solid #3DDC84;
+}
+
+QRadioButton:focus::indicator {
+    border: 2px solid #3DDC84;
 }
 
 
@@ -173,7 +279,6 @@ QPushButton#rallyStart {
     color: #3DDC84;
     font-size: 18px;
     font-weight: 600;
-    min-width: 160px;
     min-height: 56px;
 }
 
@@ -202,7 +307,6 @@ QPushButton#serverWins {
     color: #4FC3F7;
     font-size: 18px;
     font-weight: 600;
-    min-width: 160px;
     min-height: 56px;
 }
 
@@ -229,7 +333,6 @@ QPushButton#receiverWins {
     color: #FFB300;
     font-size: 18px;
     font-weight: 600;
-    min-width: 180px;
     min-height: 56px;
 }
 
@@ -254,7 +357,6 @@ QPushButton#receiverWins[active="true"] {
 QPushButton#undo {
     border: 2px solid #EF5350;  /* Coral Red */
     color: #EF5350;
-    min-width: 100px;
     min-height: 40px;
 }
 
@@ -310,6 +412,95 @@ QPushButton.warning {
 QPushButton.warning:hover {
     background-color: #FFE082;
     color: #1A1D23;
+}
+
+
+/* =============================================================================
+   4b. PROPERTY-CLASS SELECTORS (set via set_class() or setProperty())
+   ============================================================================= */
+
+/* Secondary: subdued bordered button, standard tier */
+QPushButton[buttonClass="secondary"] {
+    background-color: #2D3340;
+    color: #F5F5F5;
+    border: 1px solid #3D4450;
+    border-radius: 6px;
+    padding: 8px 16px;
+    min-height: 36px;
+    min-width: 88px;
+}
+
+QPushButton[buttonClass="secondary"]:hover {
+    background-color: #353C4A;
+    border-color: #4D5460;
+}
+
+QPushButton[buttonClass="secondary"]:pressed {
+    background-color: #252A33;
+}
+
+QPushButton[buttonClass="secondary"]:disabled {
+    color: #5A6270;
+    border-color: #3D4450;
+    background-color: #2D3340;
+}
+
+QPushButton[buttonClass="secondary"]:focus {
+    border: 2px solid #3DDC84;
+    padding: 7px 15px;
+}
+
+
+/* Nav: navigation arrow buttons, same palette as secondary, 100px wide */
+QPushButton[buttonClass="nav"] {
+    background-color: #2D3340;
+    color: #F5F5F5;
+    border: 1px solid #3D4450;
+    border-radius: 6px;
+    padding: 8px 16px;
+    min-height: 36px;
+    min-width: 100px;
+}
+
+QPushButton[buttonClass="nav"]:hover {
+    background-color: #353C4A;
+    border-color: #4D5460;
+}
+
+QPushButton[buttonClass="nav"]:disabled {
+    color: #5A6270;
+    border-color: #3D4450;
+}
+
+QPushButton[buttonClass="nav"]:focus {
+    border: 2px solid #3DDC84;
+    padding: 7px 15px;
+}
+
+
+/* Panel: elevated surface container (for QWidget containers) */
+QWidget[cardClass="panel"] {
+    background-color: #252A33;
+    border: 1px solid #3D4450;
+    border-radius: 8px;
+}
+
+QFrame[cardClass="panel"] {
+    background-color: #252A33;
+    border: 1px solid #3D4450;
+    border-radius: 8px;
+}
+
+
+/* Compact density: smaller font for dense layouts */
+QWidget[density="compact"] QPushButton,
+QWidget[density="compact"] QLabel {
+    font-size: 12px;
+}
+
+QWidget[density="compact"] QPushButton {
+    padding: 6px 12px;
+    min-height: 32px;
 }
 
 
@@ -643,7 +834,7 @@ QWidget#toast[type="info"] {
 
 /* Vertical Scrollbar */
 QScrollBar:vertical {
-    background-color: #1A1D23;
+    background-color: #252A33;  /* BG_SECONDARY */
     width: 12px;
     margin: 0px;
     border: none;
@@ -656,7 +847,7 @@ QScrollBar::handle:vertical {
 }
 
 QScrollBar::handle:vertical:hover {
-    background-color: #4D5460;
+    background-color: #353C4A;  /* BG_HOVER */
 }
 
 QScrollBar::add-line:vertical,
@@ -672,7 +863,7 @@ QScrollBar::sub-page:vertical {
 
 /* Horizontal Scrollbar */
 QScrollBar:horizontal {
-    background-color: #1A1D23;
+    background-color: #252A33;  /* BG_SECONDARY */
     height: 12px;
     margin: 0px;
     border: none;
@@ -685,7 +876,7 @@ QScrollBar::handle:horizontal {
 }
 
 QScrollBar::handle:horizontal:hover {
-    background-color: #4D5460;
+    background-color: #353C4A;  /* BG_HOVER */
 }
 
 QScrollBar::add-line:horizontal,
@@ -696,6 +887,29 @@ QScrollBar::sub-line:horizontal {
 QScrollBar::add-page:horizontal,
 QScrollBar::sub-page:horizontal {
     background: none;
+}
+
+
+/* =============================================================================
+   8b. SPLITTER HANDLE
+   ============================================================================= */
+
+/* 2px divider in BG_BORDER; glows RALLY_START on hover.
+   Global rule — per-instance setStyleSheet calls on QSplitter can be removed. */
+QSplitter::handle {
+    background-color: #3D4450;  /* BG_BORDER */
+}
+
+QSplitter::handle:horizontal {
+    width: 2px;
+}
+
+QSplitter::handle:vertical {
+    height: 2px;
+}
+
+QSplitter::handle:hover {
+    background-color: #3DDC84;  /* RALLY_START */
 }
 
 

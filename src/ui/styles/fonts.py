@@ -23,7 +23,14 @@ __all__ = [
     "FONT_BODY",
     "FONT_DISPLAY_FALLBACK",
     "FONT_BODY_FALLBACK",
-    # Font sizes
+    # Locked type scale (12 / 14 / 16 / 18 / 24 / 32 px only)
+    "SIZE_CAPTION",
+    "SIZE_BODY",
+    "SIZE_SUBHEADING",
+    "SIZE_HEADING",
+    "SIZE_TITLE",
+    "SIZE_DISPLAY",
+    # Legacy aliases (kept for backward compatibility — prefer the new names)
     "SIZE_SCORE_DISPLAY",
     "SIZE_BUTTON_RALLY",
     "SIZE_BUTTON_OTHER",
@@ -49,6 +56,10 @@ __all__ = [
     "RADIUS_MD",
     "RADIUS_LG",
     "RADIUS_XL",
+    # Responsive breakpoints
+    "BREAK_COMPACT",
+    "BREAK_ULTRA_COMPACT",
+    "ASPECT_ULTRAWIDE",
     # Helper class
     "Fonts",
 ]
@@ -72,32 +83,32 @@ FONT_BODY_FALLBACK = ["Segoe UI", "Roboto", "sans-serif"]
 
 
 # =============================================================================
-# Font Sizes (in pixels)
+# Font Sizes (pixel values — all sizes are PIXELS, not points)
+#
+# LOCKED TYPE SCALE — use only these six values.
+# Do NOT add intermediate sizes (e.g. 13, 15, 17, 20).  If a size feels
+# wrong, map it to the nearest step or update this comment after team review.
 # =============================================================================
 
-# Large score display in status overlay
-SIZE_SCORE_DISPLAY = 32
+SIZE_CAPTION = 12     # Captions, helper text, section labels
+SIZE_BODY = 14        # Body text, labels, inputs, standard buttons
+SIZE_SUBHEADING = 16  # Timestamps, sub-headings
+SIZE_HEADING = 18     # Rally buttons, dialog titles, section headers
+SIZE_TITLE = 24       # Large panel titles (future use)
+SIZE_DISPLAY = 32     # Score overlay, prominent numeric displays
 
-# Rally action buttons (Start, Server Wins, Receiver Wins)
-SIZE_BUTTON_RALLY = 18
-
-# Other buttons (Undo, toolbar buttons)
-SIZE_BUTTON_OTHER = 14
-
-# State labels (status text, hints)
-SIZE_STATE_LABELS = 14
-
-# Input fields and form elements
-SIZE_INPUT = 14
-
-# Secondary text, captions, helper text
-SIZE_SECONDARY = 12
-
-# Timestamp displays in video timeline
-SIZE_TIMESTAMPS = 16
-
-# Dialog window titles
-SIZE_DIALOG_TITLE = 18
+# ---------------------------------------------------------------------------
+# Legacy aliases — kept for backward compatibility with existing callers.
+# Prefer the canonical names above in new code.
+# ---------------------------------------------------------------------------
+SIZE_SCORE_DISPLAY = SIZE_DISPLAY     # score overlay
+SIZE_BUTTON_RALLY = SIZE_HEADING      # rally action buttons
+SIZE_BUTTON_OTHER = SIZE_BODY         # toolbar / secondary buttons
+SIZE_STATE_LABELS = SIZE_BODY         # status text, hints
+SIZE_INPUT = SIZE_BODY                # form inputs
+SIZE_SECONDARY = SIZE_CAPTION         # helper / caption text
+SIZE_TIMESTAMPS = SIZE_SUBHEADING     # video timeline timestamps
+SIZE_DIALOG_TITLE = SIZE_HEADING      # modal dialog titles
 
 
 # =============================================================================
@@ -130,6 +141,19 @@ RADIUS_SM = 4     # Input fields
 RADIUS_MD = 6     # Buttons
 RADIUS_LG = 8     # Cards/panels
 RADIUS_XL = 12    # Dialogs
+
+
+# =============================================================================
+# Responsive Breakpoints
+#
+# Window *width* thresholds used by ResponsiveManager to switch layout modes.
+# ASPECT_ULTRAWIDE is the width-to-height ratio above which the side-panel
+# ultrawide layout is preferred (e.g. 3840x1080 = 3.56 > 2.0).
+# =============================================================================
+
+BREAK_COMPACT = 1000        # px — compact layout below this window width
+BREAK_ULTRA_COMPACT = 800   # px — ultra-compact layout below this window width
+ASPECT_ULTRAWIDE = 2.0      # ratio — side-panel layout at or above this aspect
 
 
 # =============================================================================
@@ -200,7 +224,13 @@ class Fonts:
             ```
         """
         family = cls._build_font_family(FONT_DISPLAY, FONT_DISPLAY_FALLBACK)
-        font = QFont(family, size, weight)
+        # Use setPixelSize() instead of passing size to the QFont constructor.
+        # The QFont(family, pointSize, weight) constructor treats the second
+        # argument as *points*, which renders ~25% larger than the intended
+        # pixel values at 96 DPI.  setPixelSize() sets exact screen pixels.
+        font = QFont(family)
+        font.setWeight(weight)
+        font.setPixelSize(size)
 
         if tabular:
             cls._apply_tabular_figures(font)
@@ -233,7 +263,11 @@ class Fonts:
             ```
         """
         family = cls._build_font_family(FONT_BODY, FONT_BODY_FALLBACK)
-        font = QFont(family, size, weight)
+        # setPixelSize() sets exact screen pixels; the QFont(family, size)
+        # constructor treats size as *points* which is ~25% larger at 96 DPI.
+        font = QFont(family)
+        font.setWeight(weight)
+        font.setPixelSize(size)
         font.setStyleHint(QFont.StyleHint.SansSerif, QFont.StyleStrategy.PreferAntialias)
         return font
 
@@ -316,6 +350,37 @@ class Fonts:
             QFont configured for captions and hints (12px, regular)
         """
         return cls.body(SIZE_SECONDARY, WEIGHT_REGULAR)
+
+    @classmethod
+    def section_label(cls) -> QFont:
+        """Create font for uppercase section labels with letter-spacing.
+
+        Intended for small group headings that appear in TEXT_SECONDARY color
+        with text-transform:uppercase applied via QSS.  The 0.5px absolute
+        letter-spacing gives the all-caps text a refined, airy appearance.
+
+        Returns:
+            QFont at SIZE_CAPTION (12px), WEIGHT_SEMIBOLD, 0.5px letter-spacing.
+
+        Note:
+            Color (TEXT_SECONDARY) and text-transform uppercase must be set
+            via QSS on the widget — QFont has no color or case-transform API.
+
+        Example::
+
+            label = QLabel("Rally Controls")
+            label.setFont(Fonts.section_label())
+            label.setStyleSheet(
+                f"color: {TEXT_SECONDARY}; text-transform: uppercase;"
+            )
+        """
+        family = cls._build_font_family(FONT_BODY, FONT_BODY_FALLBACK)
+        font = QFont(family)
+        font.setWeight(WEIGHT_SEMIBOLD)
+        font.setPixelSize(SIZE_CAPTION)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.5)
+        font.setStyleHint(QFont.StyleHint.SansSerif, QFont.StyleStrategy.PreferAntialias)
+        return font
 
     @classmethod
     def get_available_fonts(cls) -> dict[str, bool]:
