@@ -65,7 +65,7 @@ build: check-config
 		echo "Please run ./configure to set up the environment."; \
 		exit 1; \
 	fi
-	$(PYINSTALLER) --noconfirm $(SPEC_FILE)
+	PYINSTALLER_CONFIG_DIR=$(BUILD_DIR)/pyi-config-$(APP_NAME) $(PYINSTALLER) --noconfirm $(SPEC_FILE)
 	@echo "✓ Build complete: $(DIST_DIR)/$(APP_NAME)"
 
 # -----------------------------------------------------------------------------
@@ -110,7 +110,7 @@ build-ml: check-config
 		echo "ERROR: PyTorch not installed. Run: ./configure --enable-ml"; \
 		exit 1; \
 	}
-	$(PYINSTALLER) --noconfirm $(ML_SPEC_FILE)
+	PYINSTALLER_CONFIG_DIR=$(BUILD_DIR)/pyi-config-$(ML_APP_NAME) $(PYINSTALLER) --noconfirm $(ML_SPEC_FILE)
 	@echo "==> Build complete: $(DIST_DIR)/$(ML_APP_NAME)"
 
 # -----------------------------------------------------------------------------
@@ -252,6 +252,7 @@ help:
 	@echo ""
 	@echo "Examples:"
 	@echo "  ./configure && make             # Configure and build editor"
+	@echo "  make -j2 install install-ml      # Build+install both apps in parallel"
 	@echo "  ./configure --enable-ml && make build-ml  # Build rally-trainer"
 	@echo "  make test                        # Run tests"
 	@echo "  sudo make install                # Install editor system-wide"
