@@ -205,7 +205,11 @@ def _cmd_auto_edit(args: argparse.Namespace) -> None:
     low_conf_detail = f" (indices: {low_conf_indices})" if low_conf_indices else ""
 
     print("Auto-edit complete.")
-    print(f"Rallies detected: {result.predicted_rally_count}")
+    print(
+        f"Rallies: {result.n_detected} detected / "
+        f"{result.n_scored} scored / "
+        f"{result.n_post_game} post-game"
+    )
     print(f"Low-confidence rallies: {len(low_conf_indices)}{low_conf_detail}")
     print(f"Final score: {score_str}")
     print(f"Output: {result.kdenlive_path}")
@@ -353,10 +357,11 @@ def main() -> None:
     auto_edit_parser.add_argument(
         "--confidence-threshold",
         type=float,
-        default=0.75,
+        default=None,
         help=(
             "Minimum softmax confidence to accept a winner prediction "
-            "without flagging it as low-confidence (default: 0.75)"
+            "without flagging it as low-confidence "
+            "(defaults to WinnerModelConfig.confidence_threshold (0.75))"
         ),
     )
 

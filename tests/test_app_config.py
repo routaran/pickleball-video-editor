@@ -728,4 +728,4 @@ class TestWinnerModelConfigClipDurationOverride:
         assert cfg.canonical_width == 256
         assert cfg.canonical_height == 128
         assert cfg.device == "cuda"
-        assert cfg.confidence_threshold == 0.7
+        assert cfg.confidence_threshold == 0.75

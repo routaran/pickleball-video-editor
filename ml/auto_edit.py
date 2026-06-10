@@ -11,13 +11,28 @@ any manual interaction:
 Public API
 ----------
 auto_edit(video_path, setup, corners, output_dir, checkpoint_path, ...) -> AutoEditResult
+
+Cooperative cancellation
+------------------------
+Pass a ``cancel_check`` callable (no arguments, returns bool) to auto_edit().
+If it returns True at any stage boundary the function raises AutoEditCancelled
+and NO output files are written.  The check is performed:
+
+  - After Stage 1 (audio detection complete, before Stage 2)
+  - After Stage 2 (winner prediction complete, before Stage 3)
+  - Before Stage 4 (score simulation complete; last chance to cancel before
+    any file I/O)
+
+Raising AutoEditCancelled from cancel_check itself is also safe.
 """
 
 import logging
+import torch
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ml.config import WinnerModelConfig
+from ml.config import PathConfig, WinnerModelConfig
 from ml.predict import predict_video
 from ml.predict_winner import predict_winners
 from src.core.models import GameCompletionInfo, ScoreSnapshot, SessionState
@@ -28,9 +43,23 @@ from src.output.training_data_generator import TrainingDataGenerator
 from src.video.probe import probe_video
 
 
-__all__ = ["AutoEditSetup", "AutoEditResult", "auto_edit"]
+__all__ = ["AutoEditSetup", "AutoEditResult", "AutoEditCancelled", "auto_edit"]
 
 logger = logging.getLogger(__name__)
+
+# Rallies whose padded duration is below this threshold are flagged for human
+# review regardless of winner-prediction confidence.  Aces, faults, and net
+# errors are legitimate sub-3s score-advancing rallies, but they are also more
+# prone to mis-detection, so a reviewer should verify them.
+SHORT_RALLY_REVIEW_SECONDS = 3.0
+
+
+class AutoEditCancelled(RuntimeError):
+    """Raised when the caller's cancel_check() returns True.
+
+    Guaranteed to be raised BEFORE any output files are written to disk,
+    so a cancelled run leaves the output directory clean.
+    """
 
 
 @dataclass
@@ -65,15 +94,21 @@ class AutoEditResult:
         kdenlive_path: Path to the generated .kdenlive project file.
         ass_path: Path to the companion ASS subtitle file.
         training_json_path: Path to the .training.json labels file.
-        predicted_rally_count: Number of rallies the audio model detected.
+        predicted_rally_count: Number of rallies the audio model detected
+            (alias for n_detected; kept for backward compatibility).
         low_confidence_rally_indices: Zero-based indices of rallies whose
-            winner-prediction confidence fell below the threshold.
+            winner-prediction confidence fell below the threshold, or whose
+            padded duration is under SHORT_RALLY_REVIEW_SECONDS.
         simulated_final_score: Tuple (team1_score, team2_score) extracted
-            from the last ScoreSnapshot, or None when no rallies were scored.
+            from the last pre-post-game ScoreSnapshot, or None when no
+            rallies were scored.
         session_state: Fully-populated SessionState built directly from the
             in-memory ScoreState and RallyManager.  Callers can hand this
             straight to MainWindow without round-tripping through the training
             JSON, which previously lost current_score/serving_team/etc.
+        n_detected: Total rally intervals output by Stage 1 (audio model).
+        n_scored: Rallies that advanced the score (pre-game-over).
+        n_post_game: Rallies appended after game-over with frozen score.
     """
 
     kdenlive_path: Path
@@ -83,6 +118,9 @@ class AutoEditResult:
     low_confidence_rally_indices: list[int]
     simulated_final_score: tuple[int, int] | None
     session_state: SessionState
+    n_detected: int = 0
+    n_scored: int = 0
+    n_post_game: int = 0
 
 
 def _build_player_names(setup: AutoEditSetup) -> dict[str, list[str]]:
@@ -101,14 +139,60 @@ def _build_player_names(setup: AutoEditSetup) -> dict[str, list[str]]:
     return {"team1": team1, "team2": team2}
 
 
+def _validate_winner_checkpoint(checkpoint_path: Path) -> None:
+    """Validate the Stage-2 winner checkpoint before any expensive computation.
+
+    Checks existence, that the file can be loaded by torch, and that it
+    contains the expected "model_state_dict" and "config" keys.
+
+    Args:
+        checkpoint_path: Path to the .pt checkpoint to validate.
+
+    Raises:
+        FileNotFoundError: If the checkpoint file does not exist.
+        ValueError: If the file cannot be loaded or is missing required keys.
+            The error message always includes the phrase
+            "refusing to run Stage 1 audio detection against an unusable
+            winner checkpoint" so callers can surface it to the user verbatim.
+    """
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(
+            f"Winner checkpoint not found: {checkpoint_path} — "
+            "refusing to run Stage 1 audio detection against an unusable "
+            "winner checkpoint"
+        )
+
+    try:
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
+    except Exception as exc:
+        raise ValueError(
+            f"Cannot load winner checkpoint {checkpoint_path}: {exc} — "
+            "refusing to run Stage 1 audio detection against an unusable "
+            "winner checkpoint"
+        ) from exc
+
+    missing: list[str] = [
+        key for key in ("model_state_dict", "config") if key not in ckpt
+    ]
+    del ckpt
+
+    if missing:
+        raise ValueError(
+            f"Winner checkpoint {checkpoint_path} is missing required "
+            f"key(s) {missing} — refusing to run Stage 1 audio detection "
+            "against an unusable winner checkpoint"
+        )
+
+
 def auto_edit(
     video_path: Path,
     setup: AutoEditSetup,
     corners: list[tuple[int, int]],
     output_dir: Path,
     checkpoint_path: Path,
-    confidence_threshold: float = 0.75,
+    confidence_threshold: float | None = None,
     winner_config: WinnerModelConfig | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> AutoEditResult:
     """Run the full auto-edit pipeline on a pickleball video.
 
@@ -117,6 +201,11 @@ def auto_edit(
     2. Predict which team won each rally using the visual winner classifier.
     3. Simulate pickleball scoring through all detected rallies.
     4. Generate a Kdenlive project file, ASS subtitles, and training JSON.
+
+    Cooperative cancellation: if ``cancel_check`` is provided, it is called
+    at stage boundaries (after Stage 1, after Stage 2, and before Stage 4
+    writes any file).  When it returns True, AutoEditCancelled is raised and
+    no output files are written.
 
     Args:
         video_path: Absolute path to the source video file.
@@ -127,19 +216,28 @@ def auto_edit(
         output_dir: Directory where all output files will be written.
         checkpoint_path: Path to the WinnerClassifier ``.pt`` checkpoint.
         confidence_threshold: Minimum softmax confidence to accept a winner
-            prediction without flagging it as low-confidence.  Defaults to
-            0.75.  Rallies below this threshold are included in
+            prediction without flagging it as low-confidence.  When ``None``
+            (the default), the value is taken from ``winner_config`` if
+            provided, otherwise from ``WinnerModelConfig.confidence_threshold``
+            (the single source of truth, currently 0.75).  Rallies below the
+            resolved threshold are included in
             AutoEditResult.low_confidence_rally_indices.
         winner_config: Optional WinnerModelConfig controlling clip duration,
             canonical resolution, device, etc.  Defaults are used when None.
+        cancel_check: Optional zero-argument callable that returns True when
+            the caller wants to abort the pipeline.  Checked after Stage 1,
+            after Stage 2, and before Stage 4 file writes.  Raises
+            AutoEditCancelled (no files written) when True is returned.
 
     Returns:
         AutoEditResult with paths to all generated files and pipeline metadata.
 
     Raises:
-        FileNotFoundError: If video_path does not exist or checkpoint_path is
-            missing.
-        ValueError: If corners does not contain exactly 4 points.
+        FileNotFoundError: If video_path does not exist, the Stage-1 audio
+            checkpoint is missing, or checkpoint_path is missing.
+        ValueError: If corners does not contain exactly 4 points, or if the
+            winner checkpoint fails validation.
+        AutoEditCancelled: If cancel_check() returns True at any stage boundary.
     """
     video_path = video_path.resolve()
 
@@ -154,6 +252,34 @@ def auto_edit(
     if setup.game_type not in ("singles", "doubles"):
         raise ValueError("auto_edit does not support highlights mode")
 
+    # Resolve confidence threshold: explicit argument > winner_config > default.
+    # WinnerModelConfig.confidence_threshold is the single source of truth.
+    resolved_threshold: float
+    if confidence_threshold is not None:
+        resolved_threshold = confidence_threshold
+    elif winner_config is not None:
+        resolved_threshold = winner_config.confidence_threshold
+    else:
+        resolved_threshold = WinnerModelConfig().confidence_threshold
+
+    # ------------------------------------------------------------------
+    # Pre-validation: check both checkpoints BEFORE running Stage 1.
+    # Stage 1 (audio extraction + inference) is expensive; validating
+    # checkpoints upfront prevents wasting minutes only to fail at Stage 2.
+    # ------------------------------------------------------------------
+
+    # Stage-1 audio checkpoint: existence check only (predict_video loads it).
+    audio_ckpt = PathConfig().best_model_path
+    if not audio_ckpt.exists():
+        raise FileNotFoundError(
+            f"Stage-1 audio checkpoint not found: {audio_ckpt} — "
+            "refusing to run Stage 1 audio detection against an unusable "
+            "winner checkpoint"
+        )
+
+    # Stage-2 winner checkpoint: full load + key validation.
+    _validate_winner_checkpoint(checkpoint_path)
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -166,13 +292,17 @@ def auto_edit(
         (r["start_seconds"], r["end_seconds"]) for r in raw_rallies
     ]
 
-    predicted_rally_count = len(rally_intervals)
-    logger.info("Stage 1 complete: %d rallies detected", predicted_rally_count)
+    n_detected = len(rally_intervals)
+    predicted_rally_count = n_detected
+    logger.info("Stage 1 complete: %d rallies detected", n_detected)
+
+    if cancel_check is not None and cancel_check():
+        raise AutoEditCancelled("Pipeline cancelled after Stage 1")
 
     # ------------------------------------------------------------------
     # Stage 2: Winner prediction
     # ------------------------------------------------------------------
-    logger.info("Stage 2: predicting winners for %d rallies", predicted_rally_count)
+    logger.info("Stage 2: predicting winners for %d rallies", n_detected)
 
     winner_results: list[tuple[int, float]] = []
     if rally_intervals:
@@ -185,6 +315,9 @@ def auto_edit(
         )
 
     logger.info("Stage 2 complete")
+
+    if cancel_check is not None and cancel_check():
+        raise AutoEditCancelled("Pipeline cancelled after Stage 2")
 
     # ------------------------------------------------------------------
     # Stage 3: Score simulation
@@ -203,13 +336,41 @@ def auto_edit(
     rally_manager = RallyManager(fps=fps)
 
     low_confidence_rally_indices: list[int] = []
-    last_snapshot: ScoreSnapshot | None = None
+    last_scored_snapshot: ScoreSnapshot | None = None
+    game_over_flag = False
+    final_score_string: str = ""
+    final_snapshot_for_post_game: ScoreSnapshot | None = None
+
+    n_scored = 0
+    n_post_game = 0
 
     for idx, ((start_s, end_s), (winning_team, confidence)) in enumerate(
-        zip(rally_intervals, winner_results)
+        zip(rally_intervals, winner_results, strict=True)
     ):
-        if confidence < confidence_threshold:
+        if game_over_flag:
+            # F7: post-game rally — frozen score, no score advancement.
+            rally_manager.start_rally(start_s, final_snapshot_for_post_game)
+            rally = rally_manager.end_rally(
+                timestamp=end_s,
+                winner="server",  # placeholder; score is frozen
+                score_at_start=final_score_string,
+                score_snapshot=final_snapshot_for_post_game,
+            )
+            rally.is_post_game = True
+            rally.predicted_team = winning_team
+            rally.prediction_confidence = confidence
+            n_post_game += 1
+            continue
+
+        # --- Scored rally ---
+        if confidence < resolved_threshold:
             low_confidence_rally_indices.append(idx)
+
+        # Flag short rallies for review (independent of confidence).
+        duration_s = end_s - start_s
+        if duration_s < SHORT_RALLY_REVIEW_SECONDS:
+            if idx not in low_confidence_rally_indices:
+                low_confidence_rally_indices.append(idx)
 
         # Snapshot score state BEFORE this rally starts.
         snapshot_before = score_state.save_snapshot()
@@ -226,33 +387,55 @@ def auto_edit(
             score_state.receiver_wins()
 
         new_snapshot = score_state.save_snapshot()
-        last_snapshot = new_snapshot
+        last_scored_snapshot = new_snapshot
 
-        rally_manager.end_rally(
+        rally = rally_manager.end_rally(
             timestamp=end_s,
             winner=winner_str,
             score_at_start=score_at_start,
             score_snapshot=new_snapshot,
         )
 
+        rally.predicted_team = winning_team
+        rally.prediction_confidence = confidence
+
+        n_scored += 1
+
         game_over, _winner_team = score_state.is_game_over()
         if game_over:
             logger.info("Game over at rally %d", idx)
-            break
+            game_over_flag = True
+            final_score_string = score_at_start  # score string before this rally
+            # Use the post-rally snapshot so the post-game score reflects the
+            # winning point being scored.
+            final_snapshot_for_post_game = new_snapshot
+            final_score_string = score_state.get_score_string()
 
-    # Extract final score from last snapshot.
+    # Keep low_confidence list sorted and deduplicated.
+    low_confidence_rally_indices = sorted(set(low_confidence_rally_indices))
+
+    # Extract final score from the last pre-post-game snapshot.
     simulated_final_score: tuple[int, int] | None = None
-    if last_snapshot is not None:
+    if last_scored_snapshot is not None:
         simulated_final_score = (
-            int(last_snapshot.score[0]),
-            int(last_snapshot.score[1]),
+            int(last_scored_snapshot.score[0]),
+            int(last_scored_snapshot.score[1]),
         )
 
     logger.info(
-        "Stage 3 complete: %d rallies scored, final score %s",
-        rally_manager.get_rally_count(),
+        "Stage 3 complete: %d scored + %d post-game = %d total rallies, "
+        "final score %s",
+        n_scored,
+        n_post_game,
+        n_scored + n_post_game,
         simulated_final_score,
     )
+
+    # ------------------------------------------------------------------
+    # Cancellation check BEFORE Stage 4 writes any output file.
+    # ------------------------------------------------------------------
+    if cancel_check is not None and cancel_check():
+        raise AutoEditCancelled("Pipeline cancelled before Stage 4 output")
 
     # ------------------------------------------------------------------
     # Stage 4: Output generation
@@ -354,4 +537,7 @@ def auto_edit(
         low_confidence_rally_indices=low_confidence_rally_indices,
         simulated_final_score=simulated_final_score,
         session_state=session_state,
+        n_detected=n_detected,
+        n_scored=n_scored,
+        n_post_game=n_post_game,
     )

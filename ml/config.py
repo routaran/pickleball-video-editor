@@ -53,10 +53,14 @@ class InferenceConfig:
     threshold: float = 0.5
     # Median filter kernel size (in prediction steps) for smoothing
     smooth_kernel: int = 5
-    # Minimum rally duration in seconds (shorter segments are dropped)
-    min_rally_seconds: float = 3.0
-    # Merge rallies closer than this many seconds apart
-    merge_gap_seconds: float = 2.0
+    # Minimum rally duration in seconds (shorter segments are dropped).
+    # Set to 1.5s so aces, faults, and net errors (legitimate sub-3s
+    # score-advancing rallies) are not discarded before Stage 3.
+    min_rally_seconds: float = 1.5
+    # Merge rallies closer than this many seconds apart.
+    # A 2s gap can fuse a scored rally with the very next quick serve;
+    # tightening to 1s keeps independent short rallies separate.
+    merge_gap_seconds: float = 1.0
 
 
 @dataclass
@@ -85,7 +89,10 @@ class WinnerModelConfig:
     """
 
     checkpoint_path: Path = Path("ml/checkpoints/best_winner.pt")
-    confidence_threshold: float = 0.7
+    # Single source of truth for the "flag for human review" threshold.
+    # All call-sites (auto_edit, CLI, progress dialog) default to None and
+    # resolve to this value at runtime so there is exactly one place to change.
+    confidence_threshold: float = 0.75
     fps_out: int = 8
     clip_duration_s: float = 2.5
     canonical_width: int = 256
