@@ -33,11 +33,10 @@ from src.ui.styles.colors import (
     BG_BORDER,
     BG_SECONDARY,
     BG_TERTIARY,
-    PRIMARY_ACTION,
     TEXT_ACCENT,
     TEXT_PRIMARY,
-    TEXT_SECONDARY,
 )
+from src.ui.styles.components import ButtonStyles, set_label_role
 from src.ui.styles.fonts import (
     RADIUS_XL,
     SPACE_LG,
@@ -128,7 +127,7 @@ class GameOverDialog(QDialog):
         title_label = QLabel(title)
         title_label.setFont(Fonts.dialog_title())
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        set_label_role(title_label, "subheading")
         layout.addWidget(title_label)
 
         # Spacer above winner announcement
@@ -143,7 +142,7 @@ class GameOverDialog(QDialog):
             subtitle = QLabel("(Highest score wins)")
             subtitle.setFont(Fonts.label())
             subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            subtitle.setStyleSheet(f"color: {TEXT_SECONDARY};")
+            set_label_role(subtitle, "body")
             layout.addWidget(subtitle)
 
         layout.addSpacing(SPACE_MD)
@@ -159,7 +158,7 @@ class GameOverDialog(QDialog):
         rally_label = QLabel(f"{self._rally_count} rallies")
         rally_label.setFont(Fonts.label())
         rally_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        rally_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        set_label_role(rally_label, "body")
         layout.addWidget(rally_label)
 
         layout.addSpacing(SPACE_XL)
@@ -215,6 +214,7 @@ class GameOverDialog(QDialog):
         continue_btn.setFont(Fonts.button_other())
         continue_btn.setMinimumHeight(40)
         continue_btn.setObjectName("secondary_button")
+        continue_btn.setStyleSheet(ButtonStyles.secondary())
         continue_btn.clicked.connect(self._on_continue_editing)
 
         # Finish Game (primary) - right aligned
@@ -222,6 +222,7 @@ class GameOverDialog(QDialog):
         finish_btn.setFont(Fonts.button_other())
         finish_btn.setMinimumHeight(40)
         finish_btn.setObjectName("primary_button")
+        finish_btn.setStyleSheet(ButtonStyles.primary())
         finish_btn.clicked.connect(self._on_finish_game)
         finish_btn.setDefault(True)  # Enter key triggers this
 
@@ -238,33 +239,6 @@ class GameOverDialog(QDialog):
                 background-color: {BG_SECONDARY};
                 border: 1px solid {BG_BORDER};
                 border-radius: {RADIUS_XL}px;
-            }}
-
-            QPushButton#secondary_button {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                color: {TEXT_PRIMARY};
-                padding: 8px 16px;
-                min-width: 140px;
-            }}
-
-            QPushButton#secondary_button:hover {{
-                border-color: {TEXT_ACCENT};
-            }}
-
-            QPushButton#primary_button {{
-                background-color: {PRIMARY_ACTION};
-                border: 2px solid {PRIMARY_ACTION};
-                border-radius: 6px;
-                color: {BG_SECONDARY};
-                padding: 8px 16px;
-                font-weight: 600;
-                min-width: 140px;
-            }}
-
-            QPushButton#primary_button:hover {{
-                background-color: #4FE695;
             }}
         """)
 

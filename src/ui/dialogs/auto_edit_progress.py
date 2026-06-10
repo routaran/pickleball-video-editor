@@ -41,11 +41,9 @@ from src.ui.styles.colors import (
     BG_BORDER,
     BG_SECONDARY,
     BG_TERTIARY,
-    PRIMARY_ACTION,
     TEXT_ACCENT,
-    TEXT_PRIMARY,
-    TEXT_SECONDARY,
 )
+from src.ui.styles.components import ButtonStyles, set_label_role
 from src.ui.styles.fonts import (
     RADIUS_XL,
     SIZE_DIALOG_TITLE,
@@ -283,7 +281,7 @@ class AutoEditProgressDialog(QDialog):
         # Title row
         title_label = QLabel("Auto-processing video...")
         title_label.setFont(Fonts.body(size=SIZE_DIALOG_TITLE, weight=WEIGHT_SEMIBOLD))
-        title_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        set_label_role(title_label, "subheading")
         layout.addWidget(title_label)
 
         layout.addSpacing(SPACE_SM)
@@ -291,7 +289,7 @@ class AutoEditProgressDialog(QDialog):
         # Phase label — shows the current pipeline stage
         self._phase_label = QLabel("Initialising pipeline...")
         self._phase_label.setFont(Fonts.label())
-        self._phase_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        set_label_role(self._phase_label, "body")
         self._phase_label.setWordWrap(True)
         layout.addWidget(self._phase_label)
 
@@ -314,6 +312,10 @@ class AutoEditProgressDialog(QDialog):
         self._cancel_btn.setFont(Fonts.button_other())
         self._cancel_btn.setMinimumHeight(40)
         self._cancel_btn.setObjectName("cancel_button")
+        self._cancel_btn.setStyleSheet(
+            ButtonStyles.secondary()
+            + f"QPushButton:hover {{ border-color: {ACTION_DANGER}; color: {ACTION_DANGER}; }}"
+        )
         self._cancel_btn.clicked.connect(self._on_cancel_clicked)
         button_row.addWidget(self._cancel_btn)
 
@@ -340,26 +342,6 @@ class AutoEditProgressDialog(QDialog):
             QProgressBar::chunk {{
                 background-color: {TEXT_ACCENT};
                 border-radius: 3px;
-            }}
-
-            QPushButton#cancel_button {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                color: {TEXT_PRIMARY};
-                padding: 8px 24px;
-                min-width: 100px;
-            }}
-
-            QPushButton#cancel_button:hover {{
-                border-color: {ACTION_DANGER};
-                color: {ACTION_DANGER};
-            }}
-
-            QPushButton#cancel_button:disabled {{
-                opacity: 0.4;
-                border-color: {BG_BORDER};
-                color: {TEXT_SECONDARY};
             }}
         """)
 

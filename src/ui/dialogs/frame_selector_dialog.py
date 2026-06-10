@@ -40,6 +40,7 @@ from src.ui.styles.colors import (
     TEXT_SECONDARY,
     UNDO,
 )
+from src.ui.styles.components import ButtonStyles
 from src.ui.styles.fonts import (
     Fonts,
     SPACE_MD,
@@ -239,6 +240,7 @@ class FrameSelectorDialog(QDialog):
         self._cancel_btn.setFont(Fonts.button_other())
         self._cancel_btn.setFixedHeight(36)
         self._cancel_btn.setMinimumWidth(90)
+        self._cancel_btn.setStyleSheet(ButtonStyles.outline(UNDO))
         btn_row.addWidget(self._cancel_btn)
 
         self._confirm_btn = QPushButton("Use This Frame")
@@ -246,6 +248,7 @@ class FrameSelectorDialog(QDialog):
         self._confirm_btn.setFont(Fonts.button_other())
         self._confirm_btn.setFixedHeight(36)
         self._confirm_btn.setMinimumWidth(120)
+        self._confirm_btn.setStyleSheet(ButtonStyles.primary())
         self._confirm_btn.setEnabled(False)  # enabled after first successful extract
         btn_row.addWidget(self._confirm_btn)
 
@@ -306,37 +309,6 @@ class FrameSelectorDialog(QDialog):
                 border-radius: 3px;
             }}
 
-            QPushButton#cancelButton {{
-                background-color: transparent;
-                border: 1px solid {UNDO};
-                color: {UNDO};
-                padding: 6px 16px;
-                border-radius: {RADIUS_MD}px;
-                font-size: 13px;
-            }}
-
-            QPushButton#cancelButton:hover {{
-                background-color: {BG_TERTIARY};
-            }}
-
-            QPushButton#confirmButton {{
-                background-color: {PRIMARY_ACTION};
-                border: none;
-                color: {BG_PRIMARY};
-                padding: 6px 16px;
-                border-radius: {RADIUS_MD}px;
-                font-size: 13px;
-                font-weight: bold;
-            }}
-
-            QPushButton#confirmButton:hover:enabled {{
-                background-color: {TEXT_PRIMARY};
-            }}
-
-            QPushButton#confirmButton:disabled {{
-                background-color: {BG_TERTIARY};
-                color: {TEXT_DISABLED};
-            }}
         """)
 
     def _connect_signals(self) -> None:

@@ -330,7 +330,7 @@ class TestWindowSizeTab:
         dialog.tab_widget.setCurrentIndex(2)  # Window Size tab
 
         assert dialog.min_width_spin.value() == 800
-        assert dialog.min_height_spin.value() == 600
+        assert dialog.min_height_spin.value() == 540
         assert dialog.max_width_spin.value() == 0  # Unlimited
         assert dialog.max_height_spin.value() == 0  # Unlimited
 
@@ -408,7 +408,7 @@ class TestWindowSizeTab:
         # Minimum size ranges
         assert dialog.min_width_spin.minimum() == 800
         assert dialog.min_width_spin.maximum() == 3840
-        assert dialog.min_height_spin.minimum() == 600
+        assert dialog.min_height_spin.minimum() == 540
         assert dialog.min_height_spin.maximum() == 2160
 
         # Maximum size ranges (0 = unlimited)

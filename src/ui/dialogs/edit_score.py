@@ -29,17 +29,19 @@ from src.ui.styles.colors import (
     BG_SECONDARY,
     BG_TERTIARY,
     BG_BORDER,
+    DANGER_TEXT,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     TEXT_ACCENT,
-    PRIMARY_ACTION,
 )
+from src.ui.styles.components import ButtonStyles, InputStyles
 from src.ui.styles.fonts import (
     Fonts,
     SPACE_MD,
     SPACE_LG,
     RADIUS_XL,
 )
+from src.ui.styles.icons import pixmap as make_pixmap
 
 
 @dataclass
@@ -132,9 +134,10 @@ class EditScoreDialog(QDialog):
         self.current_score_display.setObjectName("current_score_display")
         current_container.addWidget(self.current_score_display)
 
-        # Arrow
-        arrow_label = QLabel("→")
-        arrow_label.setFont(Fonts.score_display())
+        # Arrow — Lucide arrow-right
+        arrow_label = QLabel()
+        arrow_label.setPixmap(make_pixmap("arrow-right", TEXT_SECONDARY, 24))
+        arrow_label.setFixedSize(24, 24)
         arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # New score input
@@ -150,6 +153,7 @@ class EditScoreDialog(QDialog):
         )
         self.new_score_input.setFixedHeight(48)
         self.new_score_input.setObjectName("new_score_input")
+        self.new_score_input.setStyleSheet(InputStyles.line_edit())
         new_container.addWidget(self.new_score_input)
 
         # Format hint
@@ -200,6 +204,7 @@ class EditScoreDialog(QDialog):
         self.cancel_button.setFixedHeight(40)
         self.cancel_button.setMinimumWidth(100)
         self.cancel_button.setObjectName("cancel_button")
+        self.cancel_button.setStyleSheet(ButtonStyles.secondary())
         button_layout.addWidget(self.cancel_button)
 
         self.apply_button = QPushButton("Apply")
@@ -207,6 +212,7 @@ class EditScoreDialog(QDialog):
         self.apply_button.setFixedHeight(40)
         self.apply_button.setMinimumWidth(100)
         self.apply_button.setObjectName("apply_button")
+        self.apply_button.setStyleSheet(ButtonStyles.primary())
         self.apply_button.setEnabled(False)
         button_layout.addWidget(self.apply_button)
 
@@ -235,29 +241,13 @@ class EditScoreDialog(QDialog):
                 color: {TEXT_SECONDARY};
             }}
 
-            QLineEdit {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 4px;
-                padding: 8px;
-                color: {TEXT_PRIMARY};
-            }}
-
-            QLineEdit:focus {{
-                border-color: {TEXT_ACCENT};
-            }}
-
-            QLineEdit#new_score_input {{
-                font-variant-numeric: tabular-nums;
-            }}
-
             QLabel#format_hint {{
                 color: {TEXT_SECONDARY};
                 margin-top: 4px;
             }}
 
             QLabel#error_label {{
-                color: #EF5350;
+                color: {DANGER_TEXT};
                 margin-top: -8px;
                 margin-bottom: 8px;
             }}
@@ -277,37 +267,6 @@ class EditScoreDialog(QDialog):
 
             QTextEdit:focus {{
                 border-color: {TEXT_ACCENT};
-            }}
-
-            QPushButton {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                padding: 8px 16px;
-                color: {TEXT_PRIMARY};
-            }}
-
-            QPushButton:hover:!disabled {{
-                background-color: {BG_BORDER};
-            }}
-
-            QPushButton#apply_button {{
-                background-color: {PRIMARY_ACTION};
-                border-color: {PRIMARY_ACTION};
-                color: {BG_SECONDARY};
-                font-weight: 600;
-            }}
-
-            QPushButton#apply_button:hover:!disabled {{
-                background-color: {TEXT_ACCENT};
-                border-color: {TEXT_ACCENT};
-            }}
-
-            QPushButton:disabled {{
-                opacity: 0.4;
-                background-color: {BG_TERTIARY};
-                border-color: {BG_BORDER};
-                color: {TEXT_SECONDARY};
             }}
         """)
 
@@ -362,7 +321,7 @@ class EditScoreDialog(QDialog):
         Args:
             message: Error message to display
         """
-        self.error_label.setText(f"⚠ {message}")
+        self.error_label.setText(message)
         self.error_label.setVisible(True)
 
     def _on_apply(self) -> None:

@@ -35,12 +35,10 @@ from PyQt6.QtWidgets import (
 from src.ui.styles.colors import (
     BG_BORDER,
     BG_SECONDARY,
-    BG_TERTIARY,
-    PRIMARY_ACTION,
     TEXT_ACCENT,
-    TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
+from src.ui.styles.components import ButtonStyles, InputStyles, set_label_role
 from src.ui.styles.fonts import (
     RADIUS_XL,
     SPACE_LG,
@@ -49,6 +47,7 @@ from src.ui.styles.fonts import (
     SPACE_XL,
     Fonts,
 )
+from src.ui.styles.icons import pixmap as make_pixmap
 
 
 @dataclass
@@ -128,16 +127,16 @@ class ExportCompleteDialog(QDialog):
         header_layout = QHBoxLayout()
         header_layout.setSpacing(SPACE_MD)
 
-        # Checkmark icon (using Unicode)
-        checkmark_label = QLabel("✓")
-        checkmark_label.setFont(Fonts.body(size=28, weight=700))
-        checkmark_label.setStyleSheet(f"color: {TEXT_ACCENT};")
+        # Checkmark icon — Lucide circle-check at 32px green
+        checkmark_label = QLabel()
+        checkmark_label.setPixmap(make_pixmap("circle-check", TEXT_ACCENT, 32))
+        checkmark_label.setFixedSize(32, 32)
         header_layout.addWidget(checkmark_label)
 
         # "Export Complete" title
         title_label = QLabel("Export Complete")
         title_label.setFont(Fonts.dialog_title())
-        title_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        set_label_role(title_label, "subheading")
         header_layout.addWidget(title_label)
         header_layout.addStretch()
 
@@ -148,7 +147,7 @@ class ExportCompleteDialog(QDialog):
         # "Kdenlive project saved to:" label
         path_label = QLabel("Kdenlive project saved to:")
         path_label.setFont(Fonts.label())
-        path_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        set_label_role(path_label, "body")
         layout.addWidget(path_label)
 
         layout.addSpacing(SPACE_SM)
@@ -164,7 +163,7 @@ class ExportCompleteDialog(QDialog):
             # Checkbox
             self._delete_checkbox = QCheckBox("Delete saved session for this video")
             self._delete_checkbox.setFont(Fonts.label())
-            self._delete_checkbox.setStyleSheet(f"color: {TEXT_PRIMARY};")
+            self._delete_checkbox.setStyleSheet(InputStyles.checkbox())
             layout.addWidget(self._delete_checkbox)
 
             # Help text
@@ -192,6 +191,7 @@ class ExportCompleteDialog(QDialog):
         path_field.setReadOnly(True)
         path_field.setFont(Fonts.input_text())
         path_field.setObjectName("path_display")
+        path_field.setStyleSheet(InputStyles.line_edit())
         path_field.setCursorPosition(0)  # Scroll to start of path
 
         return path_field
@@ -213,6 +213,7 @@ class ExportCompleteDialog(QDialog):
         open_btn.setFont(Fonts.button_other())
         open_btn.setMinimumHeight(40)
         open_btn.setObjectName("secondary_button")
+        open_btn.setStyleSheet(ButtonStyles.secondary())
         open_btn.clicked.connect(self._on_open_folder)
 
         # Done (primary) - right button
@@ -220,6 +221,7 @@ class ExportCompleteDialog(QDialog):
         done_btn.setFont(Fonts.button_other())
         done_btn.setMinimumHeight(40)
         done_btn.setObjectName("primary_button")
+        done_btn.setStyleSheet(ButtonStyles.primary())
         done_btn.clicked.connect(self._on_done)
         done_btn.setDefault(True)  # Enter key triggers this
 
@@ -235,71 +237,6 @@ class ExportCompleteDialog(QDialog):
                 background-color: {BG_SECONDARY};
                 border: 1px solid {BG_BORDER};
                 border-radius: {RADIUS_XL}px;
-            }}
-
-            QLineEdit#path_display {{
-                background-color: {BG_TERTIARY};
-                border: 1px solid {BG_BORDER};
-                border-radius: 4px;
-                color: {TEXT_PRIMARY};
-                padding: 10px 12px;
-                selection-background-color: {TEXT_ACCENT};
-                selection-color: {BG_SECONDARY};
-            }}
-
-            QCheckBox {{
-                spacing: 8px;
-            }}
-
-            QCheckBox::indicator {{
-                width: 18px;
-                height: 18px;
-                border: 2px solid {BG_BORDER};
-                border-radius: 4px;
-                background-color: {BG_TERTIARY};
-            }}
-
-            QCheckBox::indicator:hover {{
-                border-color: {TEXT_ACCENT};
-            }}
-
-            QCheckBox::indicator:checked {{
-                background-color: {TEXT_ACCENT};
-                border-color: {TEXT_ACCENT};
-                image: url(none);  /* Remove default checkmark, we'll use border hack */
-            }}
-
-            QCheckBox::indicator:checked {{
-                /* Use a custom checkmark */
-                background-color: {TEXT_ACCENT};
-                border-color: {TEXT_ACCENT};
-            }}
-
-            QPushButton#secondary_button {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                color: {TEXT_PRIMARY};
-                padding: 8px 16px;
-                min-width: 140px;
-            }}
-
-            QPushButton#secondary_button:hover {{
-                border-color: {TEXT_PRIMARY};
-            }}
-
-            QPushButton#primary_button {{
-                background-color: {PRIMARY_ACTION};
-                border: 2px solid {PRIMARY_ACTION};
-                border-radius: 6px;
-                color: {BG_SECONDARY};
-                padding: 8px 16px;
-                font-weight: 600;
-                min-width: 140px;
-            }}
-
-            QPushButton#primary_button:hover {{
-                background-color: #4FE695;
             }}
         """)
 

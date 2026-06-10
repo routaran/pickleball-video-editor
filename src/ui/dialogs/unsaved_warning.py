@@ -31,11 +31,8 @@ from PyQt6.QtWidgets import (
 from src.ui.styles.colors import (
     BG_BORDER,
     BG_SECONDARY,
-    BG_TERTIARY,
-    PRIMARY_ACTION,
-    TEXT_PRIMARY,
-    TEXT_SECONDARY,
 )
+from src.ui.styles.components import ButtonStyles, set_label_role
 from src.ui.styles.fonts import (
     RADIUS_XL,
     SPACE_LG,
@@ -113,7 +110,7 @@ class UnsavedWarningDialog(QDialog):
         title_label = QLabel("Unsaved Changes")
         title_label.setFont(Fonts.dialog_title())
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        set_label_role(title_label, "subheading")
         layout.addWidget(title_label)
 
         layout.addSpacing(SPACE_XL)
@@ -122,7 +119,7 @@ class UnsavedWarningDialog(QDialog):
         message_label = QLabel("You have unsaved changes that will be lost.")
         message_label.setFont(Fonts.label())
         message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        message_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        set_label_role(message_label, "body")
         message_label.setWordWrap(True)
         layout.addWidget(message_label)
 
@@ -153,6 +150,7 @@ class UnsavedWarningDialog(QDialog):
         dont_save_btn.setFont(Fonts.button_other())
         dont_save_btn.setMinimumHeight(40)
         dont_save_btn.setObjectName("secondary_button")
+        dont_save_btn.setStyleSheet(ButtonStyles.secondary())
         dont_save_btn.clicked.connect(self._on_dont_save)
 
         # Cancel (secondary) - center
@@ -160,6 +158,7 @@ class UnsavedWarningDialog(QDialog):
         cancel_btn.setFont(Fonts.button_other())
         cancel_btn.setMinimumHeight(40)
         cancel_btn.setObjectName("secondary_button")
+        cancel_btn.setStyleSheet(ButtonStyles.secondary())
         cancel_btn.clicked.connect(self._on_cancel)
 
         # Save & Quit (primary) - right
@@ -167,6 +166,7 @@ class UnsavedWarningDialog(QDialog):
         save_quit_btn.setFont(Fonts.button_other())
         save_quit_btn.setMinimumHeight(40)
         save_quit_btn.setObjectName("primary_button")
+        save_quit_btn.setStyleSheet(ButtonStyles.primary())
         save_quit_btn.clicked.connect(self._on_save_and_quit)
         save_quit_btn.setDefault(True)  # Enter key triggers this
 
@@ -184,33 +184,6 @@ class UnsavedWarningDialog(QDialog):
                 background-color: {BG_SECONDARY};
                 border: 1px solid {BG_BORDER};
                 border-radius: {RADIUS_XL}px;
-            }}
-
-            QPushButton#secondary_button {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                color: {TEXT_PRIMARY};
-                padding: 8px 16px;
-                min-width: 110px;
-            }}
-
-            QPushButton#secondary_button:hover {{
-                border-color: {TEXT_PRIMARY};
-            }}
-
-            QPushButton#primary_button {{
-                background-color: {PRIMARY_ACTION};
-                border: 2px solid {PRIMARY_ACTION};
-                border-radius: 6px;
-                color: {BG_SECONDARY};
-                padding: 8px 16px;
-                font-weight: 600;
-                min-width: 130px;
-            }}
-
-            QPushButton#primary_button:hover {{
-                background-color: #4FE695;
             }}
         """)
 

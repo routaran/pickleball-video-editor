@@ -51,8 +51,8 @@ from src.ui.styles.colors import (
     PRIMARY_ACTION,
     TEXT_ACCENT,
     TEXT_PRIMARY,
-    TEXT_SECONDARY,
 )
+from src.ui.styles.components import ButtonStyles, set_label_role
 from src.ui.styles.fonts import (
     RADIUS_XL,
     SPACE_LG,
@@ -407,7 +407,7 @@ class ExportProgressDialog(QDialog):
         # Title
         self._title_label = QLabel("Exporting Video")
         self._title_label.setFont(Fonts.dialog_title())
-        self._title_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        set_label_role(self._title_label, "subheading")
         header_layout.addWidget(self._title_label)
         header_layout.addStretch()
 
@@ -416,6 +416,7 @@ class ExportProgressDialog(QDialog):
         self._minimize_btn.setObjectName("minimize_button")
         self._minimize_btn.setFixedSize(28, 28)
         self._minimize_btn.setToolTip("Minimize to continue working")
+        self._minimize_btn.setStyleSheet(ButtonStyles.compact())
         self._minimize_btn.clicked.connect(self.showMinimized)
         header_layout.addWidget(self._minimize_btn)
 
@@ -424,7 +425,7 @@ class ExportProgressDialog(QDialog):
         # Status label
         self._status_label = QLabel("Preparing export...")
         self._status_label.setFont(Fonts.label())
-        self._status_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        set_label_role(self._status_label, "body")
         layout.addWidget(self._status_label)
 
         layout.addSpacing(SPACE_SM)
@@ -448,6 +449,10 @@ class ExportProgressDialog(QDialog):
         self._cancel_btn.setFont(Fonts.button_other())
         self._cancel_btn.setMinimumHeight(40)
         self._cancel_btn.setObjectName("cancel_button")
+        self._cancel_btn.setStyleSheet(
+            ButtonStyles.secondary()
+            + f"QPushButton:hover {{ border-color: {ACTION_DANGER}; color: {ACTION_DANGER}; }}"
+        )
         self._cancel_btn.clicked.connect(self._on_cancel)
         button_layout.addWidget(self._cancel_btn)
 
@@ -476,32 +481,6 @@ class ExportProgressDialog(QDialog):
             QProgressBar::chunk {{
                 background-color: {TEXT_ACCENT};
                 border-radius: 3px;
-            }}
-
-            QPushButton#cancel_button {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                color: {TEXT_PRIMARY};
-                padding: 8px 24px;
-                min-width: 100px;
-            }}
-
-            QPushButton#cancel_button:hover {{
-                border-color: {ACTION_DANGER};
-                color: {ACTION_DANGER};
-            }}
-
-            QPushButton#minimize_button {{
-                background-color: {BG_TERTIARY};
-                border: 1px solid {BG_BORDER};
-                border-radius: 4px;
-                color: {TEXT_PRIMARY};
-                font-weight: bold;
-            }}
-
-            QPushButton#minimize_button:hover {{
-                background-color: {PRIMARY_ACTION};
             }}
         """)
 

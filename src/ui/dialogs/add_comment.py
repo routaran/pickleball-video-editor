@@ -31,8 +31,8 @@ from src.ui.styles.colors import (
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     TEXT_ACCENT,
-    PRIMARY_ACTION,
 )
+from src.ui.styles.components import ButtonStyles
 from src.ui.styles.fonts import (
     Fonts,
     SPACE_MD,
@@ -187,6 +187,7 @@ class AddCommentDialog(QDialog):
         self.cancel_button.setFixedHeight(40)
         self.cancel_button.setMinimumWidth(100)
         self.cancel_button.setObjectName("cancel_button")
+        self.cancel_button.setStyleSheet(ButtonStyles.secondary())
         button_layout.addWidget(self.cancel_button)
 
         self.add_button = QPushButton("Add")
@@ -194,6 +195,7 @@ class AddCommentDialog(QDialog):
         self.add_button.setFixedHeight(40)
         self.add_button.setMinimumWidth(100)
         self.add_button.setObjectName("add_button")
+        self.add_button.setStyleSheet(ButtonStyles.primary())
         self.add_button.setEnabled(False)  # Initially disabled
         button_layout.addWidget(self.add_button)
 
@@ -289,37 +291,6 @@ class AddCommentDialog(QDialog):
             QFrame#separator {{
                 background-color: {BG_BORDER};
                 max-height: 1px;
-            }}
-
-            QPushButton {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                padding: 8px 16px;
-                color: {TEXT_PRIMARY};
-            }}
-
-            QPushButton:hover:!disabled {{
-                background-color: {BG_BORDER};
-            }}
-
-            QPushButton#add_button {{
-                background-color: {PRIMARY_ACTION};
-                border-color: {PRIMARY_ACTION};
-                color: {BG_SECONDARY};
-                font-weight: 600;
-            }}
-
-            QPushButton#add_button:hover:!disabled {{
-                background-color: {TEXT_ACCENT};
-                border-color: {TEXT_ACCENT};
-            }}
-
-            QPushButton:disabled {{
-                opacity: 0.4;
-                background-color: {BG_TERTIARY};
-                border-color: {BG_BORDER};
-                color: {TEXT_SECONDARY};
             }}
         """)
 

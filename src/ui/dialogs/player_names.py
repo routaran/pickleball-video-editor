@@ -27,11 +27,11 @@ from src.ui.styles.colors import (
     BG_BORDER,
     BG_SECONDARY,
     BG_TERTIARY,
-    PRIMARY_ACTION,
     TEXT_ACCENT,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
+from src.ui.styles.components import ButtonStyles, InputStyles
 from src.ui.styles.fonts import (
     RADIUS_XL,
     SPACE_LG,
@@ -143,11 +143,13 @@ class PlayerNamesDialog(QDialog):
 
         self._team1_player1_edit = QLineEdit()
         self._team1_player1_edit.setPlaceholderText("Player 1 name")
+        self._team1_player1_edit.setStyleSheet(InputStyles.line_edit())
         team1_layout.addRow("Player 1:", self._team1_player1_edit)
 
         if is_doubles:
             self._team1_player2_edit = QLineEdit()
             self._team1_player2_edit.setPlaceholderText("Player 2 name")
+            self._team1_player2_edit.setStyleSheet(InputStyles.line_edit())
             team1_layout.addRow("Player 2:", self._team1_player2_edit)
         else:
             self._team1_player2_edit = None
@@ -164,11 +166,13 @@ class PlayerNamesDialog(QDialog):
 
         self._team2_player1_edit = QLineEdit()
         self._team2_player1_edit.setPlaceholderText("Player 1 name")
+        self._team2_player1_edit.setStyleSheet(InputStyles.line_edit())
         team2_layout.addRow("Player 1:", self._team2_player1_edit)
 
         if is_doubles:
             self._team2_player2_edit = QLineEdit()
             self._team2_player2_edit.setPlaceholderText("Player 2 name")
+            self._team2_player2_edit.setStyleSheet(InputStyles.line_edit())
             team2_layout.addRow("Player 2:", self._team2_player2_edit)
         else:
             self._team2_player2_edit = None
@@ -185,6 +189,7 @@ class PlayerNamesDialog(QDialog):
         self._cancel_button.setFixedHeight(40)
         self._cancel_button.setMinimumWidth(100)
         self._cancel_button.setObjectName("cancel_button")
+        self._cancel_button.setStyleSheet(ButtonStyles.secondary())
         button_layout.addWidget(self._cancel_button)
 
         self._apply_button = QPushButton("Apply")
@@ -192,6 +197,7 @@ class PlayerNamesDialog(QDialog):
         self._apply_button.setFixedHeight(40)
         self._apply_button.setMinimumWidth(100)
         self._apply_button.setObjectName("apply_button")
+        self._apply_button.setStyleSheet(ButtonStyles.primary())
         button_layout.addWidget(self._apply_button)
 
         layout.addLayout(button_layout)
@@ -237,42 +243,6 @@ class PlayerNamesDialog(QDialog):
             QGroupBox#team1_group {{
                 border-color: {TEXT_ACCENT};
                 border-width: 2px;
-            }}
-
-            QLineEdit {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 4px;
-                padding: 8px;
-                color: {TEXT_PRIMARY};
-            }}
-
-            QLineEdit:focus {{
-                border-color: {TEXT_ACCENT};
-            }}
-
-            QPushButton {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                padding: 8px 16px;
-                color: {TEXT_PRIMARY};
-            }}
-
-            QPushButton:hover:!disabled {{
-                background-color: {BG_BORDER};
-            }}
-
-            QPushButton#apply_button {{
-                background-color: {PRIMARY_ACTION};
-                border-color: {PRIMARY_ACTION};
-                color: {BG_SECONDARY};
-                font-weight: 600;
-            }}
-
-            QPushButton#apply_button:hover:!disabled {{
-                background-color: {TEXT_ACCENT};
-                border-color: {TEXT_ACCENT};
             }}
         """)
 

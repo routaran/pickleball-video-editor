@@ -296,11 +296,11 @@ class TestWindowSizeConfig:
     """Test WindowSizeConfig serialization and constraints."""
 
     def test_default_values(self):
-        """Verify default min 800x600, max unlimited (0x0)."""
+        """Verify default min 800x540, max unlimited (0x0)."""
         config = WindowSizeConfig()
 
         assert config.min_width == 800
-        assert config.min_height == 600
+        assert config.min_height == 540
         assert config.max_width == 0   # 0 = unlimited
         assert config.max_height == 0  # 0 = unlimited
 
@@ -350,7 +350,7 @@ class TestWindowSizeConfig:
         config = WindowSizeConfig.from_dict(data)
 
         assert config.min_width == 1920
-        assert config.min_height == 600  # Default
+        assert config.min_height == 540  # Default
         assert config.max_width == 0      # Default
         assert config.max_height == 0     # Default
 
@@ -359,7 +359,7 @@ class TestWindowSizeConfig:
         config = WindowSizeConfig.from_dict({})
 
         assert config.min_width == 800
-        assert config.min_height == 600
+        assert config.min_height == 540
         assert config.max_width == 0
         assert config.max_height == 0
 
@@ -385,7 +385,7 @@ class TestAppSettings:
 
         # Verify window size defaults
         assert settings.window_size.min_width == 800
-        assert settings.window_size.min_height == 600
+        assert settings.window_size.min_height == 540
         assert settings.window_size.max_width == 0
         assert settings.window_size.max_height == 0
 
@@ -584,7 +584,7 @@ class TestAppSettings:
 
         # Check window_size section
         assert data["window_size"]["min_width"] == 1600
-        assert data["window_size"]["min_height"] == 600
+        assert data["window_size"]["min_height"] == 540
 
     def test_save_json_format(self, temp_config_dir):
         """Saved JSON is well-formatted and readable."""

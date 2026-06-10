@@ -33,10 +33,9 @@ from src.ui.styles.colors import (
     BG_BORDER,
     BG_SECONDARY,
     BG_TERTIARY,
-    PRIMARY_ACTION,
     TEXT_PRIMARY,
-    TEXT_SECONDARY,
 )
+from src.ui.styles.components import ButtonStyles, set_label_role
 from src.ui.styles.fonts import (
     RADIUS_XL,
     SPACE_LG,
@@ -142,13 +141,13 @@ class ResumeSessionDialog(QDialog):
         title_label = QLabel("Resume Session?")
         title_label.setFont(Fonts.dialog_title())
         title_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        title_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        set_label_role(title_label, "subheading")
         layout.addWidget(title_label)
 
         # "Found saved session for:" label
         found_label = QLabel("Found saved session for:")
         found_label.setFont(Fonts.label())
-        found_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        set_label_role(found_label, "body")
         layout.addWidget(found_label)
 
         # Video filename display box
@@ -219,7 +218,7 @@ class ResumeSessionDialog(QDialog):
         # Section title
         title = QLabel("SESSION DETAILS")
         title.setFont(Fonts.body(size=12, weight=600))
-        title.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        set_label_role(title, "sectionLabel")
         layout.addWidget(title)
 
         layout.addSpacing(SPACE_SM)
@@ -260,7 +259,7 @@ class ResumeSessionDialog(QDialog):
 
         detail_label = QLabel(text)
         detail_label.setFont(Fonts.label())
-        detail_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        set_label_role(detail_label, "bodyPrimary")
         return detail_label
 
     def _create_button_row(self) -> QHBoxLayout:
@@ -277,6 +276,7 @@ class ResumeSessionDialog(QDialog):
         fresh_btn.setFont(Fonts.button_other())
         fresh_btn.setMinimumHeight(40)
         fresh_btn.setObjectName("secondary_button")
+        fresh_btn.setStyleSheet(ButtonStyles.secondary())
         fresh_btn.clicked.connect(self._on_start_fresh)
 
         # Resume Session (primary) - right aligned
@@ -284,6 +284,7 @@ class ResumeSessionDialog(QDialog):
         resume_btn.setFont(Fonts.button_other())
         resume_btn.setMinimumHeight(40)
         resume_btn.setObjectName("primary_button")
+        resume_btn.setStyleSheet(ButtonStyles.primary())
         resume_btn.clicked.connect(self._on_resume_session)
         resume_btn.setDefault(True)  # Enter key triggers this
 
@@ -300,33 +301,6 @@ class ResumeSessionDialog(QDialog):
                 background-color: {BG_SECONDARY};
                 border: 1px solid {BG_BORDER};
                 border-radius: {RADIUS_XL}px;
-            }}
-
-            QPushButton#secondary_button {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                color: {TEXT_PRIMARY};
-                padding: 8px 16px;
-                min-width: 140px;
-            }}
-
-            QPushButton#secondary_button:hover {{
-                border-color: {TEXT_PRIMARY};
-            }}
-
-            QPushButton#primary_button {{
-                background-color: {PRIMARY_ACTION};
-                border: 2px solid {PRIMARY_ACTION};
-                border-radius: 6px;
-                color: {BG_SECONDARY};
-                padding: 8px 16px;
-                font-weight: 600;
-                min-width: 160px;
-            }}
-
-            QPushButton#primary_button:hover {{
-                background-color: #4FE695;
             }}
         """)
 

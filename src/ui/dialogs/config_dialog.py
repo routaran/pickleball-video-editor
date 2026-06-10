@@ -31,16 +31,18 @@ from PyQt6.QtWidgets import (
     QGroupBox,
 )
 
-from src.core.app_config import AppSettings, ShortcutConfig, SkipDurationConfig, WindowSizeConfig
+from src.core.app_config import AppSettings, ShortcutConfig, SkipDurationConfig, WindowSizeConfig, DisplayConfig
 from src.ui.styles.colors import (
     BG_SECONDARY,
     BG_TERTIARY,
     BG_BORDER,
+    DANGER_TEXT,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     TEXT_ACCENT,
-    PRIMARY_ACTION,
+    UNDO,
 )
+from src.ui.styles.components import ButtonStyles, InputStyles
 from src.ui.styles.fonts import (
     Fonts,
     SPACE_MD,
@@ -137,6 +139,10 @@ class ConfigDialog(QDialog):
         self.window_size_tab = self._create_window_size_tab()
         self.tab_widget.addTab(self.window_size_tab, "Window Size")
 
+        # Tab 4: Display
+        self.display_tab = self._create_display_tab()
+        self.tab_widget.addTab(self.display_tab, "Display")
+
         layout.addWidget(self.tab_widget)
 
         # Error message (initially hidden)
@@ -156,6 +162,7 @@ class ConfigDialog(QDialog):
         self.cancel_button.setFixedHeight(40)
         self.cancel_button.setMinimumWidth(100)
         self.cancel_button.setObjectName("cancel_button")
+        self.cancel_button.setStyleSheet(ButtonStyles.secondary())
         button_layout.addWidget(self.cancel_button)
 
         self.apply_button = QPushButton("Apply")
@@ -163,6 +170,7 @@ class ConfigDialog(QDialog):
         self.apply_button.setFixedHeight(40)
         self.apply_button.setMinimumWidth(100)
         self.apply_button.setObjectName("apply_button")
+        self.apply_button.setStyleSheet(ButtonStyles.primary())
         button_layout.addWidget(self.apply_button)
 
         layout.addLayout(button_layout)
@@ -438,7 +446,7 @@ class ConfigDialog(QDialog):
         grid.addWidget(min_height_label, 1, 0)
 
         self.min_height_spin = QSpinBox()
-        self.min_height_spin.setRange(600, 2160)
+        self.min_height_spin.setRange(540, 2160)
         self.min_height_spin.setSingleStep(100)
         self.min_height_spin.setSuffix(" px")
         self.min_height_spin.setObjectName("size_spin")
@@ -482,6 +490,7 @@ class ConfigDialog(QDialog):
         self.unlimited_max_checkbox = QCheckBox("Unlimited maximum size")
         self.unlimited_max_checkbox.setFont(Fonts.label())
         self.unlimited_max_checkbox.setObjectName("unlimited_checkbox")
+        self.unlimited_max_checkbox.setStyleSheet(InputStyles.checkbox())
         self.unlimited_max_checkbox.stateChanged.connect(self._on_unlimited_max_changed)
         layout.addWidget(self.unlimited_max_checkbox)
 
@@ -508,6 +517,66 @@ class ConfigDialog(QDialog):
         renderer_layout.addWidget(renderer_help, 1, 0, 1, 2)
         layout.addWidget(renderer_group)
 
+        layout.addStretch()
+
+        return tab
+
+    def _create_display_tab(self) -> QWidget:
+        """Create the Display configuration tab.
+
+        Provides a UI Scale combo that maps human-readable percentages to Qt
+        scale-factor floats.  A scale change takes effect after restart; the
+        tab offers a one-click "restart now" shortcut via QMessageBox.
+
+        Returns:
+            QWidget containing display configuration controls.
+        """
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(SPACE_MD)
+        layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+
+        # Instructions
+        instructions = QLabel(
+            "UI Scale controls the overall size of all interface elements.  "
+            "'Auto' lets the system choose based on screen DPI.  "
+            "Changes take effect after the application is restarted."
+        )
+        instructions.setFont(Fonts.secondary())
+        instructions.setWordWrap(True)
+        instructions.setObjectName("instructions_label")
+        layout.addWidget(instructions)
+
+        # UI Scale group
+        scale_group = QGroupBox("UI Scaling")
+        scale_group.setFont(Fonts.label())
+        scale_group.setObjectName("config_group")
+        scale_layout = QGridLayout(scale_group)
+        scale_layout.setSpacing(SPACE_MD)
+
+        scale_label = QLabel("UI Scale:")
+        scale_label.setFont(Fonts.label())
+        scale_layout.addWidget(scale_label, 0, 0)
+
+        self._scale_combo = QComboBox()
+        self._scale_combo.addItem("Auto (detect)", 0.0)
+        self._scale_combo.addItem("100%", 1.0)
+        self._scale_combo.addItem("125%", 1.25)
+        self._scale_combo.addItem("150%", 1.5)
+        self._scale_combo.addItem("175%", 1.75)
+        self._scale_combo.addItem("200%", 2.0)
+        self._scale_combo.setObjectName("scale_combo")
+        scale_layout.addWidget(self._scale_combo, 0, 1)
+
+        scale_hint = QLabel(
+            "Restart the application after changing this setting."
+        )
+        scale_hint.setFont(Fonts.secondary())
+        scale_hint.setWordWrap(True)
+        scale_hint.setObjectName("default_label")
+        scale_layout.addWidget(scale_hint, 1, 0, 1, 2)
+
+        layout.addWidget(scale_group)
         layout.addStretch()
 
         return tab
@@ -540,10 +609,10 @@ class ConfigDialog(QDialog):
             }}
 
             QLabel#error_label {{
-                color: #EF5350;
+                color: {DANGER_TEXT};
                 padding: {SPACE_MD}px;
                 background-color: rgba(239, 83, 80, 0.1);
-                border: 1px solid #EF5350;
+                border: 1px solid {UNDO};
                 border-radius: {RADIUS_MD}px;
             }}
 
@@ -638,73 +707,47 @@ class ConfigDialog(QDialog):
                 color: {TEXT_ACCENT};
             }}
 
-            QCheckBox {{
-                color: {TEXT_PRIMARY};
-                spacing: 8px;
-            }}
-
-            QCheckBox::indicator {{
-                width: 20px;
-                height: 20px;
-                border: 2px solid {BG_BORDER};
-                border-radius: 4px;
-                background-color: {BG_TERTIARY};
-            }}
-
-            QCheckBox::indicator:checked {{
-                background-color: {PRIMARY_ACTION};
-                border-color: {PRIMARY_ACTION};
-            }}
-
-            QCheckBox::indicator:hover {{
-                border-color: {TEXT_ACCENT};
-            }}
-
             QFrame#separator {{
                 background-color: {BG_BORDER};
                 max-height: 1px;
-            }}
-
-            QPushButton {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                padding: 8px 16px;
-                color: {TEXT_PRIMARY};
-            }}
-
-            QPushButton:hover:!disabled {{
-                background-color: {BG_BORDER};
-            }}
-
-            QPushButton#apply_button {{
-                background-color: {PRIMARY_ACTION};
-                border-color: {PRIMARY_ACTION};
-                color: {BG_SECONDARY};
-                font-weight: 600;
-            }}
-
-            QPushButton#apply_button:hover:!disabled {{
-                background-color: {TEXT_ACCENT};
-                border-color: {TEXT_ACCENT};
-            }}
-
-            QPushButton:disabled {{
-                opacity: 0.4;
-                background-color: {BG_TERTIARY};
-                border-color: {BG_BORDER};
-                color: {TEXT_SECONDARY};
             }}
 
             QPushButton#reset_button {{
                 background-color: transparent;
                 border: 2px solid {BG_BORDER};
                 color: {TEXT_ACCENT};
+                border-radius: 6px;
+                padding: 8px 16px;
             }}
 
             QPushButton#reset_button:hover {{
                 background-color: {BG_TERTIARY};
                 border-color: {TEXT_ACCENT};
+            }}
+
+            QComboBox {{
+                background-color: {BG_TERTIARY};
+                border: 2px solid {BG_BORDER};
+                border-radius: 4px;
+                padding: 6px 8px;
+                color: {TEXT_PRIMARY};
+                min-width: 140px;
+            }}
+
+            QComboBox:focus {{
+                border-color: {TEXT_ACCENT};
+            }}
+
+            QComboBox::drop-down {{
+                border: none;
+                width: 24px;
+            }}
+
+            QComboBox QAbstractItemView {{
+                background-color: {BG_TERTIARY};
+                border: 1px solid {BG_BORDER};
+                color: {TEXT_PRIMARY};
+                selection-background-color: {BG_BORDER};
             }}
         """)
 
@@ -760,6 +803,17 @@ class ConfigDialog(QDialog):
         else:
             self.video_renderer_combo.setCurrentIndex(0)
 
+        # UI Scale — find the combo entry whose data matches the current scale.
+        # Fall back to "Auto (detect)" (index 0) when no exact match is found.
+        current_scale = self.current_settings.display.ui_scale
+        scale_index = -1
+        for i in range(self._scale_combo.count()):
+            item_scale = self._scale_combo.itemData(i)
+            if isinstance(item_scale, float) and abs(item_scale - current_scale) < 0.01:
+                scale_index = i
+                break
+        self._scale_combo.setCurrentIndex(scale_index if scale_index >= 0 else 0)
+
         # Initial validation
         self._validate_shortcuts()
 
@@ -814,7 +868,7 @@ class ConfigDialog(QDialog):
         self.validation_errors = errors
 
         if errors:
-            error_text = "⚠ Validation Errors:\n" + "\n".join(f"  • {err}" for err in errors)
+            error_text = "Validation Errors:\n" + "\n".join(f"  • {err}" for err in errors)
             self.error_label.setText(error_text)
             self.error_label.setVisible(True)
             self.apply_button.setEnabled(False)
@@ -882,11 +936,24 @@ class ConfigDialog(QDialog):
             max_height=self.max_height_spin.value(),
         )
 
+        # Collect display settings — preserve geometry/splitter state, only
+        # update ui_scale from the combo.
+        new_scale_data = self._scale_combo.currentData()
+        new_scale = float(new_scale_data) if isinstance(new_scale_data, float) else 0.0
+        display = DisplayConfig(
+            ui_scale=new_scale,
+            last_geometry=self.current_settings.display.last_geometry,
+            review_splitter_v=self.current_settings.display.review_splitter_v,
+            review_splitter_h=self.current_settings.display.review_splitter_h,
+            last_browse_dir=self.current_settings.display.last_browse_dir,
+        )
+
         # Create result
         settings = AppSettings(
             shortcuts=shortcuts,
             skip_durations=skip_durations,
             window_size=window_size,
+            display=display,
             video=self.current_settings.video,
             encoder=self.current_settings.encoder,
         )
@@ -895,7 +962,31 @@ class ConfigDialog(QDialog):
             settings.video.renderer = renderer_data
 
         self.result = ConfigDialogResult(settings=settings)
+
+        # Detect whether the scale factor changed so we can prompt a restart.
+        old_scale = self.current_settings.display.ui_scale
+        scale_changed = abs(new_scale - old_scale) > 0.01
+
         self.accept()
+
+        if scale_changed:
+            # Save to disk immediately so the new process reads the updated value.
+            settings.save()
+
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                None,
+                "Restart Required",
+                (
+                    "The UI scale setting will take effect after a restart.\n\n"
+                    "Restart the application now?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                # src.main is already loaded in sys.modules — import is free.
+                from src.main import restart_app
+                restart_app()
 
     def get_result(self) -> ConfigDialogResult | None:
         """Get the dialog result after execution.

@@ -31,20 +31,19 @@ from src.ui.styles.colors import (
     BG_BORDER,
     BG_SECONDARY,
     BG_TERTIARY,
+    RECEIVER_WINS,
+    RECEIVER_WINS_HOVER,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
+from src.ui.styles.components import ButtonStyles
 from src.ui.styles.fonts import (
     RADIUS_XL,
     SPACE_LG,
     SPACE_MD,
     Fonts,
 )
-
-
-# Amber/warning color for destructive action
-WARNING_COLOR = "#FFB300"
-WARNING_HOVER = "#FFC940"
+from src.ui.styles.icons import pixmap as make_pixmap
 
 
 class NewGameResult(Enum):
@@ -136,12 +135,21 @@ class NewGameConfirmDialog(QDialog):
         layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
         layout.setSpacing(SPACE_LG)
 
-        # Warning icon and title
-        title_label = QLabel("⚠ Start New Game")
+        # Warning icon and title — Lucide triangle-alert + text label in a row
+        title_row = QHBoxLayout()
+        title_row.setSpacing(SPACE_MD)
+        title_row.addStretch()
+        warn_icon = QLabel()
+        warn_icon.setPixmap(make_pixmap("triangle-alert", RECEIVER_WINS, 24))
+        warn_icon.setFixedSize(24, 24)
+        title_row.addWidget(warn_icon)
+        title_label = QLabel("Start New Game")
         title_label.setFont(Fonts.dialog_title())
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setObjectName("warning_title")
-        layout.addWidget(title_label)
+        title_row.addWidget(title_label)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
         # Warning message with rally count
         if self._rally_count > 0:
@@ -227,6 +235,7 @@ class NewGameConfirmDialog(QDialog):
         self._cancel_button.setFont(Fonts.button_other())
         self._cancel_button.setMinimumHeight(40)
         self._cancel_button.setObjectName("secondary_button")
+        self._cancel_button.setStyleSheet(ButtonStyles.secondary())
 
         self._start_new_button = QPushButton("Start New Game")
         self._start_new_button.setFont(Fonts.button_other())
@@ -256,7 +265,7 @@ class NewGameConfirmDialog(QDialog):
             }}
 
             QLabel#warning_title {{
-                color: {WARNING_COLOR};
+                color: {RECEIVER_WINS};
             }}
 
             QLabel#warning_message {{
@@ -304,26 +313,13 @@ class NewGameConfirmDialog(QDialog):
                 background-color: {BG_TERTIARY};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BG_BORDER};
-                selection-background-color: {WARNING_COLOR};
+                selection-background-color: {RECEIVER_WINS};
                 selection-color: {BG_SECONDARY};
             }}
 
-            QPushButton#secondary_button {{
-                background-color: {BG_TERTIARY};
-                border: 2px solid {BG_BORDER};
-                border-radius: 6px;
-                color: {TEXT_PRIMARY};
-                padding: 8px 16px;
-                min-width: 100px;
-            }}
-
-            QPushButton#secondary_button:hover {{
-                border-color: {TEXT_PRIMARY};
-            }}
-
             QPushButton#warning_button {{
-                background-color: {WARNING_COLOR};
-                border: 2px solid {WARNING_COLOR};
+                background-color: {RECEIVER_WINS};
+                border: 2px solid {RECEIVER_WINS};
                 border-radius: 6px;
                 color: {BG_SECONDARY};
                 padding: 8px 16px;
@@ -332,8 +328,8 @@ class NewGameConfirmDialog(QDialog):
             }}
 
             QPushButton#warning_button:hover {{
-                background-color: {WARNING_HOVER};
-                border-color: {WARNING_HOVER};
+                background-color: {RECEIVER_WINS_HOVER};
+                border-color: {RECEIVER_WINS_HOVER};
             }}
         """)
 
