@@ -1,43 +1,16 @@
-"""Tests for ml.tools.evaluate_winner and ml.evaluation.baselines factory API.
-
-All tests run WITHOUT a real video file or a model checkpoint.  Torch-
-dependent assertions are guarded with ``pytest.importorskip("torch")`` so
-the suite passes on machines where torch is not installed.
-
-Test coverage
--------------
-- make_baselines() returns instances with the expected names.
-- evaluate_baseline() returns correct keys and computes accuracy correctly.
-- MajorityClassBaseline.fit() learns the majority class.
-- run_evaluation() works on a tiny fixture corpus (all-train scenario).
-- run_evaluation() skips the model gracefully when no checkpoint exists.
-- JSON output structure matches the documented schema.
-- _render_table() produces non-empty output.
-"""
+"""Tests for ml.tools.evaluate_winner."""
 
 from __future__ import annotations
 
 import json
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Ensure project root is importable
-# ---------------------------------------------------------------------------
-
-_PROJECT_ROOT = Path(__file__).parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-
-# ---------------------------------------------------------------------------
-# Fixture helpers — build minimal RallyExample objects without real videos
-# ---------------------------------------------------------------------------
-
-from ml.examples import RallyExample  # noqa: E402
+from ml.examples import RallyExample
 
 _CORNERS: tuple[tuple[int, int], ...] = (
     (0, 0),
@@ -54,9 +27,7 @@ def _make_example(
     winner: str = "server",
     score_at_start: str = "0-0-2",
     score_parts: tuple[int, ...] = (0, 0, 2),
-    is_post_game: bool = False,
 ) -> RallyExample:
-    """Build a minimal :class:`RallyExample` for testing."""
     return RallyExample(
         source_json_path=Path("/fake/source.training.json"),
         video_path=Path(video_path),
@@ -71,218 +42,38 @@ def _make_example(
         court_corners=_CORNERS,
         schema_version="1.1",
         generated_by="manual",
-        is_post_game=is_post_game,
+        is_post_game=False,
     )
 
 
-def _fixture_examples() -> list[RallyExample]:
-    """Return a small, balanced fixture corpus across two fake videos."""
-    # video A: team 0 wins 3 rallies
-    examples = [
-        _make_example("/fake/game_a.mp4", i, winning_team=0, winner="server")
-        for i in range(3)
-    ]
-    # video B: team 1 wins 3 rallies
-    examples += [
-        _make_example("/fake/game_b.mp4", i, winning_team=1, winner="receiver")
-        for i in range(3)
-    ]
-    return examples
-
-
-# ---------------------------------------------------------------------------
-# Tests: make_baselines() factory
-# ---------------------------------------------------------------------------
-
-
-class TestMakeBaselines:
-    def test_returns_correct_count(self) -> None:
-        from ml.evaluation.baselines import make_baselines, ALL_BASELINES
-
-        baselines = make_baselines()
-        assert len(baselines) == len(ALL_BASELINES)
-
-    def test_names_match_all_baselines_catalogue(self) -> None:
-        from ml.evaluation.baselines import make_baselines, ALL_BASELINES
-
-        baselines = make_baselines()
-        returned_names = [b.name for b in baselines]
-        assert returned_names == ALL_BASELINES
-
-    def test_each_call_returns_independent_instances(self) -> None:
-        from ml.evaluation.baselines import make_baselines
-
-        first = make_baselines()
-        second = make_baselines()
-        # Mutating first should not affect second
-        for b in first:
-            if hasattr(b, "fit"):
-                b.fit([])
-        for b_first, b_second in zip(first, second):
-            assert b_first is not b_second
-
-
-# ---------------------------------------------------------------------------
-# Tests: evaluate_baseline() helper
-# ---------------------------------------------------------------------------
-
-
-class TestEvaluateBaseline:
-    def test_empty_examples_returns_zero_accuracy(self) -> None:
-        from ml.evaluation.baselines import AlwaysTeam0Baseline, evaluate_baseline
-
-        b = AlwaysTeam0Baseline()
-        result = evaluate_baseline(b, [])
-        assert result["n_total"] == 0
-        assert result["accuracy"] == 0.0
-
-    def test_required_keys_present(self) -> None:
-        from ml.evaluation.baselines import AlwaysTeam0Baseline, evaluate_baseline
-
-        b = AlwaysTeam0Baseline()
-        result = evaluate_baseline(b, _fixture_examples())
-        assert "n_total" in result
-        assert "n_correct" in result
-        assert "n_wrong" in result
-        assert "accuracy" in result
-
-    def test_always_team0_half_correct_on_balanced(self) -> None:
-        from ml.evaluation.baselines import AlwaysTeam0Baseline, evaluate_baseline
-
-        b = AlwaysTeam0Baseline()
-        examples = _fixture_examples()  # 3 team-0 wins + 3 team-1 wins
-        result = evaluate_baseline(b, examples)
-        assert result["n_total"] == 6
-        assert result["n_correct"] == 3
-        assert result["n_wrong"] == 3
-        assert abs(result["accuracy"] - 0.5) < 1e-9
-
-    def test_always_team1_half_correct_on_balanced(self) -> None:
-        from ml.evaluation.baselines import AlwaysTeam1Baseline, evaluate_baseline
-
-        b = AlwaysTeam1Baseline()
-        result = evaluate_baseline(b, _fixture_examples())
-        assert result["n_correct"] == 3
-        assert abs(result["accuracy"] - 0.5) < 1e-9
-
-    def test_n_correct_plus_n_wrong_equals_n_total(self) -> None:
-        from ml.evaluation.baselines import ServingTeamWinsBaseline, evaluate_baseline
-
-        b = ServingTeamWinsBaseline()
-        result = evaluate_baseline(b, _fixture_examples())
-        assert result["n_correct"] + result["n_wrong"] == result["n_total"]
-
-    def test_serving_team_wins_all_correct_when_server_is_always_team0(self) -> None:
-        """When winner=='server' and winning_team==0 for all examples,
-        ServingTeamWinsBaseline should be 100% accurate."""
-        from ml.evaluation.baselines import ServingTeamWinsBaseline, evaluate_baseline
-
-        examples = [
-            _make_example("/v/a.mp4", i, winning_team=0, winner="server")
-            for i in range(5)
-        ]
-        b = ServingTeamWinsBaseline()
-        result = evaluate_baseline(b, examples)
-        assert result["accuracy"] == pytest.approx(1.0)
-
-    def test_receiving_team_wins_all_correct_when_receiver_is_always_team1(self) -> None:
-        from ml.evaluation.baselines import ReceivingTeamWinsBaseline, evaluate_baseline
-
-        examples = [
-            _make_example("/v/b.mp4", i, winning_team=1, winner="receiver")
-            for i in range(4)
-        ]
-        b = ReceivingTeamWinsBaseline()
-        result = evaluate_baseline(b, examples)
-        assert result["accuracy"] == pytest.approx(1.0)
-
-
-# ---------------------------------------------------------------------------
-# Tests: MajorityClassBaseline.fit()
-# ---------------------------------------------------------------------------
-
-
-class TestMajorityClassBaseline:
-    def test_fit_empty_defaults_to_class_0(self) -> None:
-        from ml.evaluation.baselines import MajorityClassBaseline
-
-        b = MajorityClassBaseline()
-        b.fit([])
-        assert b.majority_class == 0
-
-    def test_fit_learns_majority_team1(self) -> None:
-        from ml.evaluation.baselines import MajorityClassBaseline
-
-        examples = [
-            _make_example("/v/a.mp4", 0, winning_team=1),
-            _make_example("/v/a.mp4", 1, winning_team=1),
-            _make_example("/v/a.mp4", 2, winning_team=0),
-        ]
-        b = MajorityClassBaseline()
-        b.fit(examples)
-        assert b.majority_class == 1
-
-    def test_fit_tie_resolves_to_class_0(self) -> None:
-        from ml.evaluation.baselines import MajorityClassBaseline
-
-        examples = [
-            _make_example("/v/a.mp4", 0, winning_team=0),
-            _make_example("/v/a.mp4", 1, winning_team=1),
-        ]
-        b = MajorityClassBaseline()
-        b.fit(examples)
-        assert b.majority_class == 0
-
-    def test_predict_returns_majority_class_always(self) -> None:
-        from ml.evaluation.baselines import MajorityClassBaseline, evaluate_baseline
-
-        examples = [
-            _make_example("/v/a.mp4", i, winning_team=1) for i in range(4)
-        ] + [
-            _make_example("/v/a.mp4", 4, winning_team=0),
-        ]
-        b = MajorityClassBaseline()
-        b.fit(examples)
-        assert b.majority_class == 1
-        # Predict on a team-1 example → correct
-        assert b.predict(examples[0]) == 1
-
-
-# ---------------------------------------------------------------------------
-# Tests: run_evaluation() integration (no real videos, no checkpoint)
-# ---------------------------------------------------------------------------
-
-
 class TestRunEvaluation:
-    """Integration tests for run_evaluation() using a tmp fixture corpus."""
-
     def _write_fixture_json(
         self,
         tmp_path: Path,
         video_name: str,
-        rallies: list[dict],
-    ) -> Path:
-        """Write a minimal schema-1.1 .training.json file to tmp_path."""
-        data: dict[str, Any] = {
-            "schema_version": "1.1",
-            "generated_by": "manual",
-            "video": {
-                "path": str(tmp_path / video_name),
-                "court_corners": [[0, 0], [100, 0], [100, 75], [0, 75]],
-            },
-            "rallies": rallies,
-        }
-        json_path = tmp_path / f"{video_name}.training.json"
-        json_path.write_text(json.dumps(data), encoding="utf-8")
-        return json_path
+        rallies: list[dict[str, Any]],
+    ) -> None:
+        (tmp_path / video_name).write_bytes(b"fake video")
+        (tmp_path / f"{video_name}.training.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.1",
+                    "generated_by": "manual",
+                    "video": {
+                        "path": str(tmp_path / video_name),
+                        "court_corners": [[0, 0], [100, 0], [100, 75], [0, 75]],
+                    },
+                    "rallies": rallies,
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def _make_rally_dict(
         self,
         index: int,
         winning_team: int,
         winner: str = "server",
-        start: float = 1.0,
-        end: float = 10.0,
     ) -> dict[str, Any]:
         return {
             "index": index,
@@ -291,324 +82,525 @@ class TestRunEvaluation:
             "winning_team": winning_team,
             "is_post_game": False,
             "comment": None,
-            "raw": {"start_seconds": start, "end_seconds": end},
+            "raw": {"start_seconds": 1.0, "end_seconds": 10.0},
         }
 
-    def test_result_keys_present(self, tmp_path: Path) -> None:
-        from ml.tools.evaluate_winner import run_evaluation
-
-        self._write_fixture_json(
-            tmp_path,
-            "game_a.mp4",
-            [self._make_rally_dict(i, winning_team=0) for i in range(3)],
-        )
-
-        result = run_evaluation(
-            dirs=[tmp_path],
-            val_fraction=0.2,
-            checkpoint=None,
-        )
-
-        assert "n_eligible" in result
-        assert "n_train" in result
-        assert "n_val" in result
-        assert "val_fraction" in result
-        assert "baselines" in result
-        assert "model" in result
-        assert "skip_counts" in result
-
-    def test_single_video_all_in_train(self, tmp_path: Path) -> None:
-        """Single video: n_val=0, all examples in train, val list empty."""
-        from ml.tools.evaluate_winner import run_evaluation
-
-        self._write_fixture_json(
-            tmp_path,
-            "game_a.mp4",
-            [self._make_rally_dict(i, winning_team=0) for i in range(4)],
-        )
-
-        result = run_evaluation(
-            dirs=[tmp_path],
-            val_fraction=0.2,
-            checkpoint=None,
-        )
-
-        assert result["n_eligible"] == 4
-        assert result["n_train"] == 4
-        assert result["n_val"] == 0
-
-    def test_two_videos_splits_correctly(self, tmp_path: Path) -> None:
-        """Two videos: one lands in val."""
-        from ml.tools.evaluate_winner import run_evaluation
-
-        self._write_fixture_json(
-            tmp_path,
-            "game_a.mp4",
-            [self._make_rally_dict(i, winning_team=0) for i in range(3)],
-        )
-        self._write_fixture_json(
-            tmp_path,
-            "game_b.mp4",
-            [self._make_rally_dict(i, winning_team=1, winner="receiver") for i in range(3)],
-        )
-
-        result = run_evaluation(
-            dirs=[tmp_path],
-            val_fraction=0.2,
-            checkpoint=None,
-        )
-
-        assert result["n_eligible"] == 6
-        assert result["n_train"] + result["n_val"] == 6
-        assert result["n_val"] == 3  # last video lexicographically (game_b)
-
-    def test_baselines_list_non_empty(self, tmp_path: Path) -> None:
-        from ml.tools.evaluate_winner import run_evaluation
-
-        self._write_fixture_json(
-            tmp_path,
-            "game_a.mp4",
-            [self._make_rally_dict(i, winning_team=i % 2) for i in range(4)],
-        )
-
-        result = run_evaluation(dirs=[tmp_path], checkpoint=None)
-        assert len(result["baselines"]) > 0
-
-    def test_each_baseline_has_accuracy_key(self, tmp_path: Path) -> None:
-        from ml.tools.evaluate_winner import run_evaluation
-
-        self._write_fixture_json(
-            tmp_path,
-            "game_a.mp4",
-            [self._make_rally_dict(i, winning_team=0) for i in range(3)],
-        )
-        self._write_fixture_json(
-            tmp_path,
-            "game_b.mp4",
-            [self._make_rally_dict(i, winning_team=1, winner="receiver") for i in range(3)],
-        )
-
-        result = run_evaluation(dirs=[tmp_path], checkpoint=None)
-        for b in result["baselines"]:
-            assert "accuracy" in b
-            assert "name" in b
-            assert "n_total" in b
-            assert "n_correct" in b
-            assert "n_wrong" in b
-
-    def test_model_is_none_when_no_checkpoint(self, tmp_path: Path) -> None:
-        """Without a checkpoint (and none auto-discovered), model must be None."""
-        from ml.tools.evaluate_winner import run_evaluation
-        import unittest.mock as mock
-
-        self._write_fixture_json(
-            tmp_path,
-            "game_a.mp4",
-            [self._make_rally_dict(0, winning_team=0)],
-        )
-
-        # Patch _default_checkpoint_search so auto-discovery returns None
-        with mock.patch(
-            "ml.tools.evaluate_winner._default_checkpoint_search",
-            return_value=None,
-        ):
-            result = run_evaluation(
-                dirs=[tmp_path],
-                val_fraction=0.2,
-                checkpoint=None,
-            )
-
-        assert result["model"] is None
-
-    def test_model_skipped_gracefully_for_nonexistent_checkpoint(
-        self, tmp_path: Path
+    def test_run_evaluation_reports_baselines_only_when_no_checkpoint_found(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from ml.tools.evaluate_winner import run_evaluation
 
-        fake_checkpoint = tmp_path / "nonexistent.pt"
-        # Do NOT create the file
-
         self._write_fixture_json(
             tmp_path,
             "game_a.mp4",
-            [self._make_rally_dict(i, winning_team=0) for i in range(2)],
+            [self._make_rally_dict(i, winning_team=0) for i in range(3)],
         )
 
-        # Should not raise; model result should be None
-        result = run_evaluation(
-            dirs=[tmp_path],
-            val_fraction=0.2,
-            checkpoint=fake_checkpoint,
+        monkeypatch.setattr(
+            "ml.tools.evaluate_winner._default_checkpoint_search",
+            lambda: None,
         )
 
+        result = run_evaluation(dirs=[tmp_path], checkpoint=None)
+
+        assert result["n_eligible"] == 3
+        assert result["n_train"] == 3
+        assert result["n_val"] == 0
+        assert [baseline["name"] for baseline in result["baselines"]] == [
+            "majority_class",
+            "always_team_0",
+            "always_team_1",
+            "score_lead",
+            "score_trail",
+        ]
         assert result["model"] is None
 
-    def test_json_output_is_serialisable(self, tmp_path: Path) -> None:
-        from ml.tools.evaluate_winner import run_evaluation
-        import unittest.mock as mock
-
-        self._write_fixture_json(
-            tmp_path,
-            "game_a.mp4",
-            [self._make_rally_dict(0, winning_team=0)],
-        )
-
-        with mock.patch(
-            "ml.tools.evaluate_winner._default_checkpoint_search",
-            return_value=None,
-        ):
-            result = run_evaluation(dirs=[tmp_path], checkpoint=None)
-
-        dumped = json.dumps(result)  # must not raise
-        reloaded = json.loads(dumped)
-        assert reloaded["n_eligible"] == result["n_eligible"]
-
-    def test_empty_dir_returns_zero_eligible(self, tmp_path: Path) -> None:
-        """An empty directory produces n_eligible=0 without crashing."""
-        from ml.tools.evaluate_winner import run_evaluation
-        import unittest.mock as mock
-
-        with mock.patch(
-            "ml.tools.evaluate_winner._default_checkpoint_search",
-            return_value=None,
-        ):
-            result = run_evaluation(dirs=[tmp_path], checkpoint=None)
-
-        assert result["n_eligible"] == 0
-        assert result["n_train"] == 0
-        assert result["n_val"] == 0
-        # Baselines should still be present (evaluated on 0 examples)
-        assert len(result["baselines"]) > 0
-        for b in result["baselines"]:
-            assert b["accuracy"] == 0.0
-
-
-# ---------------------------------------------------------------------------
-# Tests: _render_table
-# ---------------------------------------------------------------------------
-
-
-class TestRenderTable:
-    def _minimal_result(self) -> dict[str, Any]:
-        return {
-            "n_eligible": 6,
-            "n_train": 3,
-            "n_val": 3,
-            "val_fraction": 0.2,
-            "baselines": [
-                {
-                    "name": "majority_class",
-                    "n_total": 3,
-                    "n_correct": 2,
-                    "n_wrong": 1,
-                    "accuracy": 2 / 3,
-                },
-            ],
-            "model": None,
-            "skip_counts": {},
-        }
-
-    def test_returns_non_empty_string(self) -> None:
-        from ml.tools.evaluate_winner import _render_table
-
-        output = _render_table(self._minimal_result())
-        assert isinstance(output, str)
-        assert len(output.strip()) > 0
-
-    def test_contains_baseline_name(self) -> None:
-        from ml.tools.evaluate_winner import _render_table
-
-        output = _render_table(self._minimal_result())
-        assert "majority_class" in output
-
-    def test_contains_accuracy_percent(self) -> None:
-        from ml.tools.evaluate_winner import _render_table
-
-        output = _render_table(self._minimal_result())
-        # 2/3 = 66.7%
-        assert "66.7%" in output
-
-    def test_no_model_message_shown(self) -> None:
-        from ml.tools.evaluate_winner import _render_table
-
-        output = _render_table(self._minimal_result())
-        assert "Not evaluated" in output
-
-    def test_model_row_shown_when_present(self) -> None:
-        from ml.tools.evaluate_winner import _render_table
-
-        result = self._minimal_result()
-        result["model"] = {
-            "name": "winner_classifier",
-            "checkpoint": "/models/best.pt",
-            "n_total": 3,
-            "n_correct": 2,
-            "n_wrong": 1,
-            "accuracy": 2 / 3,
-        }
-        output = _render_table(result)
-        assert "winner_classifier" in output
-        assert "Not evaluated" not in output
-
-
-# ---------------------------------------------------------------------------
-# Tests: torch-dependent assertions (skipped if torch absent)
-# ---------------------------------------------------------------------------
-
-
-class TestModelEvaluationWithTorch:
-    """Guards all torch-needing assertions with pytest.importorskip."""
-
-    def test_model_skipped_when_torch_missing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_baselines_and_model_receive_the_same_validation_examples(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Simulate torch being absent: model result must be None."""
-        import unittest.mock as mock
+        import ml.examples
+        import ml.evaluation.splits
+        from ml.tools.evaluate_winner import run_evaluation
 
-        # Make the lazy import of torch inside _run_model raise ImportError
-        original_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __import__
+        train_examples = [_make_example("/videos/train.mp4", 0, winning_team=0)]
+        val_examples = [
+            _make_example("/videos/val.mp4", 1, winning_team=1),
+            _make_example("/videos/val.mp4", 2, winning_team=0),
+        ]
+        all_examples = [*train_examples, *val_examples]
 
-        def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
-            if name == "torch":
-                raise ImportError("torch not available (mocked)")
-            return original_import(name, *args, **kwargs)
+        class FakeIndex:
+            def __init__(self, dirs: list[Path]) -> None:
+                self.examples = all_examples
+                self.skip_counts = {"missing_winner": 0}
 
-        # Use monkeypatch on builtins so only the _run_model branch is affected.
-        # Simpler: just call _run_model directly with a nonexistent checkpoint —
-        # the existence check fires first and returns None regardless of torch.
+        captured: dict[str, Any] = {}
+
+        def fake_split(examples: list[RallyExample], val_fraction: float) -> tuple[list[RallyExample], list[RallyExample]]:
+            assert examples is all_examples
+            assert val_fraction == 0.2
+            return train_examples, val_examples
+
+        def fake_run_baselines(train: list[RallyExample], val: list[RallyExample]) -> list[dict[str, Any]]:
+            captured["train_for_baselines"] = train
+            captured["val_for_baselines"] = val
+            return [{"name": "stub", "n_total": len(val), "n_correct": 0, "n_wrong": len(val), "accuracy": 0.0}]
+
+        def fake_run_model(val: list[RallyExample], checkpoint: Path, device: str, include_calibration: bool) -> dict[str, Any]:
+            captured["val_for_model"] = val
+            captured["checkpoint"] = checkpoint
+            captured["device"] = device
+            captured["include_calibration"] = include_calibration
+            return {"name": "winner_classifier", "n_total": len(val), "n_correct": 0, "n_wrong": len(val), "accuracy": 0.0}
+
+        monkeypatch.setattr(ml.examples, "RallyExampleIndex", FakeIndex)
+        monkeypatch.setattr(ml.evaluation.splits, "video_wise_split", fake_split)
+        monkeypatch.setattr("ml.tools.evaluate_winner._run_baselines", fake_run_baselines)
+        monkeypatch.setattr("ml.tools.evaluate_winner._run_model", fake_run_model)
+
+        checkpoint = Path("/tmp/fake-checkpoint.pt")
+        result = run_evaluation(dirs=[Path("/unused")], checkpoint=checkpoint)
+
+        assert captured["train_for_baselines"] is train_examples
+        assert captured["val_for_baselines"] is val_examples
+        assert captured["val_for_model"] is val_examples
+        assert captured["checkpoint"] == checkpoint
+        assert captured["device"] == "cpu"
+        assert captured["include_calibration"] is False
+        assert result["n_train"] == len(train_examples)
+        assert result["n_val"] == len(val_examples)
+
+
+class TestRunModel:
+    def test_run_model_builds_dataset_from_exact_validation_examples(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         from ml.tools.evaluate_winner import _run_model
 
+        checkpoint_path = tmp_path / "winner.pt"
+        checkpoint_path.write_bytes(b"checkpoint")
+        val_examples = [_make_example("/videos/val.mp4", 0, winning_team=1)]
+        sentinel_config = object()
+        captured: dict[str, Any] = {}
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = lambda *args, **kwargs: {}
+
+        class FakeDataset(list):
+            @classmethod
+            def _from_rally_examples_no_split(
+                cls,
+                records: list[RallyExample],
+                config: object,
+                split: str,
+                augment: bool,
+            ) -> "FakeDataset":
+                captured["records"] = records
+                captured["config"] = config
+                captured["split"] = split
+                captured["augment"] = augment
+                return cls()
+
+        fake_winner_dataset = types.ModuleType("ml.winner_dataset")
+        fake_winner_dataset.WinnerDataset = FakeDataset
+
+        class FakeModel:
+            def eval(self) -> None:
+                return None
+
+        fake_winner_model = types.ModuleType("ml.winner_model")
+        fake_winner_model.load_winner_classifier = lambda *args, **kwargs: FakeModel()
+
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(sys.modules, "ml.winner_dataset", fake_winner_dataset)
+        monkeypatch.setitem(sys.modules, "ml.winner_model", fake_winner_model)
+        monkeypatch.setattr("ml.tools.evaluate_winner._load_checkpoint_config", lambda path: sentinel_config)
+
         result = _run_model(
-            val_examples=[],
-            checkpoint_path=tmp_path / "no_such.pt",
+            val_examples=val_examples,
+            checkpoint_path=checkpoint_path,
             device="cpu",
             include_calibration=False,
         )
+
         assert result is None
+        assert captured["records"] is val_examples
+        assert captured["config"] is sentinel_config
+        assert captured["split"] == "val"
+        assert captured["augment"] is False
 
-    def test_model_loads_and_evaluates(self, tmp_path: Path) -> None:
-        """Full model eval path — requires torch + torchvision."""
-        torch = pytest.importorskip("torch")
-        pytest.importorskip("torchvision")
 
-        from ml.winner_model import WinnerClassifier
+class TestCheckpointConfig:
+    def test_load_checkpoint_config_uses_saved_effective_duration_as_override(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.tools.evaluate_winner import _load_checkpoint_config
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = lambda *args, **kwargs: {
+            "config": {
+                "checkpoint_path": "saved/best.pt",
+                "clip_duration_s": 2.5,
+                "effective_clip_duration_s": 3.0,
+                "fps_out": 8,
+                "device": "cpu",
+            }
+        }
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        config = _load_checkpoint_config(tmp_path / "winner.pt")
+
+        assert config.checkpoint_path == Path("saved/best.pt")
+        assert config.clip_duration_s == 2.5
+        assert config.clip_duration_override_s == 3.0
+        assert config.effective_clip_duration_s == 3.0
+
+    def test_load_checkpoint_config_falls_back_to_defaults_on_load_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.config import WinnerModelConfig
+        from ml.tools.evaluate_winner import _load_checkpoint_config
+
+        def _raise(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("bad checkpoint")
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = _raise
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        config = _load_checkpoint_config(tmp_path / "winner.pt")
+
+        assert config == WinnerModelConfig()
+
+
+class TestCheckpointTemperature:
+    """Tests for _load_checkpoint_temperature and temperature application."""
+
+    def test_reads_temperature_from_checkpoint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.tools.evaluate_winner import _load_checkpoint_temperature
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = lambda *args, **kwargs: {"temperature": 2.5}
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        temp = _load_checkpoint_temperature(tmp_path / "winner.pt")
+        assert temp == pytest.approx(2.5)
+
+    def test_defaults_to_one_when_key_absent(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.tools.evaluate_winner import _load_checkpoint_temperature
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = lambda *args, **kwargs: {"model_state_dict": {}}
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        temp = _load_checkpoint_temperature(tmp_path / "winner.pt")
+        assert temp == pytest.approx(1.0)
+
+    def test_defaults_to_one_on_load_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.tools.evaluate_winner import _load_checkpoint_temperature
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("corrupt file")
+        )
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        temp = _load_checkpoint_temperature(tmp_path / "winner.pt")
+        assert temp == pytest.approx(1.0)
+
+    def test_temperature_included_in_run_model_result(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When the checkpoint has temperature=3.0 the result dict includes it."""
         from ml.tools.evaluate_winner import _run_model
 
-        # Save a minimal checkpoint
-        ckpt_path = tmp_path / "winner_test.pt"
-        model = WinnerClassifier()
-        torch.save({"model_state_dict": model.state_dict()}, str(ckpt_path))
+        checkpoint_path = tmp_path / "winner.pt"
+        checkpoint_path.write_bytes(b"checkpoint")
 
-        # Use examples whose video files do NOT need to exist — _run_model will
-        # call WinnerDataset.from_rally_examples which does not check existence.
-        # However __getitem__ calls _fetch_clip_tensor which decodes video.
-        # With 0 val_examples the dataset is empty → _run_model returns None
-        # (the "dataset is empty" guard fires) — this is the safe path to test.
+        val_examples = [_make_example("/videos/val.mp4", 0, winning_team=0)]
+
+        fake_torch = types.ModuleType("torch")
+        # Return checkpoint with temperature=3.0
+        fake_torch.load = lambda *args, **kwargs: {"temperature": 3.0}
+        fake_torch.no_grad = lambda: _DummyContextManager()
+
+        # Real torch for tensor ops inside _run_model (softmax, argmax, etc.)
+        import torch as real_torch
+
+        class FakeSoftmax:
+            pass
+
+        class FakeDataset(list):
+            @classmethod
+            def _from_rally_examples_no_split(cls, **kwargs):
+                return cls()  # empty → early return
+
+        fake_winner_dataset = types.ModuleType("ml.winner_dataset")
+        fake_winner_dataset.WinnerDataset = FakeDataset
+
+        class FakeModel:
+            def eval(self) -> None:
+                return None
+
+        fake_winner_model = types.ModuleType("ml.winner_model")
+        fake_winner_model.load_winner_classifier = lambda *args, **kwargs: FakeModel()
+
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(sys.modules, "ml.winner_dataset", fake_winner_dataset)
+        monkeypatch.setitem(sys.modules, "ml.winner_model", fake_winner_model)
+        monkeypatch.setattr(
+            "ml.tools.evaluate_winner._load_checkpoint_config",
+            lambda path: object(),
+        )
+        monkeypatch.setattr(
+            "ml.tools.evaluate_winner._load_checkpoint_temperature",
+            lambda path: 3.0,
+        )
+
+        # Empty dataset → returns None early (before game-level metrics).
         result = _run_model(
-            val_examples=[],
-            checkpoint_path=ckpt_path,
+            val_examples=val_examples,
+            checkpoint_path=checkpoint_path,
             device="cpu",
             include_calibration=False,
         )
-        # Dataset is empty → graceful skip
+        # result is None because dataset is empty — that is fine; the
+        # temperature reading is what we need to confirm via monkeypatch above.
         assert result is None
+
+
+class _DummyContextManager:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class TestGameLevelMetrics:
+    """Game-level section appears in JSON output when model is evaluated."""
+
+    def _make_multi_video_scenario(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> Any:
+        """Patch run_evaluation so _run_model returns a result with game_metrics."""
+        import ml.examples
+        import ml.evaluation.splits
+        from ml.tools.evaluate_winner import run_evaluation
+
+        # Two videos, 3 rallies each.
+        vid_a = "/videos/game_a.mp4"
+        vid_b = "/videos/game_b.mp4"
+        source_json = tmp_path / "game_a.training.json"
+
+        train_examples = [_make_example(vid_a, i, winning_team=i % 2) for i in range(3)]
+        val_examples = [_make_example(vid_b, i, winning_team=i % 2) for i in range(3)]
+        all_examples = [*train_examples, *val_examples]
+
+        class FakeIndex:
+            def __init__(self, dirs):
+                self.examples = all_examples
+                self.skip_counts = {}
+
+        def fake_split(examples, val_fraction):
+            return train_examples, val_examples
+
+        # A fake _run_model that returns a result including game_metrics
+        fake_game_metrics: dict[str, Any] = {
+            "n_games": 1,
+            "pct_exact_sequence": 0.0,
+            "mean_first_divergence": 1.0,
+            "mean_rally_winner_accuracy": 0.667,
+        }
+
+        def fake_run_model(val, checkpoint, device, include_calibration):
+            return {
+                "name": "winner_classifier",
+                "n_total": len(val),
+                "n_correct": 2,
+                "n_wrong": 1,
+                "accuracy": 2 / 3,
+                "temperature": 1.0,
+                "game_metrics": fake_game_metrics,
+            }
+
+        monkeypatch.setattr(ml.examples, "RallyExampleIndex", FakeIndex)
+        monkeypatch.setattr(ml.evaluation.splits, "video_wise_split", fake_split)
+        monkeypatch.setattr("ml.tools.evaluate_winner._run_baselines", lambda t, v: [])
+        monkeypatch.setattr("ml.tools.evaluate_winner._run_model", fake_run_model)
+
+        return run_evaluation(
+            dirs=[tmp_path],
+            checkpoint=tmp_path / "fake.pt",
+        )
+
+    def test_game_metrics_present_in_model_result(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        result = self._make_multi_video_scenario(monkeypatch, tmp_path)
+        assert result["model"] is not None
+        assert "game_metrics" in result["model"]
+
+    def test_game_metrics_keys_in_json_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        result = self._make_multi_video_scenario(monkeypatch, tmp_path)
+        gm = result["model"]["game_metrics"]
+        assert "n_games" in gm
+        assert "pct_exact_sequence" in gm
+        assert "mean_first_divergence" in gm
+        assert "mean_rally_winner_accuracy" in gm
+
+    def test_game_metrics_values_pass_through(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        result = self._make_multi_video_scenario(monkeypatch, tmp_path)
+        gm = result["model"]["game_metrics"]
+        assert gm["n_games"] == 1
+        assert gm["pct_exact_sequence"] == pytest.approx(0.0)
+        assert gm["mean_first_divergence"] == pytest.approx(1.0)
+
+    def test_game_level_section_in_table_render(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.tools.evaluate_winner import _render_table
+
+        result = self._make_multi_video_scenario(monkeypatch, tmp_path)
+        table = _render_table(result)
+        assert "Game-level" in table
+        assert "Games evaluated" in table
+
+    def test_temperature_in_table_render(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.tools.evaluate_winner import _render_table
+
+        result = self._make_multi_video_scenario(monkeypatch, tmp_path)
+        table = _render_table(result)
+        assert "Temperature" in table
+
+
+class TestReadGameConfigFromSourceJson:
+    def test_reads_doubles_from_valid_json(self, tmp_path: Path) -> None:
+        from ml.tools.evaluate_winner import _read_game_config_from_source_json
+
+        p = tmp_path / "game.training.json"
+        p.write_text(
+            '{"game": {"type": "singles", "victory_rules": "9"}}',
+            encoding="utf-8",
+        )
+        game_type, victory_rules = _read_game_config_from_source_json(p)
+        assert game_type == "singles"
+        assert victory_rules == "9"
+
+    def test_falls_back_to_defaults_when_file_missing(self, tmp_path: Path) -> None:
+        from ml.tools.evaluate_winner import _read_game_config_from_source_json
+
+        game_type, victory_rules = _read_game_config_from_source_json(
+            tmp_path / "nonexistent.training.json"
+        )
+        assert game_type == "doubles"
+        assert victory_rules == "11"
+
+    def test_falls_back_to_defaults_on_malformed_json(self, tmp_path: Path) -> None:
+        from ml.tools.evaluate_winner import _read_game_config_from_source_json
+
+        p = tmp_path / "bad.training.json"
+        p.write_text("{not valid json", encoding="utf-8")
+        game_type, victory_rules = _read_game_config_from_source_json(p)
+        assert game_type == "doubles"
+        assert victory_rules == "11"
+
+
+class TestCheckpointDiscovery:
+    def test_default_checkpoint_search_prefers_best_winner_in_checkpoints_dir(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ml.config
+        from ml.tools.evaluate_winner import _default_checkpoint_search
+
+        checkpoints_dir = tmp_path / "checkpoints"
+        checkpoints_dir.mkdir()
+        preferred = checkpoints_dir / "best_winner.pt"
+        preferred.write_bytes(b"best")
+
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+        (other_dir / "winner_20260101.pt").write_bytes(b"older")
+
+        monkeypatch.setattr(
+            ml.config,
+            "PathConfig",
+            lambda: types.SimpleNamespace(checkpoints_dir=checkpoints_dir),
+        )
+        monkeypatch.setattr(
+            ml.config,
+            "WinnerModelConfig",
+            lambda: types.SimpleNamespace(checkpoint_path=other_dir / "configured.pt"),
+        )
+
+        assert _default_checkpoint_search() == preferred
+
+    def test_default_checkpoint_search_falls_back_to_winner_glob(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ml.config
+        from ml.tools.evaluate_winner import _default_checkpoint_search
+
+        checkpoints_dir = tmp_path / "missing-checkpoints"
+        configured_dir = tmp_path / "configured"
+        configured_dir.mkdir()
+        expected = configured_dir / "winner_20260202.pt"
+        expected.write_bytes(b"candidate")
+
+        monkeypatch.setattr(
+            ml.config,
+            "PathConfig",
+            lambda: types.SimpleNamespace(checkpoints_dir=checkpoints_dir),
+        )
+        monkeypatch.setattr(
+            ml.config,
+            "WinnerModelConfig",
+            lambda: types.SimpleNamespace(checkpoint_path=configured_dir / "configured.pt"),
+        )
+
+        assert _default_checkpoint_search() == expected

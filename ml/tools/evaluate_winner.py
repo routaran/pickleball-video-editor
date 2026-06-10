@@ -30,7 +30,7 @@ CLI flags
                         (default 0.2).
 --checkpoint PATH       Path to a .pt WinnerClassifier checkpoint.  When
                         omitted the tool attempts to find one automatically
-                        under ~/.local/share/pickleball-editor/models/.
+                        in the winner training output directories.
 --json                  Emit machine-readable JSON to stdout instead of the
                         human-readable table.
 --calibration           Include calibration stats (ECE) for the model
@@ -42,9 +42,10 @@ CLI flags
 from __future__ import annotations
 
 import argparse
+import dataclasses
+from pathlib import Path
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
 
@@ -56,24 +57,234 @@ __all__ = ["main", "run_evaluation"]
 # ---------------------------------------------------------------------------
 
 def _default_checkpoint_search() -> Path | None:
-    """Search the canonical model directory for a winner checkpoint.
+    """Search expected WinnerClassifier checkpoint locations.
 
-    Looks in ``~/.local/share/pickleball-editor/models/`` for any file
-    matching ``winner*.pt``, returning the lexicographically last one (which
-    is typically the most recent epoch).
+    Uses current training defaults first:
+
+    - ``PathConfig().checkpoints_dir / "best_winner.pt"``
+    - parent directories from ``WinnerModelConfig().checkpoint_path``
+      (so we still honor a default that is a file path, not only a directory)
+    - ``winner*.pt`` files under those directories
+
+    and finally falls back to the legacy user-level models directory.
 
     Returns:
         Path to a checkpoint file or None if none is found.
     """
-    model_dir = (
+    from ml.config import PathConfig, WinnerModelConfig
+
+    checkpoints_dir = PathConfig().checkpoints_dir
+    default_cfg = WinnerModelConfig()
+
+    explicit_candidates = [checkpoints_dir / "best_winner.pt", default_cfg.checkpoint_path]
+    # Candidate path may be relative (as in config default), so check both
+    # as provided and as resolved against the current working directory.
+    explicit_candidates.append((Path.cwd() / default_cfg.checkpoint_path).resolve())
+
+    for candidate in explicit_candidates:
+        if candidate.exists():
+            return candidate
+
+    candidate_dirs: list[Path] = [checkpoints_dir, default_cfg.checkpoint_path.parent]
+    candidate_dirs.append(
         Path.home() / ".local" / "share" / "pickleball-editor" / "models"
     )
-    if not model_dir.exists():
+
+    # Deduplicate without re-ordering.
+    seen: set[str] = set()
+    ordered_dirs: list[Path] = []
+    for model_dir in candidate_dirs:
+        model_dir_key = str(model_dir)
+        if model_dir_key in seen:
+            continue
+        seen.add(model_dir_key)
+        ordered_dirs.append(model_dir)
+
+    for model_dir in ordered_dirs:
+        if not model_dir.exists():
+            continue
+
+        explicit = model_dir / "best_winner.pt"
+        if explicit.exists():
+            return explicit
+
+        candidates = sorted(model_dir.glob("winner*.pt"))
+        if candidates:
+            return candidates[-1]
+
+    return None
+
+
+
+def _load_checkpoint_temperature(checkpoint_path: Path) -> float:
+    """Read the calibration temperature scalar from a checkpoint dict.
+
+    Returns ``1.0`` (no-op) when the key is absent or the file cannot be
+    loaded, so old checkpoints are handled transparently.
+
+    Args:
+        checkpoint_path: Path to the ``.pt`` checkpoint file.
+
+    Returns:
+        Temperature value as a Python float.
+    """
+    import torch as _torch
+
+    try:
+        ckpt = _torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        if isinstance(ckpt, dict):
+            return float(ckpt.get("temperature", 1.0))
+    except Exception:
+        pass
+    return 1.0
+
+
+def _read_game_config_from_source_json(
+    source_json_path: Path,
+) -> tuple[str, str]:
+    """Read game_type and victory_rules from a ``.training.json`` file.
+
+    Falls back to ``("doubles", "11")`` with a stderr warning when the file
+    does not exist or cannot be parsed.
+
+    Args:
+        source_json_path: Path to the schema-1.1 training JSON file.
+
+    Returns:
+        Two-tuple of ``(game_type, victory_rules)`` strings.
+    """
+    if source_json_path.exists():
+        try:
+            data = json.loads(source_json_path.read_text(encoding="utf-8"))
+            game_block: dict = data.get("game", {})
+            game_type = game_block.get("type", "doubles")
+            victory_rules = str(game_block.get("victory_rules", "11"))
+            return game_type, victory_rules
+        except Exception as exc:
+            print(
+                f"[evaluate_winner] WARNING: cannot read game config from "
+                f"{source_json_path}: {exc}; falling back to doubles/11",
+                file=sys.stderr,
+            )
+    else:
+        print(
+            f"[evaluate_winner] WARNING: source JSON not found: {source_json_path};"
+            " falling back to doubles/11",
+            file=sys.stderr,
+        )
+    return "doubles", "11"
+
+
+def _compute_game_level_metrics(
+    val_examples: list,
+    all_preds: list[int],
+) -> "dict[str, Any] | None":
+    """Group val examples by video and compute aggregate game-level metrics.
+
+    Groups :class:`~ml.examples.RallyExample` items by ``video_path``, sorts
+    within each group by ``rally_index``, reads game config from each video's
+    ``source_json_path``, and calls :func:`~ml.evaluation.game_metrics.game_score_sequence_metrics`
+    per video.
+
+    Returns ``None`` when the prediction list length does not match the
+    example list length (misaligned dataset filtering).
+
+    Args:
+        val_examples: Validation :class:`~ml.examples.RallyExample` list (pre-filtered).
+        all_preds:    Per-example predictions in the same order as *val_examples*.
+
+    Returns:
+        Aggregated game-level metrics dict, or ``None`` on length mismatch.
+    """
+    if len(all_preds) != len(val_examples):
+        print(
+            f"[evaluate_winner] WARNING: prediction count ({len(all_preds)}) != "
+            f"val example count ({len(val_examples)}) — skipping game-level metrics.",
+            file=sys.stderr,
+        )
         return None
-    candidates = sorted(model_dir.glob("winner*.pt"))
-    if not candidates:
-        return None
-    return candidates[-1]
+
+    from ml.evaluation.game_metrics import aggregate_game_metrics, game_score_sequence_metrics
+
+    # Group example indices by video path string.
+    video_groups: dict[str, list[tuple[int, int]]] = {}
+    for ex_idx, ex in enumerate(val_examples):
+        key = str(ex.video_path)
+        if key not in video_groups:
+            video_groups[key] = []
+        video_groups[key].append((ex.rally_index, ex_idx))
+
+    per_game: list[dict[str, Any]] = []
+
+    for video_key in sorted(video_groups.keys()):
+        # Sort rallies within this video by rally_index for deterministic order.
+        entries = sorted(video_groups[video_key], key=lambda t: t[0])
+
+        predicted_teams: list[int] = [all_preds[ex_idx] for _, ex_idx in entries]
+        ground_truth_teams: list[int] = [
+            val_examples[ex_idx].winning_team for _, ex_idx in entries
+        ]
+
+        # Read game config from the source training JSON for this video.
+        first_example = val_examples[entries[0][1]]
+        game_type, victory_rules = _read_game_config_from_source_json(
+            first_example.source_json_path
+        )
+
+        m = game_score_sequence_metrics(
+            predicted_teams, ground_truth_teams, game_type, victory_rules
+        )
+        per_game.append(m)
+
+    return aggregate_game_metrics(per_game)
+
+
+def _load_checkpoint_config(checkpoint_path: Path) -> "WinnerModelConfig":
+    """Load persisted WinnerModelConfig metadata from a checkpoint.
+
+    Falls back to the default ``WinnerModelConfig`` when the checkpoint lacks
+    a ``"config"`` key or when the metadata cannot be parsed.
+    """
+    import torch as _torch
+
+    from ml.config import WinnerModelConfig
+
+    try:
+        checkpoint = _torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    except Exception:
+        return WinnerModelConfig()
+
+    if not isinstance(checkpoint, dict):
+        return WinnerModelConfig()
+
+    raw_config = checkpoint.get("config")
+    if not isinstance(raw_config, dict):
+        return WinnerModelConfig()
+
+    config_data: dict[str, Any] = {
+        f.name: raw_config[f.name]
+        for f in dataclasses.fields(WinnerModelConfig)
+        if f.name in raw_config
+    }
+
+    checkpoint_path_value = config_data.get("checkpoint_path")
+    if isinstance(checkpoint_path_value, str):
+        config_data["checkpoint_path"] = Path(checkpoint_path_value)
+
+    # If only the persisted effective duration is available, treat it as an
+    # override on top of the saved base duration.
+    if (
+        config_data.get("clip_duration_override_s") is None
+        and "effective_clip_duration_s" in raw_config
+    ):
+        effective_clip_duration = raw_config["effective_clip_duration_s"]
+        if isinstance(effective_clip_duration, (int, float)):
+            config_data["clip_duration_override_s"] = effective_clip_duration
+
+    try:
+        return WinnerModelConfig(**config_data)
+    except TypeError:
+        return WinnerModelConfig()
 
 
 # ---------------------------------------------------------------------------
@@ -150,13 +361,21 @@ def _run_model(
         )
         return None
 
-    # --- load model ---
+    # --- load temperature and model ---
     import torch as _torch
     from ml.winner_model import load_winner_classifier
-    from ml.config import WinnerModelConfig
+
+    # Read calibration temperature from checkpoint (1.0 for old checkpoints).
+    temperature: float = _load_checkpoint_temperature(checkpoint_path)
+
+    checkpoint_config = _load_checkpoint_config(checkpoint_path)
 
     try:
-        model = load_winner_classifier(checkpoint_path, device=device)
+        model = load_winner_classifier(
+            checkpoint_path,
+            device=device,
+            config=checkpoint_config,
+        )
     except Exception as exc:  # pragma: no cover — catch-all for load errors
         print(
             f"[evaluate_winner] WARNING: failed to load checkpoint: {exc}"
@@ -165,34 +384,20 @@ def _run_model(
         )
         return None
 
-    config = WinnerModelConfig()
-
     # --- build dataset from val examples (no augmentation) ---
     from ml.winner_dataset import WinnerDataset
 
-    # WinnerDataset.from_rally_examples applies its own internal split logic
-    # based on the examples it receives.  Since we pass only val_examples and
-    # request split="val", the dataset returns all provided examples as the val
-    # split.  However, the method re-runs the split logic internally, which
-    # requires at least 1 video to land in the val bucket.
-    #
-    # To work around this cleanly: if there is only one distinct video in
-    # val_examples the from_rally_examples call with split="val" will produce 0
-    # records (n_val=0 when n_videos<2).  In that case we fall back to
-    # split="train" to expose all records.
-    distinct_videos = len({str(ex.video_path) for ex in val_examples})
-    split_arg = "val" if distinct_videos >= 2 else "train"
-
-    dataset = WinnerDataset.from_rally_examples(
+    # Use the exact validation examples already provided by run_evaluation to
+    # avoid a second video-wise split/filter pass.
+    dataset = WinnerDataset._from_rally_examples_no_split(
         records=val_examples,
-        config=config,
-        split=split_arg,
+        config=checkpoint_config,
+        split="val",
         augment=False,
     )
-
     if len(dataset) == 0:
         print(
-            "[evaluate_winner] NOTE: val dataset is empty after filtering"
+            "[evaluate_winner] NOTE: val dataset is empty"
             " — model evaluation skipped.",
             file=sys.stderr,
         )
@@ -212,8 +417,10 @@ def _run_model(
         for clips, labels in loader:
             clips = clips.to(device)
             logits = model(clips)
-            probs = _torch.softmax(logits, dim=1)
-            preds = logits.argmax(dim=1)
+            # Apply temperature scaling before softmax so reported confidences
+            # are calibrated (matches the predict_winner.py inference path).
+            probs = _torch.softmax(logits / temperature, dim=1)
+            preds = logits.argmax(dim=1)  # argmax is scale-invariant
 
             for i in range(len(preds)):
                 pred = int(preds[i].item())
@@ -231,6 +438,7 @@ def _run_model(
     result: dict[str, Any] = {
         "name": "winner_classifier",
         "checkpoint": str(checkpoint_path),
+        "temperature": round(temperature, 4),
         "n_total": n_total,
         "n_correct": n_correct,
         "n_wrong": n_wrong,
@@ -246,6 +454,11 @@ def _run_model(
             "ece": round(cal.ece, 4),
             "n_samples": cal.n_samples,
         }
+
+    # --- game-level metrics ---
+    game_metrics = _compute_game_level_metrics(val_examples, all_preds)
+    if game_metrics is not None:
+        result["game_metrics"] = game_metrics
 
     return result
 
@@ -401,6 +614,15 @@ def _render_table(result: dict[str, Any]) -> str:
     if model is not None:
         lines.append("  " + "-" * (col_name + col_n + col_n + col_n + col_acc))
         lines.append(_row(model))
+        temp = model.get("temperature")
+        if temp is not None:
+            lines.append(
+                f"  {'Temperature':<{col_name}}"
+                f"{'':>{col_n}}"
+                f"{'':>{col_n}}"
+                f"{'':>{col_n}}"
+                f"{temp:>{col_acc}.4f}"
+            )
         cal = model.get("calibration")
         if cal is not None:
             lines.append(
@@ -409,6 +631,23 @@ def _render_table(result: dict[str, Any]) -> str:
                 f"{'':>{col_n}}"
                 f"{'':>{col_n}}"
                 f"{cal['ece']:>{col_acc}.4f}"
+            )
+        gm = model.get("game_metrics")
+        if gm is not None:
+            lines.append("")
+            lines.append("  --- Game-level ---")
+            lines.append(f"  Games evaluated   : {gm['n_games']}")
+            lines.append(
+                f"  Exact sequence    : "
+                f"{gm['pct_exact_sequence']:.1%}  ({int(round(gm['pct_exact_sequence'] * gm['n_games']))} / {gm['n_games']})"
+            )
+            mfd = gm.get("mean_first_divergence")
+            if mfd is not None:
+                lines.append(f"  Mean 1st diverge  : rally {mfd:.1f}")
+            else:
+                lines.append("  Mean 1st diverge  : n/a (all exact)")
+            lines.append(
+                f"  Mean rally acc    : {gm['mean_rally_winner_accuracy']:.1%}"
             )
     else:
         lines.append("")
@@ -459,8 +698,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=(
             "Path to a .pt WinnerClassifier checkpoint. "
-            "When omitted the tool attempts auto-discovery under "
-            "~/.local/share/pickleball-editor/models/."
+            "When omitted the tool attempts auto-discovery from "
+            "training defaults."
         ),
     )
     parser.add_argument(

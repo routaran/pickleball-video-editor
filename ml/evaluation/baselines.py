@@ -15,31 +15,21 @@ These baselines are intentionally torch-free and operate on individual
 points when evaluating visual or audio models on the rally winner prediction
 task.
 
-**Serving-team derivation**
+**Score-based baselines**
 
 The score string stored in ``score_at_start`` is always announced from the
-serving team's perspective (serving_score-receiving_score[-server_num]).
-Because ``RallyExample`` does not carry the absolute serving-team index (0 or 1)
-without replaying the full game sequence, the serving/receiving baselines use
-the ``winner`` field (``"server"`` or ``"receiver"``) together with the
-score-part-count guard (2 parts = singles, 3 parts = doubles) from
-``ml.tools.backfill_winner_labels._backfill_game``.  Team 0 is treated as the
-serving team when no further context is available; this assumption is correct
-for the first rally of every game and degrades gracefully for later rallies.
-
-The score-part-count guard is replicated exactly as in ``_backfill_game``::
-
-    expected_parts = 2 if game_type == "singles" else 3
-
-so singles and doubles examples are both handled correctly.
+serving team's perspective (serving_score-receiving_score[-server_num]).  The
+leader/trailing-score baselines avoid using any label fields and rely only on
+well-formed ``score_parts`` plus the same part-count validation already used
+by label backfill.
 
 Public API
 ----------
 AlwaysTeam0Baseline       -- constant predictor, always returns 0
 AlwaysTeam1Baseline       -- constant predictor, always returns 1
 MajorityClassBaseline     -- majority winning_team from training examples
-ServingTeamWinsBaseline   -- predict team 0 when server wins, team 1 otherwise
-ReceivingTeamWinsBaseline -- predict team 1 when receiver wins, team 0 otherwise
+ScoreLeadBaseline         -- predicts the side currently leading in score_parts
+ScoreTrailBaseline        -- predicts the side currently trailing in score_parts
 """
 
 from __future__ import annotations
@@ -53,8 +43,8 @@ __all__ = [
     "AlwaysTeam0Baseline",
     "AlwaysTeam1Baseline",
     "MajorityClassBaseline",
-    "ServingTeamWinsBaseline",
-    "ReceivingTeamWinsBaseline",
+    "ScoreLeadBaseline",
+    "ScoreTrailBaseline",
     # Factory / catalogue (used by evaluate_winner CLI)
     "make_baselines",
     "ALL_BASELINES",
@@ -87,53 +77,89 @@ def _is_valid_score_parts(score_parts: tuple[int, ...]) -> bool:
     return len(score_parts) in (_SINGLES_PART_COUNT, _DOUBLES_PART_COUNT)
 
 
-def _serving_team_wins(example: RallyExample) -> int:
-    """Return the predicted winning_team under the "server wins" assumption.
+def _score_lead_baseline(example: RallyExample) -> int:
+    """Return the absolute team currently leading the rally score at start.
 
-    The score string is from the serving team's perspective.  Without replaying
-    the full game sequence the absolute serving-team index (0 or 1) cannot be
-    known from a single example.  This function treats team 0 as the serving
-    team (valid for the first rally of every game) and uses the score-part-count
-    guard to confirm the score format is valid before applying the rule.
+    When ``example.serving_team`` is available the score parts are mapped to
+    absolute team indices before comparison::
 
-    If the score format is unrecognised (neither 2 nor 3 parts) the function
-    falls back to returning 0.
+        team_scores[serving_team]     = score_parts[0]  # serving team's score
+        team_scores[1 - serving_team] = score_parts[1]  # receiving team's score
 
-    Args:
-        example: A :class:`~ml.examples.RallyExample`.
+    Then the team with the higher absolute score is returned (ties → 0).
 
-    Returns:
-        0 if ``example.winner == "server"`` and the score is valid, 1 otherwise.
-        Falls back to 0 for unrecognised score formats.
-    """
-    if not _is_valid_score_parts(example.score_parts):
-        return 0
+    When ``serving_team`` is ``None`` (legacy data without a score snapshot)
+    the function falls back to a perspective-relative comparison where
+    ``score_parts[0]`` is treated as team 0's score and ``score_parts[1]``
+    as team 1's score.  This is only a crude reference on legacy data because
+    the serving side alternates between teams across rallies.
 
-    # Server wins → predict team 0 (serving team by convention).
-    # Receiver wins → predict team 1 (receiving team by convention).
-    return 0 if example.winner == "server" else 1
-
-
-def _receiving_team_wins(example: RallyExample) -> int:
-    """Return the predicted winning_team under the "receiver wins" assumption.
-
-    The inverse of :func:`_serving_team_wins`: always predicts that the
-    receiving team wins.  Uses the same score-part-count guard and team-0-serves
-    convention.
+    No ``winner`` / ``winning_team`` label fields are consulted.
 
     Args:
         example: A :class:`~ml.examples.RallyExample`.
 
     Returns:
-        1 if ``example.winner == "receiver"`` and the score is valid, 0 otherwise.
-        Falls back to 0 for unrecognised score formats.
+        The absolute team index (0 or 1) currently leading, or 0 on a tie or
+        unrecognised score format.
     """
     if not _is_valid_score_parts(example.score_parts):
         return 0
 
-    # Receiver wins → predict team 1 (receiving team by convention).
-    # Server wins → predict team 0 (serving team by convention).
-    return 1 if example.winner == "receiver" else 0
+    serving_team = example.serving_team
+    if serving_team is not None:
+        team_scores: list[int] = [0, 0]
+        team_scores[serving_team] = example.score_parts[0]
+        team_scores[1 - serving_team] = example.score_parts[1]
+        return 0 if team_scores[0] >= team_scores[1] else 1
+
+    # Legacy path: no snapshot available; perspective-relative comparison only.
+    server_score = example.score_parts[0]
+    receiver_score = example.score_parts[1]
+    return 0 if server_score >= receiver_score else 1
+
+
+def _score_trail_baseline(example: RallyExample) -> int:
+    """Return the absolute team currently trailing the rally score at start.
+
+    When ``example.serving_team`` is available the score parts are mapped to
+    absolute team indices before comparison::
+
+        team_scores[serving_team]     = score_parts[0]  # serving team's score
+        team_scores[1 - serving_team] = score_parts[1]  # receiving team's score
+
+    Then the team with the lower absolute score is returned (ties → 0).
+
+    When ``serving_team`` is ``None`` (legacy data without a score snapshot)
+    the function falls back to a perspective-relative comparison where
+    ``score_parts[0]`` is treated as team 0's score and ``score_parts[1]``
+    as team 1's score.  This is only a crude reference on legacy data because
+    the serving side alternates between teams across rallies.
+
+    No ``winner`` / ``winning_team`` label fields are consulted.
+
+    Args:
+        example: A :class:`~ml.examples.RallyExample`.
+
+    Returns:
+        The absolute team index (0 or 1) currently trailing, or 0 on a tie or
+        unrecognised score format.
+    """
+    if not _is_valid_score_parts(example.score_parts):
+        return 0
+
+    serving_team = example.serving_team
+    if serving_team is not None:
+        team_scores2: list[int] = [0, 0]
+        team_scores2[serving_team] = example.score_parts[0]
+        team_scores2[1 - serving_team] = example.score_parts[1]
+        # Return the index of the team with the lower absolute score (ties → 0).
+        return 1 if team_scores2[0] > team_scores2[1] else 0
+
+    # Legacy path: no snapshot available; perspective-relative comparison only.
+    server_score = example.score_parts[0]
+    receiver_score = example.score_parts[1]
+    return 1 if server_score > receiver_score else 0
 
 
 # ---------------------------------------------------------------------------
@@ -238,77 +264,83 @@ class MajorityClassBaseline:
 
 
 @dataclass
-class ServingTeamWinsBaseline:
-    """Baseline that predicts the serving team wins every rally.
+class ScoreLeadBaseline:
+    """Baseline that predicts the absolute team currently leading at rally start.
 
-    Uses the score-part-count guard (2 parts = singles, 3 parts = doubles) to
-    confirm the score format is valid, then predicts team 0 as the winner when
-    the rally ``winner`` field is ``"server"`` and team 1 when it is
-    ``"receiver"``.
+    Uses ``example.score_parts`` together with ``example.serving_team`` to
+    compute absolute team scores before comparing:
 
-    Team 0 is treated as the serving team by convention — this is accurate for
-    the first rally of every game.  The baseline degrades gracefully for later
-    rallies where team 1 may be serving, making it a meaningful (though
-    imperfect) upper bound for rule-based serving-team inference.
+    - When ``serving_team`` is not ``None``:
+      ``team_scores[serving_team] = score_parts[0]``,
+      ``team_scores[1 - serving_team] = score_parts[1]``;
+      predicts the team with the higher absolute score (ties → 0).
+    - When ``serving_team`` is ``None`` (legacy data without a score snapshot):
+      falls back to a perspective-relative comparison where ``score_parts[0]``
+      is treated as team 0's score.  Accuracy on legacy data is only a crude
+      reference because the serving side alternates across rallies.
 
-    The score-part-count guard is replicated from
-    ``ml.tools.backfill_winner_labels._backfill_game`` precisely::
-
-        expected_parts = 2 if game_type == "singles" else 3
+    The rule is deterministic and intentionally ignores any label fields.
 
     Attributes:
         name: Human-readable identifier used in evaluation reports.
     """
 
-    name: str = "serving_team_wins"
+    name: str = "score_lead"
 
     def predict(self, example: RallyExample) -> int:
-        """Predict team 0 if the server won, team 1 if the receiver won.
+        """Predict the absolute team currently leading in the start-of-rally score.
 
         The score-part-count guard confirms the example has a valid score format
         (2 parts for singles, 3 parts for doubles) before applying the rule.
-        Falls back to 0 for malformed or empty ``score_parts``.
 
         Args:
             example: A :class:`~ml.examples.RallyExample`.
 
         Returns:
-            0 when ``example.winner == "server"`` (server = team 0 by convention).
-            1 when ``example.winner == "receiver"`` (receiver = team 1).
-            0 as a fallback for unrecognised score formats.
+            Absolute team index (0 or 1) with the higher score, or 0 on tie /
+            malformed score formats.
         """
-        return _serving_team_wins(example)
+        return _score_lead_baseline(example)
 
 
 @dataclass
-class ReceivingTeamWinsBaseline:
-    """Baseline that predicts the receiving team wins every rally.
+class ScoreTrailBaseline:
+    """Baseline that predicts the absolute team currently trailing at rally start.
 
-    The inverse of :class:`ServingTeamWinsBaseline`: predicts team 1 as the
-    winner when the rally ``winner`` field is ``"receiver"`` and team 0 when it
-    is ``"server"``.  Uses the same score-part-count guard.
+    Uses ``example.score_parts`` together with ``example.serving_team`` to
+    compute absolute team scores before comparing:
+
+    - When ``serving_team`` is not ``None``:
+      ``team_scores[serving_team] = score_parts[0]``,
+      ``team_scores[1 - serving_team] = score_parts[1]``;
+      predicts the team with the lower absolute score (ties → 0).
+    - When ``serving_team`` is ``None`` (legacy data without a score snapshot):
+      falls back to a perspective-relative comparison where ``score_parts[0]``
+      is treated as team 0's score.  Accuracy on legacy data is only a crude
+      reference because the serving side alternates across rallies.
+
+    The rule is deterministic and intentionally ignores any label fields.
 
     Attributes:
         name: Human-readable identifier used in evaluation reports.
     """
 
-    name: str = "receiving_team_wins"
+    name: str = "score_trail"
 
     def predict(self, example: RallyExample) -> int:
-        """Predict team 1 if the receiver won, team 0 if the server won.
+        """Predict the absolute team currently trailing in the start-of-rally score.
 
         The score-part-count guard confirms the example has a valid score format
-        before applying the rule.  Falls back to 0 for unrecognised score formats.
+        (2 parts for singles, 3 parts for doubles) before applying the rule.
 
         Args:
             example: A :class:`~ml.examples.RallyExample`.
 
         Returns:
-            1 when ``example.winner == "receiver"`` (receiver = team 1 by convention).
-            0 when ``example.winner == "server"`` (server = team 0).
-            0 as a fallback for unrecognised score formats.
+            Absolute team index (0 or 1) with the lower score, or 0 on tie /
+            malformed score formats.
         """
-        return _receiving_team_wins(example)
+        return _score_trail_baseline(example)
 
 
 # ---------------------------------------------------------------------------
@@ -320,14 +352,14 @@ ALL_BASELINES: list[str] = [
     "majority_class",
     "always_team_0",
     "always_team_1",
-    "serving_team_wins",
-    "receiving_team_wins",
+    "score_lead",
+    "score_trail",
 ]
 
 
 def make_baselines() -> list[
     "MajorityClassBaseline | AlwaysTeam0Baseline | AlwaysTeam1Baseline "
-    "| ServingTeamWinsBaseline | ReceivingTeamWinsBaseline"
+    "| ScoreLeadBaseline | ScoreTrailBaseline"
 ]:
     """Return a fresh list of all built-in baseline instances.
 
@@ -344,15 +376,15 @@ def make_baselines() -> list[
         MajorityClassBaseline(),
         AlwaysTeam0Baseline(),
         AlwaysTeam1Baseline(),
-        ServingTeamWinsBaseline(),
-        ReceivingTeamWinsBaseline(),
+        ScoreLeadBaseline(),
+        ScoreTrailBaseline(),
     ]
 
 
 def evaluate_baseline(
     baseline: (
         "MajorityClassBaseline | AlwaysTeam0Baseline | AlwaysTeam1Baseline "
-        "| ServingTeamWinsBaseline | ReceivingTeamWinsBaseline"
+        "| ScoreLeadBaseline | ScoreTrailBaseline"
     ),
     examples: list[RallyExample],
 ) -> dict[str, int | float]:
