@@ -13,7 +13,7 @@ The widget uses the "Court Green" design system with monospace fonts for
 timecodes to prevent layout shifts during playback.
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QSize, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -35,6 +35,7 @@ from src.ui.styles import (
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     Fonts,
+    icon as make_icon,
 )
 
 __all__ = ["PlaybackControls"]
@@ -173,11 +174,27 @@ class PlaybackControls(QFrame):
         transport_layout = QHBoxLayout()
         transport_layout.setSpacing(SPACE_SM)
 
-        self._btn_skip_back_5s = QPushButton("|◀")
-        self._btn_skip_back_1s = QPushButton("◀◀")
-        self._btn_play_pause = QPushButton("▶")
-        self._btn_skip_forward_1s = QPushButton("▶▶")
-        self._btn_skip_forward_5s = QPushButton("▶|")
+        _icon_size = QSize(20, 20)
+
+        self._btn_skip_back_5s = QPushButton()
+        self._btn_skip_back_5s.setIcon(make_icon("skip-back", TEXT_PRIMARY, 20))
+        self._btn_skip_back_5s.setIconSize(_icon_size)
+
+        self._btn_skip_back_1s = QPushButton()
+        self._btn_skip_back_1s.setIcon(make_icon("rewind", TEXT_PRIMARY, 20))
+        self._btn_skip_back_1s.setIconSize(_icon_size)
+
+        self._btn_play_pause = QPushButton()
+        self._btn_play_pause.setIcon(make_icon("play", TEXT_PRIMARY, 20))
+        self._btn_play_pause.setIconSize(_icon_size)
+
+        self._btn_skip_forward_1s = QPushButton()
+        self._btn_skip_forward_1s.setIcon(make_icon("fast-forward", TEXT_PRIMARY, 20))
+        self._btn_skip_forward_1s.setIconSize(_icon_size)
+
+        self._btn_skip_forward_5s = QPushButton()
+        self._btn_skip_forward_5s.setIcon(make_icon("skip-forward", TEXT_PRIMARY, 20))
+        self._btn_skip_forward_5s.setIconSize(_icon_size)
 
         # Set object names for styling
         self._btn_skip_back_5s.setObjectName("transport_button")
@@ -186,12 +203,12 @@ class PlaybackControls(QFrame):
         self._btn_skip_forward_1s.setObjectName("transport_button")
         self._btn_skip_forward_5s.setObjectName("transport_button")
 
-        # Set tooltips
-        self._btn_skip_back_5s.setToolTip(f"Skip back {_format_skip(self._large_skip)}")
-        self._btn_skip_back_1s.setToolTip(f"Skip back {_format_skip(self._small_skip)}")
-        self._btn_play_pause.setToolTip("Play / Pause")
-        self._btn_skip_forward_1s.setToolTip(f"Skip forward {_format_skip(self._small_skip)}")
-        self._btn_skip_forward_5s.setToolTip(f"Skip forward {_format_skip(self._large_skip)}")
+        # Set tooltips — include keyboard shortcut hints
+        self._btn_skip_back_5s.setToolTip(f"Skip back {_format_skip(self._large_skip)} (Down)")
+        self._btn_skip_back_1s.setToolTip(f"Skip back {_format_skip(self._small_skip)} (Left)")
+        self._btn_play_pause.setToolTip("Play / Pause (Space)")
+        self._btn_skip_forward_1s.setToolTip(f"Skip forward {_format_skip(self._small_skip)} (Right)")
+        self._btn_skip_forward_5s.setToolTip(f"Skip forward {_format_skip(self._large_skip)} (Up)")
 
         # Make play button slightly larger
         self._btn_play_pause.setMinimumWidth(80)
@@ -375,11 +392,11 @@ class PlaybackControls(QFrame):
         self._is_playing = playing
 
         if playing:
-            self._btn_play_pause.setText("❚❚")
-            self._btn_play_pause.setToolTip("Pause")
+            self._btn_play_pause.setIcon(make_icon("pause", TEXT_PRIMARY, 20))
+            self._btn_play_pause.setToolTip("Pause (Space)")
         else:
-            self._btn_play_pause.setText("▶")
-            self._btn_play_pause.setToolTip("Play")
+            self._btn_play_pause.setIcon(make_icon("play", TEXT_PRIMARY, 20))
+            self._btn_play_pause.setToolTip("Play (Space)")
 
     @pyqtSlot(float, float)
     def set_time(self, current_seconds: float, total_seconds: float) -> None:

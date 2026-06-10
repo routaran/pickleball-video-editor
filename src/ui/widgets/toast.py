@@ -27,8 +27,7 @@ Example usage:
 
 from enum import Enum
 
-from PyQt6.QtCore import QPropertyAnimation, QRect, Qt, pyqtSignal, pyqtSlot, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QPropertyAnimation, QRect, QSize, Qt, pyqtSignal, pyqtSlot, QTimer
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from src.ui.styles.colors import (
@@ -38,9 +37,12 @@ from src.ui.styles.colors import (
     ACTION_WARNING,
     BG_SECONDARY,
     BORDER_COLOR,
+    DANGER_TEXT,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
+from src.ui.styles.fonts import SIZE_BODY, Fonts
+from src.ui.styles.icons import icon as make_icon, pixmap as make_pixmap
 
 
 class ToastType(Enum):
@@ -72,12 +74,21 @@ class Toast(QFrame):
     ANIMATION_DURATION_IN = 200  # milliseconds
     ANIMATION_DURATION_OUT = 150  # milliseconds
 
-    # Icon symbols (Unicode characters)
-    _ICONS = {
-        ToastType.SUCCESS: "✓",
-        ToastType.INFO: "ℹ",
-        ToastType.WARNING: "⚠",
-        ToastType.ERROR: "✕",
+    # Lucide icon names for each toast type
+    _ICON_NAMES = {
+        ToastType.SUCCESS: "circle-check",
+        ToastType.INFO: "info",
+        ToastType.WARNING: "triangle-alert",
+        ToastType.ERROR: "circle-x",
+    }
+
+    # Icon stroke colors — ERROR uses DANGER_TEXT (softer, informational)
+    # rather than the full ACTION_DANGER used for the destructive-action border.
+    _ICON_COLORS = {
+        ToastType.SUCCESS: ACTION_SUCCESS,
+        ToastType.INFO: ACTION_INFO,
+        ToastType.WARNING: ACTION_WARNING,
+        ToastType.ERROR: DANGER_TEXT,
     }
 
     # Accent colors for left border
@@ -117,6 +128,9 @@ class Toast(QFrame):
         self._setup_ui()
         self._apply_styles()
 
+        # Never steal keyboard focus from the main window when toasts appear.
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
         # Start hidden (will animate in when show_toast() is called)
         self.setWindowOpacity(0.0)
         self.hide()
@@ -125,7 +139,8 @@ class Toast(QFrame):
         """Set up the toast widget layout and child widgets."""
         # Configure frame properties
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        # Use fixed width but allow height to expand for multi-line text
+        # Width is set dynamically in show_toast() based on parent width.
+        # Apply the fallback minimum now so adjustSize() has a sensible floor.
         self.setFixedWidth(self.TOAST_WIDTH)
         self.setMinimumHeight(self.TOAST_MIN_HEIGHT)
 
@@ -134,13 +149,16 @@ class Toast(QFrame):
         layout.setContentsMargins(16, 12, 12, 12)
         layout.setSpacing(12)
 
-        # Icon label - align to top for multi-line messages
-        self.icon_label = QLabel(self._ICONS[self.toast_type])
+        # Icon label — Lucide SVG pixmap, aligned to top for multi-line messages
+        self.icon_label = QLabel()
         self.icon_label.setObjectName("toastIcon")
-        icon_font = QFont()
-        icon_font.setPointSize(16)
-        icon_font.setBold(True)
-        self.icon_label.setFont(icon_font)
+        self.icon_label.setPixmap(
+            make_pixmap(
+                self._ICON_NAMES[self.toast_type],
+                self._ICON_COLORS[self.toast_type],
+                20,
+            )
+        )
         self.icon_label.setFixedSize(20, 20)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignTop)
@@ -149,17 +167,15 @@ class Toast(QFrame):
         self.message_label = QLabel(self.message)
         self.message_label.setObjectName("toastMessage")
         self.message_label.setWordWrap(True)
-        message_font = QFont("IBM Plex Sans", 11)
+        message_font = Fonts.body(SIZE_BODY)
         self.message_label.setFont(message_font)
         layout.addWidget(self.message_label, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        # Dismiss button - align to top for multi-line messages
-        self.dismiss_button = QPushButton("×")
+        # Dismiss button — Lucide "x" icon, aligned to top for multi-line messages
+        self.dismiss_button = QPushButton()
         self.dismiss_button.setObjectName("toastDismiss")
-        dismiss_font = QFont()
-        dismiss_font.setPointSize(16)
-        dismiss_font.setBold(True)
-        self.dismiss_button.setFont(dismiss_font)
+        self.dismiss_button.setIcon(make_icon("x", TEXT_SECONDARY, 14))
+        self.dismiss_button.setIconSize(QSize(14, 14))
         self.dismiss_button.setFixedSize(24, 24)
         self.dismiss_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.dismiss_button.clicked.connect(self.dismiss)
@@ -219,17 +235,22 @@ class Toast(QFrame):
             self.show()
             return
 
+        # Dynamic width: one-third of parent, clamped to [320, 480] px.
+        # Reapply setFixedWidth here so word-wrap reflows before adjustSize().
+        toast_width = min(max(320, parent_widget.width() // 3), 480)
+        self.setFixedWidth(toast_width)
+
         # Calculate actual height based on content (allow for multi-line text)
         self.adjustSize()
         toast_height = self.sizeHint().height()
 
         parent_width = parent_widget.width()
-        x = (parent_width - self.TOAST_WIDTH) // 2
+        x = (parent_width - toast_width) // 2
         y_start = -toast_height  # Start above visible area
         y_end = 16  # Final position (16px from top)
 
         # Set starting position
-        self.setGeometry(x, y_start, self.TOAST_WIDTH, toast_height)
+        self.setGeometry(x, y_start, toast_width, toast_height)
         self.show()
 
         # Fade in animation
@@ -242,10 +263,10 @@ class Toast(QFrame):
         self._slide_animation = QPropertyAnimation(self, b"geometry")
         self._slide_animation.setDuration(self.ANIMATION_DURATION_IN)
         self._slide_animation.setStartValue(
-            QRect(x, y_start, self.TOAST_WIDTH, toast_height)
+            QRect(x, y_start, toast_width, toast_height)
         )
         self._slide_animation.setEndValue(
-            QRect(x, y_end, self.TOAST_WIDTH, toast_height)
+            QRect(x, y_end, toast_width, toast_height)
         )
 
         # Start animations
@@ -281,6 +302,7 @@ class Toast(QFrame):
         current_rect = self.geometry()
         x = current_rect.x()
         y_start = current_rect.y()
+        toast_width = current_rect.width()
         toast_height = current_rect.height()
         y_end = -toast_height  # Slide up out of view
 
@@ -295,7 +317,7 @@ class Toast(QFrame):
         self._slide_animation.setDuration(self.ANIMATION_DURATION_OUT)
         self._slide_animation.setStartValue(current_rect)
         self._slide_animation.setEndValue(
-            QRect(x, y_end, self.TOAST_WIDTH, toast_height)
+            QRect(x, y_end, toast_width, toast_height)
         )
 
         # Clean up and emit signal when animation finishes

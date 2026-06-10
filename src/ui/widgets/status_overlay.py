@@ -19,6 +19,7 @@ Visual Design:
 """
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
 from src.ui.styles.colors import BG_PRIMARY, RALLY_START, TEXT_PRIMARY, TEXT_WARNING, Colors
@@ -195,30 +196,30 @@ class StatusOverlay(QFrame):
 
         self.setStyleSheet(stylesheet)
 
-        # Apply fonts - using slightly larger sizes for better readability
-        # Status text: body font, medium weight
-        status_font = Fonts.body(size=15, weight=500)
+        # Apply fonts — locked type scale 12/14/16/18/24/32 px only.
+        # Status text: body font, medium weight (16px — SIZE_SUBHEADING)
+        status_font = Fonts.body(size=16, weight=500)
         self._status_text.setFont(status_font)
 
-        # Score label: body font, regular (13px default)
-        label_font = Fonts.body(size=13, weight=400)
+        # Score / server labels: body font, regular (14px — SIZE_BODY)
+        label_font = Fonts.body(size=14, weight=400)
         self._score_label.setFont(label_font)
         self._server_label.setFont(label_font)
 
-        # Score value: display font (monospace, bold, tabular) - LARGER (26px)
-        score_font = Fonts.display(size=26, weight=700, tabular=True)
+        # Score value: display font (monospace, bold, tabular) — 24px (SIZE_TITLE)
+        score_font = Fonts.display(size=24, weight=700, tabular=True)
         self._score_value.setFont(score_font)
 
-        # Server value: body font, regular (15px)
-        server_font = Fonts.body(size=15, weight=400)
+        # Server value: body font, regular (16px — SIZE_SUBHEADING)
+        server_font = Fonts.body(size=16, weight=400)
         self._server_value.setFont(server_font)
 
-        # Touch labels: body font, regular (13px)
+        # Touch labels: body font, regular (14px — SIZE_BODY)
         self._ravi_label.setFont(label_font)
         self._partner_label.setFont(label_font)
 
-        # Touch values: display font (monospace, bold, tabular) - same as score
-        touch_font = Fonts.display(size=26, weight=700, tabular=True)
+        # Touch values: display font (monospace, bold, tabular) — 24px (SIZE_TITLE)
+        touch_font = Fonts.display(size=24, weight=700, tabular=True)
         self._ravi_value.setFont(touch_font)
         self._partner_value.setFont(touch_font)
 
@@ -258,12 +259,29 @@ class StatusOverlay(QFrame):
     def set_server_info(self, server_info: str) -> None:
         """Update server information display.
 
+        Uses QFontMetrics.elidedText against the label's actual rendered width
+        so eliding tracks live layout changes rather than a fixed character count.
+        The tooltip is always set to the full string when the text is elided,
+        and cleared otherwise.
+
         Args:
             server_info: Server description (e.g., "Team 1 (John) #2")
         """
-        self._server_value.setText(server_info)
-        # Add tooltip for long server names that might be truncated
-        self._server_value.setToolTip(server_info if len(server_info) > 15 else "")
+        # Prefer the actual painted width; fall back to minimumWidth when the
+        # widget has not been shown yet (width() would report 0).
+        available_width = self._server_value.width()
+        if available_width <= 0:
+            available_width = self._server_value.minimumWidth()
+
+        fm = QFontMetrics(self._server_value.font())
+        elided = fm.elidedText(server_info, Qt.TextElideMode.ElideRight, available_width)
+        self._server_value.setText(elided)
+
+        # Show the full name in a tooltip only when text was actually truncated.
+        if elided != server_info:
+            self._server_value.setToolTip(server_info)
+        else:
+            self._server_value.setToolTip("")
 
     def set_touches(self, ravi: int, partner: int) -> None:
         """Update touch counter display.
@@ -302,37 +320,38 @@ class StatusOverlay(QFrame):
     def set_compact_mode(self, compact: bool) -> None:
         """Apply compact or normal mode styling.
 
-        In compact mode (window < 950px width), font sizes are reduced less aggressively:
-        - Score value: 22px instead of 26px (was 18 vs 24)
-        - Labels: 12px instead of 13px (was 11 vs 13)
-        - Status and server text: 13px instead of 15px (was 12 vs 14)
+        Sizes conform to the locked type scale (12/14/16/18/24/32 px):
+        - Score / touch values: 18px (compact) vs 24px (normal)
+        - Labels (score, server, touch): 12px (compact) vs 14px (normal)
+        - Status text and server value: 12px (compact) vs 16px (normal)
 
         Args:
-            compact: True for smaller fonts (window < 950px width)
+            compact: True for smaller fonts (driven by ResponsiveManager when
+                window width < BREAK_COMPACT = 1000px)
         """
         if compact == self._compact_mode:
             return  # No change needed
 
         self._compact_mode = compact
 
-        # Scale score value (most prominent element) - less aggressive reduction
-        score_size = 22 if compact else 26
+        # Score value — step down one type-scale tier in compact mode
+        score_size = 18 if compact else 24
         self._score_value.setFont(Fonts.display(size=score_size, weight=700, tabular=True))
 
-        # Scale labels - less aggressive reduction
-        label_size = 12 if compact else 13
+        # Labels — step down one tier in compact mode
+        label_size = 12 if compact else 14
         label_font = Fonts.body(size=label_size, weight=400)
         self._score_label.setFont(label_font)
         self._server_label.setFont(label_font)
         self._ravi_label.setFont(label_font)
         self._partner_label.setFont(label_font)
 
-        # Scale touch values alongside score value
+        # Touch values — same tier as score value
         self._ravi_value.setFont(Fonts.display(size=score_size, weight=700, tabular=True))
         self._partner_value.setFont(Fonts.display(size=score_size, weight=700, tabular=True))
 
-        # Scale status and server text - less aggressive reduction
-        text_size = 13 if compact else 15
+        # Status text and server value — step down one tier in compact mode
+        text_size = 12 if compact else 16
         self._status_text.setFont(Fonts.body(size=text_size, weight=500))
         self._server_value.setFont(Fonts.body(size=text_size, weight=400))
 

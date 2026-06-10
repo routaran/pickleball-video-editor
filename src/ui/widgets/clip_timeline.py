@@ -42,39 +42,49 @@ from src.ui.styles.colors import (
     BG_BORDER,
     BG_PRIMARY,
     BG_TERTIARY,
+    FOCUS_RING,
     RALLY_START,
+    RECEIVER_WINS,
     TEXT_DISABLED,
     TEXT_PRIMARY,
+    TEXT_SECONDARY,
     Colors,
 )
+from src.ui.styles.components import set_label_role
 
 
 __all__ = ["ClipTimelineWidget"]
 
 
-# Cell styling constants (from plan)
-CELL_BG_NORMAL = "#2a2a2a"
-CELL_BORDER_NORMAL = "#3a3a3a"
-CELL_TEXT_NORMAL = "#888888"
+# Cell styling constants — palette tokens from src/ui/styles/colors.py.
+# Raw hex literals are intentionally absent; edit colors.py to retheme.
+#
+# Contrast ratios at 96 DPI (WCAG AA threshold 4.5:1):
+#   Normal   TEXT_SECONDARY / BG_TERTIARY   4.7:1  — passes
+#   Active   BG_PRIMARY     / RALLY_START   9.5:1  — passes
+#   In-prog  BG_PRIMARY     / RECEIVER_WINS 9.4:1  — passes
+CELL_BG_NORMAL = BG_TERTIARY
+CELL_BORDER_NORMAL = BG_BORDER
+CELL_TEXT_NORMAL = TEXT_SECONDARY
 
-CELL_BG_HOVER = "#2a2a2a"
-CELL_BORDER_HOVER = "#4ade80"
-CELL_TEXT_HOVER = "#ffffff"
+CELL_BG_HOVER = BG_TERTIARY
+CELL_BORDER_HOVER = RALLY_START
+CELL_TEXT_HOVER = TEXT_PRIMARY
 
-CELL_BG_ACTIVE = "#22c55e"
-CELL_BORDER_ACTIVE = "#22c55e"
-CELL_TEXT_ACTIVE = "#1a1a1a"
+CELL_BG_ACTIVE = RALLY_START
+CELL_BORDER_ACTIVE = RALLY_START
+CELL_TEXT_ACTIVE = BG_PRIMARY
 
-CELL_BG_IN_PROGRESS = "#f59e0b"
-CELL_BORDER_IN_PROGRESS = "#f59e0b"
-CELL_TEXT_IN_PROGRESS = "#1a1a1a"
+CELL_BG_IN_PROGRESS = RECEIVER_WINS
+CELL_BORDER_IN_PROGRESS = RECEIVER_WINS
+CELL_TEXT_IN_PROGRESS = BG_PRIMARY
 
 # Cell dimensions
 CELL_WIDTH = 28
 CELL_HEIGHT = 24
 CELL_SPACING = 4
 CELL_BORDER_RADIUS = 4
-CELL_FONT_SIZE = 11
+CELL_FONT_SIZE = 12   # Locked type scale: 12px (was 11 — below minimum readable)
 CELL_FONT_WEIGHT = 500
 
 
@@ -222,6 +232,40 @@ class _ClipCell(QPushButton):
                 }}
             """)
 
+    def paintEvent(self, event: QPaintEvent) -> None:
+        """Render the cell via QSS then overlay a focus ring when focused.
+
+        The QSS-based appearance (colours, hover state, border-radius) is
+        rendered by the parent class.  When this cell holds keyboard focus a
+        2px FOCUS_RING rounded rect is painted on top, inset 3px from each
+        edge so it sits inside the existing border without causing layout shift.
+
+        Args:
+            event: QPaintEvent passed in by Qt
+        """
+        super().paintEvent(event)
+        if self.hasFocus():
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(Colors.to_qcolor(FOCUS_RING), 2)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                self.rect().adjusted(3, 3, -3, -3),
+                CELL_BORDER_RADIUS,
+                CELL_BORDER_RADIUS,
+            )
+
+    def focusInEvent(self, event) -> None:
+        """Repaint when keyboard focus arrives so the ring appears."""
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        """Repaint when keyboard focus leaves so the ring disappears."""
+        super().focusOutEvent(event)
+        self.update()
+
 
 class _InProgressCell(QWidget):
     """Pulsing amber cell indicating a clip in progress."""
@@ -309,6 +353,27 @@ class _InProgressCell(QWidget):
         font.setWeight(QFont.Weight.Medium)
         painter.setFont(font)
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._label)
+
+        # Draw keyboard-focus ring on top (full opacity, outside the pulse fade)
+        if self.hasFocus():
+            focus_pen = QPen(Colors.to_qcolor(FOCUS_RING), 2)
+            painter.setPen(focus_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                rect.adjusted(3, 3, -3, -3),
+                CELL_BORDER_RADIUS,
+                CELL_BORDER_RADIUS,
+            )
+
+    def focusInEvent(self, event) -> None:
+        """Repaint when keyboard focus arrives so the ring appears."""
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        """Repaint when keyboard focus leaves so the ring disappears."""
+        super().focusOutEvent(event)
+        self.update()
 
 
 class ClipTimelineWidget(QFrame):
@@ -423,12 +488,7 @@ class ClipTimelineWidget(QFrame):
         # Placeholder label for empty state
         self._placeholder = QLabel("No clips yet")
         self._placeholder.setObjectName("clip_timeline_placeholder")
-        self._placeholder.setStyleSheet(f"""
-            QLabel#clip_timeline_placeholder {{
-                color: {TEXT_DISABLED};
-                font-size: 12px;
-            }}
-        """)
+        set_label_role(self._placeholder, "caption")
         self._placeholder.hide()
         layout.addWidget(self._placeholder)
 

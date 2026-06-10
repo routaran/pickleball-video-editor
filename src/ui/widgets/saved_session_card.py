@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QEnterEvent, QMouseEvent, QResizeEvent
 from PyQt6.QtWidgets import (
     QFrame,
@@ -47,6 +47,8 @@ from src.ui.styles import (
     TEXT_WARNING,
     Fonts,
 )
+from src.ui.styles.components import ButtonStyles
+from src.ui.styles.icons import icon as make_icon, pixmap as make_pixmap
 
 __all__ = ["SavedSessionInfo", "SavedSessionCard"]
 
@@ -171,7 +173,7 @@ class SavedSessionCard(QFrame):
     delete_requested = pyqtSignal(SavedSessionInfo)
 
     # Delete button dimensions
-    DELETE_BTN_SIZE = 0
+    DELETE_BTN_SIZE = 28
 
     def __init__(
         self,
@@ -187,7 +189,7 @@ class SavedSessionCard(QFrame):
         super().__init__(parent)
         self._session_info = session_info
         self._delete_btn: QPushButton | None = None
-        self._load_hint: QLabel | None = None
+        self._load_hint: QWidget | None = None
         self._init_ui()
         self._init_overlays()
         self._apply_styling()
@@ -234,9 +236,9 @@ class SavedSessionCard(QFrame):
 
         # Warning icon for missing video (at start of meta row)
         if not self._session_info.video_exists:
-            warning_icon = QLabel("⚠")
-            warning_icon.setFont(Fonts.body(size=12))
-            warning_icon.setStyleSheet(f"color: {TEXT_WARNING};")
+            warning_icon = QLabel()
+            warning_icon.setPixmap(make_pixmap("triangle-alert", TEXT_WARNING, 14))
+            warning_icon.setFixedSize(14, 14)
             warning_icon.setToolTip("Video file not found")
             meta_layout.addWidget(warning_icon)
 
@@ -276,32 +278,37 @@ class SavedSessionCard(QFrame):
         as direct children of the card, positioned manually in resizeEvent.
         """
         # Delete button (direct child, positioned at bottom-left corner)
-        self._delete_btn = QPushButton("🗑", self)
+        self._delete_btn = QPushButton(self)
+        self._delete_btn.setIcon(make_icon("trash-2", TEXT_PRIMARY, 14))
+        self._delete_btn.setIconSize(QSize(14, 14))
         self._delete_btn.setFixedSize(self.DELETE_BTN_SIZE, self.DELETE_BTN_SIZE)
         self._delete_btn.clicked.connect(self._on_delete_clicked)
-        self._delete_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ef4444;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 0px;
-            }
-            QPushButton:hover { background-color: #dc2626; }
-            QPushButton:pressed { background-color: #b91c1c; }
-        """)
+        self._delete_btn.setStyleSheet(ButtonStyles.danger())
         self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._delete_btn.setToolTip("Delete session")
         self._delete_btn.setVisible(False)
 
-        # Load hint (bottom-right corner)
-        self._load_hint = QLabel("Click to load →", self)
-        self._load_hint.setFont(Fonts.secondary())
-        self._load_hint.setStyleSheet(f"color: {PRIMARY_ACTION};")
-        self._load_hint.adjustSize()
-        self._load_hint.setVisible(False)
+        # Load hint (bottom-right corner) — text label + arrow-right Lucide icon
+        hint_container = QWidget(self)
+        hint_container.setStyleSheet("background: transparent;")
+        hint_layout = QHBoxLayout(hint_container)
+        hint_layout.setContentsMargins(0, 0, 0, 0)
+        hint_layout.setSpacing(4)
+
+        hint_text = QLabel("Click to load")
+        hint_text.setFont(Fonts.secondary())
+        hint_text.setStyleSheet(f"color: {PRIMARY_ACTION}; background: transparent;")
+        hint_layout.addWidget(hint_text)
+
+        hint_icon_label = QLabel()
+        hint_icon_label.setPixmap(make_pixmap("arrow-right", PRIMARY_ACTION, 12))
+        hint_icon_label.setFixedSize(12, 12)
+        hint_icon_label.setStyleSheet("background: transparent;")
+        hint_layout.addWidget(hint_icon_label)
+
+        hint_container.adjustSize()
+        hint_container.setVisible(False)
+        self._load_hint = hint_container
 
     def _apply_styling(self) -> None:
         """Apply card styling with hover effects."""
@@ -310,13 +317,15 @@ class SavedSessionCard(QFrame):
         bg_color = BG_SECONDARY
 
         if not self._session_info.video_exists:
-            # Gray out missing video cards
+            # Missing-video cards: amber hover border signals re-link needed.
+            # Individual label colors (TEXT_DISABLED time_label, ⚠ warning icon)
+            # communicate the degraded state; Qt ignores QSS opacity, so we rely
+            # on per-label token colors rather than a frame-level opacity rule.
             self.setStyleSheet(f"""
                 SavedSessionCard {{
                     background-color: {bg_color};
                     border: 2px solid {border_color};
                     border-radius: {RADIUS_LG}px;
-                    opacity: 0.6;
                 }}
                 SavedSessionCard:hover {{
                     border-color: {TEXT_WARNING};

@@ -25,8 +25,11 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QPushButton, QWidget
 
 from src.ui.styles.colors import (
+    BG_BORDER,
+    BG_HOVER,
     BG_PRIMARY,
     BG_TERTIARY,
+    FOCUS_RING,
     RALLY_START,
     RECEIVER_WINS,
     SERVER_WINS,
@@ -106,6 +109,10 @@ class RallyButton(QPushButton):
         self._pulse_animation.setEndValue(16)
         self._pulse_animation.setEasingCurve(QEasingCurve.Type.InOutSine)
         self._pulse_animation.setLoopCount(-1)  # Infinite loop
+
+        # Enable hover-enter / hover-leave events so the inactive-state
+        # background can switch to BG_HOVER without polling.
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
 
         # Configure appearance
         self._setup_appearance()
@@ -253,6 +260,10 @@ class RallyButton(QPushButton):
         else:
             self._draw_normal_button(painter, rect, accent_color)
 
+        # Draw keyboard-focus ring on top of everything (enabled buttons only)
+        if self.hasFocus():
+            self._draw_focus_ring(painter, rect)
+
     def _draw_glow(self, painter: QPainter, rect: QRect, accent_color: str) -> None:
         """Draw the animated outer glow effect.
 
@@ -286,13 +297,18 @@ class RallyButton(QPushButton):
     ) -> None:
         """Draw button in active state (filled background, dark text).
 
+        When pressed (isDown()), the fill is darkened by ~10% to give tactile
+        feedback without breaking the animated pulse effect.
+
         Args:
             painter: QPainter instance
             rect: Button rectangle
             accent_color: Hex color for background
         """
-        # Fill background with accent color
+        # Fill background with accent color; darken slightly on press
         bg_color = Colors.to_qcolor(accent_color)
+        if self.isDown():
+            bg_color = bg_color.darker(111)  # ~10% darker (100/111 ≈ 0.90)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(bg_color)
         painter.drawRoundedRect(rect, 6, 6)
@@ -312,15 +328,18 @@ class RallyButton(QPushButton):
     ) -> None:
         """Draw button in normal state (dark background, colored border/text).
 
+        Uses BG_HOVER as background when the pointer is over the button
+        (WA_Hover attribute ensures underMouse() is accurate mid-hover).
+
         Args:
             painter: QPainter instance
             rect: Button rectangle
             accent_color: Hex color for border and text
         """
-        # Draw dark background
-        bg_color = Colors.to_qcolor(BG_TERTIARY)
+        # Background: BG_HOVER when hovered, BG_TERTIARY when idle
+        bg_hex = BG_HOVER if self.underMouse() else BG_TERTIARY
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(bg_color)
+        painter.setBrush(Colors.to_qcolor(bg_hex))
         painter.drawRoundedRect(rect, 6, 6)
 
         # Draw colored border
@@ -347,7 +366,7 @@ class RallyButton(QPushButton):
         painter.drawRoundedRect(rect, 6, 6)
 
         # Draw gray border
-        border_color = QColor("#3D4450")  # BG_BORDER
+        border_color = QColor(BG_BORDER)
         border_pen = QPen(border_color, 2)
         painter.setPen(border_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -356,6 +375,45 @@ class RallyButton(QPushButton):
         # Draw gray text
         painter.setPen(Colors.to_qcolor(TEXT_DISABLED))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.text())
+
+    def _draw_focus_ring(self, painter: QPainter, rect: QRect) -> None:
+        """Draw a 2px keyboard-focus indicator ring inset 2px from the edge.
+
+        Uses the FOCUS_RING token (#3DDC84) so the ring is visually distinct
+        from the button border and consistent with the theme.qss focus rules.
+
+        Args:
+            painter: Active QPainter (Antialiasing already enabled by caller)
+            rect: Full button bounding rectangle
+        """
+        pen = QPen(Colors.to_qcolor(FOCUS_RING), 2)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
+
+    # ------------------------------------------------------------------
+    # Focus and hover event overrides
+    # ------------------------------------------------------------------
+
+    def focusInEvent(self, event) -> None:
+        """Repaint when the button gains keyboard focus so the ring appears."""
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        """Repaint when the button loses keyboard focus so the ring disappears."""
+        super().focusOutEvent(event)
+        self.update()
+
+    def enterEvent(self, event) -> None:
+        """Repaint on pointer enter so the hover background appears immediately."""
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event) -> None:
+        """Repaint on pointer leave so the hover background reverts."""
+        super().leaveEvent(event)
+        self.update()
 
 
 __all__ = [
