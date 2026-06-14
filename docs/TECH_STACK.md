@@ -18,7 +18,7 @@
 | Data Format | JSON | - |
 | Video Probing | ffprobe (FFmpeg) | Latest |
 | Video Export | FFmpeg subprocess (NVENC/x264) | Latest |
-| Frame Extraction | decord, OpenCV (headless) | >=0.6.0 / >=4.8.0 |
+| Frame Extraction | FFmpeg CLI, OpenCV (headless) | - / >=4.8.0 |
 | ML Framework | PyTorch (CNN + ResNet-18) | >=2.0.0 |
 | Audio Loading | torchaudio, soundfile | >=2.0.0 / >=0.12.0 |
 | Numerics | NumPy, scikit-learn | >=1.24.0 / >=1.3.0 |
