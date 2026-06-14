@@ -14,6 +14,19 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-06-14] source-update | align (all docs)
+
+- Drift items: 8 (factual: 4, structural: 0, editorial: 3, candidate-new: 1)
+- Applied: 4  Skipped: 4  Edited inline: 0
+- Trigger: the decord→ffmpeg frame-extraction swap (327318a) — the in-process decord/torchvision decoders were replaced with the system ffmpeg CLI, so every "decord is used for frame extraction" claim went stale.
+- Source docs touched: `README.md`, `docs/TECH_STACK.md`, `docs/auto-editor-plan/implementation.md`, `docs/auto-editor-plan/architecture.md`
+- Committed: `README.md` (ebc0428), `docs/TECH_STACK.md` (6e86d27). `implementation.md` + `architecture.md` are gitignored, so they were edited on disk only (no commit).
+- Surfaced, not applied (per edit discipline): decord is still declared-but-UNUSED in `ml/requirements.txt:6` and `configure:281` (a code cleanup, outside doc scope); winner flag-all vs low-confidence in `decisions.md`/`architecture.md`/`implementation.md` (decision/plan rationale, left untouched); the decord dependency-mirror doc lines (`TECH_STACK.md:79`, `implementation.md:22/35/41`, `TRAINING_GUIDE.md:27`) remain accurate to the manifest, so left as-is.
+- Ingest needed for: `architecture/tech-stack` (README.md + TECH_STACK.md), `domains/ml` + `architecture/auto-edit-pipeline` (implementation.md, architecture.md). CAVEAT: ingest staleness uses `git log`, which will NOT detect the gitignored `implementation.md`/`architecture.md` edits — use `wiki-build update <page>` (forced) for those two pages.
+- Status: source edits complete; wiki ingest pending (forced/manual)
+
+---
+
 ## [2026-06-13] source-update | align (all docs)
 
 - Drift items: 40 (factual: 13, structural: 17, editorial: 6, candidate-new: 4)
