@@ -26,6 +26,8 @@ No more scrubbing through hours of footage. No more manually typing scores. Just
 - **Multi-game sessions** - Start new games without restarting the app
 - **Configurable keyboard shortcuts** and skip durations
 - **Player/team names** - Optional, can be added or updated anytime during editing
+<!-- DRAFT: wiki-source-update 2026-06-13; prompted by 6faa718 -->
+- **Automatic editing (experimental)** - ML-assisted rally detection and winner prediction with an auto-process mode and court-corner calibration (see `ml/GUIDE.md`)
 
 ## Installation
 
@@ -330,6 +332,7 @@ pickleball-video-editor/
 │       ├── ffmpeg_exporter.py
 │       ├── hardware_detect.py
 │       └── subtitle_generator.py
+├── ml/                      # ML auto-edit pipeline (training, prediction, tools)
 ├── tests/                   # 200+ unit tests
 ├── resources/               # Icons and assets
 ├── configure                # Build configuration
@@ -348,6 +351,8 @@ pickleball-video-editor/
 | Kdenlive Export | lxml (MLT XML) |
 | Build | PyInstaller |
 | Tests | pytest |
+| ML Framework | PyTorch (CNN + ResNet-18) |
+| Frame Extraction | decord / OpenCV (headless) |
 
 ## Development
 
