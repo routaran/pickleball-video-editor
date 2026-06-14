@@ -1618,12 +1618,13 @@ class SetupDialog(QDialog):
     def _default_winner_checkpoint() -> Path:
         """Return the absolute path of the default WinnerClassifier checkpoint.
 
-        The path is computed relative to this source file so it works regardless
-        of the current working directory.  setup_dialog.py lives at
-        src/ui/setup_dialog.py; the checkpoint is at ml/checkpoints/best_winner.pt.
+        Resolved via :class:`PathConfig` so it works both from source and from a
+        frozen PyInstaller bundle (where checkpoints live under
+        ``_MEIPASS/ml/checkpoints``).  The cut model uses the same resolver.
         """
-        project_root = Path(__file__).parent.parent.parent
-        return project_root / "ml" / "checkpoints" / "best_winner.pt"
+        from ml.config import PathConfig
+
+        return PathConfig().checkpoints_dir / "best_winner.pt"
 
     def _extract_calibration_frame_pixmap(
         self, video_path: Path, offset_s: float

@@ -21,11 +21,18 @@ src_dir = project_root / 'src'
 resources_dir = project_root / 'resources'
 
 # Build datas list, filtering out None values
+_ckpt_dir = project_root / 'ml' / 'checkpoints'
 _datas = [
     # Include resources directory if it exists
     (str(resources_dir), 'resources') if resources_dir.exists() else None,
     # Include stylesheets
     (str(src_dir / 'ui' / 'styles' / 'theme.qss'), 'src/ui/styles'),
+    # ML model checkpoints — resolved at runtime via PathConfig.checkpoints_dir
+    # (-> _MEIPASS/ml/checkpoints when frozen). Auto-process needs both.
+    (str(_ckpt_dir / 'best_winner.pt'), 'ml/checkpoints')
+        if (_ckpt_dir / 'best_winner.pt').exists() else None,
+    (str(_ckpt_dir / 'best_model.pt'), 'ml/checkpoints')
+        if (_ckpt_dir / 'best_model.pt').exists() else None,
 ]
 datas_list = [item for item in _datas if item is not None]
 
@@ -159,6 +166,13 @@ a = Analysis(
         # Other heavy modules not needed
         'matplotlib',
         'pandas',
+
+        # decord MUST NOT be bundled.  ml.video_features now decodes via the
+        # system ffmpeg CLI (subprocess).  decord loads its bundled ffmpeg +
+        # libxcb with RTLD_GLOBAL; those symbols interpose on the system X/
+        # ffmpeg libs that the GUI's mpv video output needs, segfaulting review
+        # mode.  Excluding it keeps it out of the process entirely.
+        'decord',
     ],
 
     # Disable noarchive for better compression

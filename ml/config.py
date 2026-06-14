@@ -176,6 +176,11 @@ class PathConfig:
 
     @property
     def checkpoints_dir(self) -> Path:
+        # When frozen (PyInstaller), model checkpoints are bundled read-only
+        # under _MEIPASS/ml/checkpoints.  cache_dir intentionally stays next to
+        # the executable (writable) via ml_dir, so only checkpoints use _MEIPASS.
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            return Path(sys._MEIPASS) / "ml" / "checkpoints"
         return self.ml_dir / "checkpoints"
 
     @property

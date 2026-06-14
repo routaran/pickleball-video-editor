@@ -183,8 +183,9 @@ def main() -> int:
             from ml.auto_edit import AutoEditSetup
             from src.ui.dialogs.auto_edit_progress import AutoEditProgressDialog
 
-            project_root = Path(__file__).parent.parent
-            checkpoint_path = project_root / "ml" / "checkpoints" / "best_winner.pt"
+            from ml.config import PathConfig
+
+            checkpoint_path = PathConfig().checkpoints_dir / "best_winner.pt"
             output_dir = game_config.video_path.parent
 
             # Corners from setup dialog are list[list[int]]; the worker
