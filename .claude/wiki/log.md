@@ -14,6 +14,18 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-06-14] ingest | staleness-driven (all pages)
+
+- Pages checked: 11
+- Pages stale (git-log detected): 1
+- Recompiled: `architecture/tech-stack.md` — README.md + docs/TECH_STACK.md changed (decord → system FFmpeg CLI for frame extraction; commits 9368573, ebc0428, 6e86d27). Updated Overview, Core Stack (split the ML row; decord noted as declared-but-unused), and Layers; `last_compiled` → 2026-06-14; 110 lines (budget 125/200).
+- Skipped (up-to-date by git log): 10
+- CAVEAT — git-blind pages: `domains/ml.md` and `architecture/auto-edit-pipeline.md` have on-disk edits in their GITIGNORED sources (`docs/auto-editor-plan/implementation.md`, `docs/auto-editor-plan/architecture.md`, from the 2026-06-14 source-update). `git log` cannot see gitignored files, so staleness detection missed them. Run `wiki-build update domains/ml.md` and `wiki-build update architecture/auto-edit-pipeline.md` (forced) to refresh.
+- Note: wiki content pages are gitignored (disk-only); only `log.md` is tracked, so the recompiled `tech-stack.md` is written to disk but not committed.
+- Status: complete (forced updates pending for 2 git-blind pages)
+
+---
+
 ## [2026-06-14] source-update | align (all docs)
 
 - Drift items: 8 (factual: 4, structural: 0, editorial: 3, candidate-new: 1)
