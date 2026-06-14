@@ -14,6 +14,19 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-06-13] source-update | align (all docs)
+
+- Drift items: 40 (factual: 13, structural: 17, editorial: 6, candidate-new: 4)
+- Applied: 28 — 24 factual/structural + 4 candidate-new DRAFTs (DRAFT-tagged)
+- Skipped: 6 factual/structural in gitignored docs the user chose to skip (`docs/TRAINING_GUIDE.md`, `docs/ffmpeg_integration_plan.md`, `docs/auto-editor-plan/training-data.md`, `docs/auto-editor-plan/decisions.md`)
+- Surfaced only (no edit, editorial): `auto-editor-plan/decisions.md`, `TRAINING_GUIDE.md`, `auto-editor-plan/review-fixes.md`, `OUTPUT_MODULE_COMPLETE.md`, `OUTPUT_GENERATION_INTEGRATION.md`, `ffmpeg_integration_plan.md`
+- Source docs touched: `README.md`, `docs/UI_SPEC.md`, `docs/REVIEW_MODE_IMPLEMENTATION.md`, `docs/REVIEW_MODE_USAGE.md`, `docs/STATUS_OVERLAY_USAGE.md`, `docs/TOAST_IMPLEMENTATION.md`, `docs/DIALOGS_IMPLEMENTATION.md`, `docs/DETAILED_DESIGN.md`, `docs/SCORE_STATE_EXAMPLES.md`, `docs/OUTPUT_GENERATION_USAGE.md`, `docs/SESSION_INTEGRATION_USAGE.md`, `docs/TESTING.md`, `docs/TEST_SUITE_SUMMARY.md`
+- Committed: `README.md` only (9368573). `docs/` + `.claude/` are gitignored, so the other 12 docs were edited on disk only (user choice: "commit README only").
+- Ingest needed for: `domains/ui`, `domains/core`, `domains/output`, `domains/tests`, `architecture/tech-stack`, `architecture/session-lifecycle`, `gotchas/pickleball-scoring`. CAVEAT: `ingest` uses `git log` for staleness, which will NOT detect the gitignored `docs/` edits — use `wiki-build update <page>` (forced) to recompile the docs/-derived pages.
+- Status: source edits complete; wiki ingest pending (forced/manual)
+
+---
+
 ## [2026-06-10] ingest | stale pages
 
 - Pages checked: 11
