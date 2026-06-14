@@ -99,6 +99,14 @@ class WinnerModelConfig:
     canonical_height: int = 128
     device: str = "cuda"
     clip_duration_override_s: float | None = None
+    # Cap on the longest side of the frame that clips are extracted/cached at
+    # before the canonical warp. The homography is computed in the extracted
+    # frame's coordinate space (corners are scaled to match), so this only
+    # affects cache size and warp-sampling resolution, NOT the canonical output
+    # geometry. Native-resolution extraction (e.g. 1080p) caches ~140 MB/clip;
+    # 640 caps that to a few MB/clip. MUST be identical for training and
+    # inference — both read this field — or the model sees mismatched inputs.
+    clip_extract_max_dim: int = 640
 
     @property
     def effective_clip_duration_s(self) -> float:

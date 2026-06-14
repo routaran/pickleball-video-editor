@@ -31,6 +31,7 @@ from ml.video_features import (
     compute_homography,
     extract_clip,
     get_video_frame_size,
+    resolve_extract_geometry,
     warp_clip_to_canonical,
 )
 
@@ -264,7 +265,12 @@ def _fetch_clip_tensor(
     start_s = max(0.0, record.end_seconds - effective_duration - pad_s)
     end_s = record.end_seconds + pad_s
 
-    extract_size = get_video_frame_size(record.video_path) or canonical_size
+    extract_size, scaled_corners = resolve_extract_geometry(
+        get_video_frame_size(record.video_path),
+        record.corners,
+        canonical_size,
+        config.clip_extract_max_dim,
+    )
 
     frames = extract_clip(
         record.video_path,
@@ -273,7 +279,7 @@ def _fetch_clip_tensor(
         config.fps_out,
         extract_size,
     )
-    homography = compute_homography(record.corners, canonical_size)
+    homography = compute_homography(scaled_corners, canonical_size)
     warped = warp_clip_to_canonical(frames, homography, canonical_size)
     return warped  # (T_ext, H_canon, W_canon, 3) uint8
 

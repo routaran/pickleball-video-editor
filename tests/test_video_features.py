@@ -1,8 +1,8 @@
 """Tests for ml/video_features.py.
 
-No real video file is required.  cv2 and decord are patched out at the module
-boundary so the tests run in environments where those native libraries are not
-installed.
+No real video file is required.  cv2 is patched out at the module boundary and
+the ffmpeg/ffprobe subprocess calls are mocked, so the tests run in environments
+where those binaries are not installed.
 
 Test coverage:
 - compute_homography: identity-like transform, shape guarantee, validation
@@ -142,21 +142,11 @@ if "cv2" not in sys.modules:
 
 
 # ---------------------------------------------------------------------------
-# decord stub
+# Import the module under test (after making cv2 available).
 #
-# extract_clip does `import decord` inside the function body to probe
-# availability, then calls _extract_with_decord.  We inject a minimal stub
-# so the probe succeeds and the tests can patch _extract_with_decord cleanly
-# without ever touching _extract_with_torchvision.
-# ---------------------------------------------------------------------------
-
-if "decord" not in sys.modules:
-    _decord_stub = MagicMock(name="decord")
-    sys.modules["decord"] = _decord_stub
-
-
-# ---------------------------------------------------------------------------
-# Import the module under test (after making cv2 and decord available).
+# extract_clip decodes via the system ffmpeg CLI (ml.video_features.
+# _extract_with_ffmpeg); tests patch that helper directly, so no in-process
+# decoder library stubs are needed.
 # ---------------------------------------------------------------------------
 
 from ml import video_features as _video_features_module  # noqa: E402
@@ -334,7 +324,7 @@ class TestExtractClipShape:
 
         with (
             patch("ml.video_features._get_cache_dir", return_value=tmp_path),
-            patch("ml.video_features._extract_with_decord", return_value=fake_frames),
+            patch("ml.video_features._extract_with_ffmpeg", return_value=fake_frames),
         ):
             result = extract_clip(fake_video, start_s, end_s, fps_out, size)
 
@@ -356,7 +346,7 @@ class TestExtractClipShape:
 
         with (
             patch("ml.video_features._get_cache_dir", return_value=tmp_path),
-            patch("ml.video_features._extract_with_decord", return_value=fake_frames),
+            patch("ml.video_features._extract_with_ffmpeg", return_value=fake_frames),
         ):
             result = extract_clip(fake_video, start_s, end_s, fps_out, CANONICAL_SIZE)
 
@@ -367,7 +357,7 @@ class TestExtractClipCache:
     """extract_clip must honour the on-disk .npy cache."""
 
     def test_second_call_does_not_decode_again(self, tmp_path: Path) -> None:
-        """A cache hit must skip _extract_with_decord entirely.
+        """A cache hit must skip _extract_with_ffmpeg entirely.
 
         The extraction backend is called exactly once on the first call and
         zero additional times on the second call with identical arguments.
@@ -385,7 +375,7 @@ class TestExtractClipCache:
         with (
             patch("ml.video_features._get_cache_dir", return_value=tmp_path),
             patch(
-                "ml.video_features._extract_with_decord",
+                "ml.video_features._extract_with_ffmpeg",
                 return_value=fake_frames,
             ) as mock_decode,
         ):
@@ -393,7 +383,7 @@ class TestExtractClipCache:
             result2 = extract_clip(fake_video, start_s, end_s, fps_out, size)
 
         assert mock_decode.call_count == 1, (
-            f"_extract_with_decord should be called once (cache hit on 2nd call), "
+            f"_extract_with_ffmpeg should be called once (cache hit on 2nd call), "
             f"got {mock_decode.call_count}"
         )
         assert np.array_equal(result1, result2), "Cache hit must return identical data"
@@ -421,7 +411,7 @@ class TestExtractClipCache:
         with (
             patch("ml.video_features._get_cache_dir", return_value=tmp_path),
             patch(
-                "ml.video_features._extract_with_decord",
+                "ml.video_features._extract_with_ffmpeg",
                 side_effect=_side_effect,
             ) as mock_decode,
         ):
@@ -508,103 +498,74 @@ class TestGetVideoFrameSize:
         from ml.video_features import _get_video_frame_size_cached
         _get_video_frame_size_cached.cache_clear()
 
-    def test_torchvision_tier_returns_size_from_4d_tensor(self, tmp_path: Path) -> None:
-        """torchvision tier must unpack (T, H, W, C) correctly and return (W, H).
+    def test_ffprobe_tier_returns_size(self, tmp_path: Path) -> None:
+        """When cv2 fails, the ffprobe tier parses 'WxH' and returns (W, H).
 
-        cv2 and decord are forced to fail so that torchvision is exercised.
-        A fake read_video returns a (2, 720, 1280, 3) tensor → expect (1280, 720).
+        cv2 is forced to fail (isOpened False); a mocked ffprobe subprocess
+        returns "1280x720\\n" on stdout → expect (1280, 720).
         """
-        import types
-        import torch
-
         self._clear()
 
-        fake_video = tmp_path / "tv_probe_unique.mp4"
+        fake_video = tmp_path / "ffprobe_probe_unique.mp4"
         fake_video.write_bytes(b"placeholder")
-
-        # Build a minimal torchvision.io stub that returns a 4-D tensor.
-        fake_tensor = torch.zeros((2, 720, 1280, 3), dtype=torch.uint8)
-
-        tvio_stub = types.ModuleType("torchvision.io")
-        tvio_stub.read_video = lambda *args, **kwargs: (fake_tensor, None, {})
-
-        tv_stub = types.ModuleType("torchvision")
-        tv_stub.io = tvio_stub
 
         # Patch cv2 so the first tier fails (isOpened returns False).
         failing_capture = MagicMock()
         failing_capture.isOpened.return_value = False
 
+        fake_proc = MagicMock()
+        fake_proc.returncode = 0
+        fake_proc.stdout = b"1280x720\n"
+
         with (
             patch("ml.video_features.cv2") as mock_cv2,
-            patch.dict(
-                sys.modules,
-                {"torchvision": tv_stub, "torchvision.io": tvio_stub},
-            ),
+            patch("ml.video_features.subprocess.run", return_value=fake_proc) as mock_run,
         ):
             mock_cv2.VideoCapture.return_value = failing_capture
             mock_cv2.CAP_PROP_FRAME_WIDTH = 3
             mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
 
-            # Make decord unavailable for this call by removing it temporarily.
-            saved_decord = sys.modules.pop("decord", None)
-            try:
-                # Re-evict the cached function result for this path.
-                self._clear()
-                from ml.video_features import _get_video_frame_size_cached
-                result = _get_video_frame_size_cached(str(fake_video))
-            finally:
-                if saved_decord is not None:
-                    sys.modules["decord"] = saved_decord
-                self._clear()
+            self._clear()
+            from ml.video_features import _get_video_frame_size_cached
+            result = _get_video_frame_size_cached(str(fake_video))
+            self._clear()
 
         assert result == (1280, 720), f"Expected (1280, 720), got {result}"
+        assert mock_run.called, "ffprobe subprocess should have been invoked"
 
     def test_all_tiers_fail_returns_none_and_warns(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """When all probes fail, returns None and emits a WARNING log message."""
         import logging
-        import types
 
         self._clear()
 
         fake_video = tmp_path / "all_fail_unique.mp4"
         fake_video.write_bytes(b"placeholder")
 
-        # Stub torchvision.io.read_video so it returns an empty tensor (numel==0).
-        import torch
-
-        empty_tensor = torch.zeros((0,), dtype=torch.uint8)
-        tvio_stub = types.ModuleType("torchvision.io")
-        tvio_stub.read_video = lambda *args, **kwargs: (empty_tensor, None, {})
-        tv_stub = types.ModuleType("torchvision")
-        tv_stub.io = tvio_stub
-
+        # cv2 fails (isOpened False) and ffprobe exits non-zero with no output.
         failing_capture = MagicMock()
         failing_capture.isOpened.return_value = False
 
+        fake_proc = MagicMock()
+        fake_proc.returncode = 1
+        fake_proc.stdout = b""
+        fake_proc.stderr = b"ffprobe: could not open"
+
         with (
             patch("ml.video_features.cv2") as mock_cv2,
-            patch.dict(
-                sys.modules,
-                {"torchvision": tv_stub, "torchvision.io": tvio_stub},
-            ),
+            patch("ml.video_features.subprocess.run", return_value=fake_proc),
             caplog.at_level(logging.WARNING, logger="ml.video_features"),
         ):
             mock_cv2.VideoCapture.return_value = failing_capture
             mock_cv2.CAP_PROP_FRAME_WIDTH = 3
             mock_cv2.CAP_PROP_FRAME_HEIGHT = 4
 
-            saved_decord = sys.modules.pop("decord", None)
-            try:
-                self._clear()
-                from ml.video_features import _get_video_frame_size_cached
-                result = _get_video_frame_size_cached(str(fake_video))
-            finally:
-                if saved_decord is not None:
-                    sys.modules["decord"] = saved_decord
-                self._clear()
+            self._clear()
+            from ml.video_features import _get_video_frame_size_cached
+            result = _get_video_frame_size_cached(str(fake_video))
+            self._clear()
 
         assert result is None, f"Expected None when all tiers fail, got {result}"
         warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]

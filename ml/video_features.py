@@ -1,7 +1,13 @@
 """Video frame extraction and geometric normalization utilities.
 
 Provides canonical court-view clips from raw video by:
-1. Extracting frames from a time range (decord primary, torchvision fallback)
+1. Extracting frames from a time range via the system ffmpeg CLI (subprocess).
+   In-process decoders (decord, torchvision/PyAV) are deliberately NOT used:
+   decord loads its bundled ffmpeg + libxcb with RTLD_GLOBAL, whose symbols
+   interpose on the system X/ffmpeg libraries that the GUI's mpv video output
+   needs, segfaulting review mode.  Shelling out to the system ffmpeg keeps all
+   video decoding in a separate process, matching how the rest of the app
+   (export, frame_extract) already works.
 2. Computing perspective homography from 4 annotated court corners
 3. Warping each frame to a canonical rectangle
 
@@ -20,7 +26,10 @@ No PyQt6 or other UI imports are used in this module.
 
 import hashlib
 import logging
-import warnings
+import os
+import shutil
+import subprocess
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -33,6 +42,7 @@ __all__ = [
     "compute_homography",
     "warp_clip_to_canonical",
     "hash_clip_key",
+    "resolve_extract_geometry",
     # Legacy constants retained for consumers that import them directly.
     "CANONICAL_SIZE",
     "CLIP_FPS",
@@ -43,8 +53,34 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-# Emit the decord-unavailable warning only once per process.
-_decord_warned: bool = False
+
+def _clean_ffmpeg_env() -> dict[str, str]:
+    """Return an env for ffmpeg/ffprobe children that uses the *system* libs.
+
+    Both the dev venv (opencv-python-headless prepends ``site-packages/<pkg>.libs``
+    to ``LD_LIBRARY_PATH``) and the PyInstaller bundle (the bootloader prepends
+    ``sys._MEIPASS``) inject directories full of older, ABI-incompatible
+    ``libav*`` copies.  A system ffmpeg child that inherits those paths can load
+    the wrong shared objects (``undefined symbol`` / ABI errors).  Strip both
+    kinds of entry so the child resolves against the system FFmpeg install.
+    """
+    env = os.environ.copy()
+    ld = env.get("LD_LIBRARY_PATH", "")
+    if not ld:
+        return env
+    meipass = getattr(sys, "_MEIPASS", None)
+    cleaned: list[str] = []
+    for p in ld.split(":"):
+        if not p or "site-packages" in p:
+            continue
+        if meipass and (p == meipass or p.startswith(meipass.rstrip("/") + "/")):
+            continue
+        cleaned.append(p)
+    if cleaned:
+        env["LD_LIBRARY_PATH"] = ":".join(cleaned)
+    else:
+        env.pop("LD_LIBRARY_PATH", None)
+    return env
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -120,46 +156,38 @@ def _get_video_frame_size_cached(video_path_str: str) -> tuple[int, int] | None:
         finally:
             capture.release()
 
-    # Fall back to decord metadata if available.
+    # Fall back to the system ffprobe (same FFmpeg install used for extraction).
+    ffprobe = shutil.which("ffprobe") or "ffprobe"
+    cmd = [
+        ffprobe,
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=p=0:s=x",
+        str(video_path),
+    ]
     try:
-        from decord import VideoReader, cpu  # type: ignore[import-untyped]
-
-        vr = VideoReader(str(video_path), ctx=cpu(0))
-        width = int(getattr(vr, "width", 0))
-        height = int(getattr(vr, "height", 0))
-        if width > 0 and height > 0:
-            return width, height
-
-        # As a final fallback under decord, read the first frame to infer dimensions.
-        sample = vr.get_batch([0]).asnumpy()
-        if sample.size > 0:
-            h, w = sample.shape[1], sample.shape[2]
-            if w > 0 and h > 0:
-                return w, h
-    except Exception:
-        pass
-
-    # torchvision fallback (uses the same backend family already used by extract_clip).
-    try:
-        import torchvision.io as tvio  # type: ignore[import-untyped]
-
-        video, _, _info = tvio.read_video(
-            str(video_path),
-            start_pts=0.0,
-            end_pts=1.0,
-            pts_unit="sec",
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            env=_clean_ffmpeg_env(),
+            timeout=30,
         )
-        if video.numel() > 0:
-            _, h, w, _ = video.shape
-            if w > 0 and h > 0:
-                return w, h
+        if result.returncode == 0:
+            text = result.stdout.decode("utf-8", "replace").strip().splitlines()
+            if text:
+                parts = text[0].split("x")
+                if len(parts) == 2:
+                    w, h = int(parts[0]), int(parts[1])
+                    if w > 0 and h > 0:
+                        return w, h
     except Exception:
         pass
 
     logger.warning(
         "Native frame-size probe failed for '%s' via all available backends "
-        "(cv2, decord, torchvision). Callers will fall back to canonical size "
-        "%s, which likely produces incorrect (near-black) warped clips.",
+        "(cv2, ffprobe). Callers will fall back to canonical size %s, which "
+        "likely produces incorrect (near-black) warped clips.",
         video_path_str,
         CANONICAL_SIZE,
     )
@@ -170,71 +198,121 @@ def get_video_frame_size(video_path: Path) -> tuple[int, int] | None:
     """Return native video frame size as (width, height), or None on failure."""
     return _get_video_frame_size_cached(str(video_path))
 
+
+def resolve_extract_geometry(
+    native_size: tuple[int, int] | None,
+    corners: list[tuple[int, int]],
+    canonical_size: tuple[int, int] = CANONICAL_SIZE,
+    max_extract_dim: int = 640,
+) -> tuple[tuple[int, int], list[tuple[float, float]]]:
+    """Resolve a cache-efficient extraction size and matching scaled corners.
+
+    The court homography is computed in the coordinate space of the *extracted*
+    frames, so the corner coordinates must be expressed in that same space.
+    Extracting at full native resolution (the geometrically-correct but very
+    large option) caches ~140 MB per clip at 1080p.  This helper downscales the
+    extraction so the longest side is at most ``max_extract_dim`` (never
+    upscaling) and scales the corners by the identical factor, shrinking the
+    cache by ~(native/extract)**2 while leaving the canonical warp output
+    unchanged apart from minor interpolation differences.
+
+    Args:
+        native_size: Native video frame size as (width, height), or None when
+            the probe failed.
+        corners: Four (x, y) court corners in *native* pixel coordinates.
+        canonical_size: Canonical output size (width, height); used only for the
+            None-fallback return value.
+        max_extract_dim: Maximum allowed longest side of the extracted frame.
+
+    Returns:
+        Tuple of (extract_size, scaled_corners): ``extract_size`` is
+        (width, height); ``scaled_corners`` are floats in the extracted-frame
+        coordinate space.  When ``native_size`` is None, returns
+        ``(canonical_size, corners-as-floats)`` to preserve the prior
+        probe-failure fallback behaviour.
+    """
+    if native_size is None:
+        return canonical_size, [(float(x), float(y)) for x, y in corners]
+
+    native_w, native_h = native_size
+    longest = max(native_w, native_h)
+    scale = min(1.0, max_extract_dim / float(longest)) if longest > 0 else 1.0
+
+    extract_w = max(1, round(native_w * scale))
+    extract_h = max(1, round(native_h * scale))
+
+    scale_x = extract_w / float(native_w)
+    scale_y = extract_h / float(native_h)
+    scaled_corners = [(x * scale_x, y * scale_y) for (x, y) in corners]
+
+    return (extract_w, extract_h), scaled_corners
+
 # ---------------------------------------------------------------------------
 # Private extraction helpers
 # ---------------------------------------------------------------------------
 
-def _extract_with_decord(
+def _extract_with_ffmpeg(
     video_path: Path,
     start_s: float,
     end_s: float,
     fps_out: int,
     size: tuple[int, int],
 ) -> np.ndarray:
-    """Extract and resize frames using decord.VideoReader (preferred path)."""
-    from decord import VideoReader, cpu  # type: ignore[import-untyped]
+    """Extract and resize frames using the system ffmpeg CLI (subprocess).
 
-    vr = VideoReader(str(video_path), ctx=cpu(0))
-    native_fps: float = vr.get_avg_fps()
+    One ffmpeg invocation seeks to ``start_s``, reads ``end_s - start_s``
+    seconds, resamples to ``fps_out`` and scales to ``size``, streaming raw
+    RGB24 frames to stdout.  The decoded frames are then resampled to exactly
+    ``n = max(1, round(duration * fps_out))`` evenly-spaced frames, mirroring
+    the fixed-length sequence the previous decord path produced (the temporal
+    head expects a stable frame count).
 
-    start_frame = max(0, int(start_s * native_fps))
-    end_frame = min(len(vr) - 1, int(end_s * native_fps))
-
-    n = max(1, round((end_s - start_s) * fps_out))
-    indices = list(np.linspace(start_frame, end_frame, n, dtype=int))
-
-    raw_frames: np.ndarray = vr.get_batch(indices).asnumpy()  # (T, H_orig, W_orig, 3)
-
+    Decoding happens in a separate process, so no in-process video libraries
+    are loaded into the GUI — see the module docstring for why that matters.
+    """
     width, height = size
-    resized = np.stack(
-        [cv2.resize(frame, (width, height)) for frame in raw_frames],
-        axis=0,
-    )
-    return resized  # (T, height, width, 3)
+    duration_s = max(0.0, end_s - start_s)
+    n = max(1, round(duration_s * fps_out))
 
+    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+    cmd = [
+        ffmpeg,
+        "-nostdin",
+        "-loglevel", "error",
+        "-ss", f"{start_s:.6f}",
+        "-i", str(video_path),
+        "-t", f"{duration_s:.6f}",
+        "-vf", f"fps={fps_out},scale={width}:{height}:flags=bilinear",
+        "-pix_fmt", "rgb24",
+        "-f", "rawvideo",
+        "-",
+    ]
 
-def _extract_with_torchvision(
-    video_path: Path,
-    start_s: float,
-    end_s: float,
-    fps_out: int,
-    size: tuple[int, int],
-) -> np.ndarray:
-    """Extract and resize frames using torchvision.io.read_video (fallback)."""
-    import torchvision.io as tvio  # type: ignore[import-untyped]
-
-    video, _, _info = tvio.read_video(
-        str(video_path),
-        start_pts=start_s,
-        end_pts=end_s,
-        pts_unit="sec",
-    )
-    # video: (T, H, W, C) uint8 tensor
-    if video.numel() == 0:
+    result = subprocess.run(cmd, capture_output=True, env=_clean_ffmpeg_env())
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", "replace").strip()
         raise RuntimeError(
-            f"torchvision.io.read_video returned empty tensor for {video_path}"
+            f"ffmpeg frame extraction failed for {video_path} "
+            f"[{start_s:.2f}-{end_s:.2f}s] (rc={result.returncode}): {stderr}"
         )
 
-    n = max(1, round((end_s - start_s) * fps_out))
-    idx = np.linspace(0, len(video) - 1, n, dtype=int)
-    frames_np: np.ndarray = video[idx].numpy()  # (T, H_orig, W_orig, 3)
+    frame_bytes = width * height * 3
+    buf = result.stdout
+    if frame_bytes <= 0 or len(buf) < frame_bytes:
+        raise RuntimeError(
+            f"ffmpeg returned insufficient frame data for {video_path} "
+            f"[{start_s:.2f}-{end_s:.2f}s]: got {len(buf)} bytes, "
+            f"need >= {frame_bytes} for one {width}x{height} frame"
+        )
 
-    width, height = size
-    resized = np.stack(
-        [cv2.resize(frame, (width, height)) for frame in frames_np],
-        axis=0,
-    )
-    return resized  # (T, height, width, 3)
+    t_actual = len(buf) // frame_bytes
+    frames = np.frombuffer(buf[: t_actual * frame_bytes], dtype=np.uint8).reshape(
+        t_actual, height, width, 3
+    )  # (T_actual, height, width, 3)
+
+    # Resample to exactly n evenly-spaced frames (decord-equivalent semantics).
+    idx = np.linspace(0, t_actual - 1, n).astype(int)
+    return np.ascontiguousarray(frames[idx])  # (n, height, width, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -254,9 +332,8 @@ def extract_clip(
     are persisted as .npy files keyed by hash_clip_key(); a cache hit skips
     all decoding entirely.  Cache entries are never auto-evicted.
 
-    decord is used when available for accurate frame seeking.  If decord is not
-    installed, torchvision.io.read_video is used instead and a one-time warning
-    is emitted.
+    Decoding is performed by the system ffmpeg CLI in a separate process so no
+    in-process video libraries are loaded into the GUI (see module docstring).
 
     Args:
         video_path: Path to the source video file.
@@ -268,8 +345,6 @@ def extract_clip(
     Returns:
         Numpy array of shape (T, height, width, 3), dtype uint8.
     """
-    global _decord_warned
-
     cache_dir = _get_cache_dir()
     cache_key = hash_clip_key(video_path, start_s, end_s, fps_out, size)
     cache_path = cache_dir / f"{cache_key}.npy"
@@ -285,21 +360,7 @@ def extract_clip(
         video_path,
     )
 
-    frames: np.ndarray
-
-    try:
-        import decord  # noqa: F401 — probe availability only
-
-        frames = _extract_with_decord(video_path, start_s, end_s, fps_out, size)
-    except ImportError:
-        if not _decord_warned:
-            warnings.warn(
-                "decord is not available; falling back to torchvision.io.read_video. "
-                "Install decord for faster and more accurate frame seeking.",
-                stacklevel=2,
-            )
-            _decord_warned = True
-        frames = _extract_with_torchvision(video_path, start_s, end_s, fps_out, size)
+    frames = _extract_with_ffmpeg(video_path, start_s, end_s, fps_out, size)
 
     np.save(str(cache_path), frames)
     logger.debug("Cached clip to %s", cache_path)
@@ -376,6 +437,7 @@ def get_canonical_clip(
     fps_out: int = CLIP_FPS,
     duration_s: float = CLIP_DURATION_S,
     canonical_size: tuple[int, int] = CANONICAL_SIZE,
+    max_extract_dim: int = 640,
 ) -> np.ndarray:
     """Return a warped clip ending at end_s from the canonical court view.
 
@@ -395,9 +457,10 @@ def get_canonical_clip(
     """
     start_s = max(0.0, end_s - duration_s)
 
-    source_size = get_video_frame_size(video_path)
-    extract_size = source_size if source_size is not None else canonical_size
+    extract_size, scaled_corners = resolve_extract_geometry(
+        get_video_frame_size(video_path), corners, canonical_size, max_extract_dim
+    )
 
     frames = extract_clip(video_path, start_s, end_s, fps_out, extract_size)
-    homography = compute_homography(corners, canonical_size)
+    homography = compute_homography(scaled_corners, canonical_size)
     return warp_clip_to_canonical(frames, homography, canonical_size)

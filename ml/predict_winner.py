@@ -32,6 +32,7 @@ from ml.video_features import (
     compute_homography,
     extract_clip,
     get_video_frame_size,
+    resolve_extract_geometry,
     warp_clip_to_canonical,
 )
 from ml.winner_model import WinnerClassifier
@@ -97,10 +98,15 @@ def predict_winners(
         resolved_device = "cpu"
 
     canonical_size: tuple[int, int] = (config.canonical_width, config.canonical_height)
-    extract_size = get_video_frame_size(video_path) or canonical_size
+    extract_size, scaled_corners = resolve_extract_geometry(
+        get_video_frame_size(video_path),
+        corners,
+        canonical_size,
+        config.clip_extract_max_dim,
+    )
 
     # Compute homography once — it is the same for every rally in this video.
-    homography = compute_homography(corners, canonical_size)
+    homography = compute_homography(scaled_corners, canonical_size)
     logger.debug(
         "Homography computed for canonical size %dx%d",
         config.canonical_width,
