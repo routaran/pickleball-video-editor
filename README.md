@@ -352,7 +352,7 @@ pickleball-video-editor/
 | Build | PyInstaller |
 | Tests | pytest |
 | ML Framework | PyTorch (CNN + ResNet-18) |
-| Frame Extraction | decord / OpenCV (headless) |
+| Frame Extraction | FFmpeg CLI / OpenCV (headless) |
 
 ## Development
 
