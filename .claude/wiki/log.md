@@ -14,6 +14,22 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-06-14] update | domains/ml.md (forced)
+
+- Forced recompile of a git-blind page (its sources are gitignored, so the staleness ingest above could not detect them). Source `docs/auto-editor-plan/implementation.md` changed (decord→ffmpeg) in the 2026-06-14 source-update.
+- Changes: the frame-extractor bullet now describes the system `ffmpeg` CLI (out-of-process), noting decord/torchvision are no longer used (decord remains a declared-but-unused dep). `last_compiled` → 2026-06-14; 100 lines (140/200).
+- Status: complete
+
+---
+
+## [2026-06-14] update | architecture/auto-edit-pipeline.md (forced)
+
+- Forced recompile of a git-blind page. Sources `docs/auto-editor-plan/architecture.md` + `docs/auto-editor-plan/implementation.md` changed (decord→ffmpeg).
+- Changes: Stage 2 now notes frames are extracted via the system FFmpeg CLI (out-of-process). The 0.75 confidence-flag wording is left unchanged — the flag-all behavior was deliberately not written into the source docs, and the wiki mirrors sources. `last_compiled` → 2026-06-14; 61 lines (125/200).
+- Status: complete
+
+---
+
 ## [2026-06-14] ingest | staleness-driven (all pages)
 
 - Pages checked: 11
