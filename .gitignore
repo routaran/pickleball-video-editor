@@ -3,8 +3,15 @@
 venv/
 env/
 
-# Development docs and tooling
-docs/
+# Development docs and tooling.
+# docs/ is ignored EXCEPT the docs that feed the compiled wiki (.claude/wiki/):
+# those MUST stay tracked so wiki-build's git-log staleness detection notices
+# their changes. Use docs/* (not docs/) so the negations below can re-include
+# subpaths — git cannot re-include a path whose parent dir is excluded outright.
+docs/*
+!docs/TECH_STACK.md
+!docs/TRAINING_GUIDE.md
+!docs/auto-editor-plan/
 .claude/
 
 # Build system generated files
