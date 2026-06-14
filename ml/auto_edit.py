@@ -96,9 +96,11 @@ class AutoEditResult:
         training_json_path: Path to the .training.json labels file.
         predicted_rally_count: Number of rallies the audio model detected
             (alias for n_detected; kept for backward compatibility).
-        low_confidence_rally_indices: Zero-based indices of rallies whose
-            winner-prediction confidence fell below the threshold, or whose
-            padded duration is under SHORT_RALLY_REVIEW_SECONDS.
+        low_confidence_rally_indices: Zero-based indices of every scored
+            (non-post-game) rally.  The winner model is near-chance on unseen
+            videos, so all scored rallies are flagged for human winner review
+            (post-game rallies are excluded).  Field name retained for
+            backward compatibility.
         simulated_final_score: Tuple (team1_score, team2_score) extracted
             from the last pre-post-game ScoreSnapshot, or None when no
             rallies were scored.
@@ -343,6 +345,7 @@ def auto_edit(
 
     n_scored = 0
     n_post_game = 0
+    n_low_or_short = 0  # informational: scored rallies also low-conf or short
 
     for idx, ((start_s, end_s), (winning_team, confidence)) in enumerate(
         zip(rally_intervals, winner_results, strict=True)
@@ -363,14 +366,18 @@ def auto_edit(
             continue
 
         # --- Scored rally ---
-        if confidence < resolved_threshold:
-            low_confidence_rally_indices.append(idx)
+        # The winner model is near-chance on unseen videos (see the winner-model
+        # diagnosis), so EVERY scored rally is routed through human review rather
+        # than trusted by confidence.  predicted_team / prediction_confidence
+        # (stamped below) remain a non-authoritative pre-fill the reviewer
+        # confirms or flips; a flip cascade-rescores downstream rallies.
+        low_confidence_rally_indices.append(idx)
 
-        # Flag short rallies for review (independent of confidence).
+        # Informational only (no longer gates review): track rallies that are
+        # additionally low-confidence or short, for the Stage-3 summary log.
         duration_s = end_s - start_s
-        if duration_s < SHORT_RALLY_REVIEW_SECONDS:
-            if idx not in low_confidence_rally_indices:
-                low_confidence_rally_indices.append(idx)
+        if confidence < resolved_threshold or duration_s < SHORT_RALLY_REVIEW_SECONDS:
+            n_low_or_short += 1
 
         # Snapshot score state BEFORE this rally starts.
         snapshot_before = score_state.save_snapshot()
@@ -413,6 +420,12 @@ def auto_edit(
 
     # Keep low_confidence list sorted and deduplicated.
     low_confidence_rally_indices = sorted(set(low_confidence_rally_indices))
+    logger.info(
+        "Stage 3: flagged all %d scored rallies for human winner review "
+        "(%d also low-confidence or short)",
+        n_scored,
+        n_low_or_short,
+    )
 
     # Extract final score from the last pre-post-game snapshot.
     simulated_final_score: tuple[int, int] | None = None

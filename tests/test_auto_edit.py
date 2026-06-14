@@ -236,7 +236,7 @@ class TestRallyCount:
 
 
 class TestLowConfidenceFlagging:
-    """Rallies below the 0.75 default threshold are listed in low_confidence_rally_indices."""
+    """Every scored rally is flagged for human winner review (model unreliable)."""
 
     def test_rally_index_2_flagged(
         self,
@@ -250,7 +250,7 @@ class TestLowConfidenceFlagging:
         result = _run_5_rally(tmp_path, video_path, checkpoint_path, corners, doubles_setup)
         assert 2 in result.low_confidence_rally_indices
 
-    def test_no_flags_when_all_high_confidence(
+    def test_all_scored_flagged_even_when_high_confidence(
         self,
         tmp_path: Path,
         video_path: Path,
@@ -279,7 +279,9 @@ class TestLowConfidenceFlagging:
                 checkpoint_path=checkpoint_path,
             )
 
-        assert result.low_confidence_rally_indices == []
+        # Even with all-high confidence, every scored rally is flagged for review.
+        assert result.low_confidence_rally_indices == list(range(result.n_scored))
+        assert result.n_scored == 5
 
 
 # ---------------------------------------------------------------------------
@@ -727,7 +729,7 @@ class TestPredictionStamping:
 
 
 class TestShortRallyFlagging:
-    """Scored rallies under SHORT_RALLY_REVIEW_SECONDS are added to low_confidence."""
+    """All scored rallies are flagged for review; confidence/duration no longer gate it."""
 
     def _run_with_intervals(
         self,
@@ -781,14 +783,14 @@ class TestShortRallyFlagging:
         )
         assert 0 in result.low_confidence_rally_indices
 
-    def test_long_rally_not_flagged_by_duration(
+    def test_long_rally_also_flagged_for_review(
         self,
         tmp_path: Path,
         video_path: Path,
         checkpoint_path: Path,
         corners: list[tuple[int, int]],
     ) -> None:
-        # Rally 0: 1.5s (flagged), Rally 1: 4.0s (must NOT be in list)
+        # Rally 0: 1.5s, Rally 1: 4.0s — both scored, so both flagged for review.
         intervals = [
             {"start_seconds": 1.0, "end_seconds": 2.5, "duration_seconds": 1.5},
             {"start_seconds": 5.0, "end_seconds": 9.0, "duration_seconds": 4.0},
@@ -797,16 +799,17 @@ class TestShortRallyFlagging:
         result = self._run_with_intervals(
             tmp_path, video_path, checkpoint_path, corners, intervals, winners
         )
-        assert 1 not in result.low_confidence_rally_indices
+        assert 1 in result.low_confidence_rally_indices
 
-    def test_exactly_at_threshold_not_flagged(
+    def test_exactly_at_threshold_still_flagged(
         self,
         tmp_path: Path,
         video_path: Path,
         checkpoint_path: Path,
         corners: list[tuple[int, int]],
     ) -> None:
-        # A rally of exactly SHORT_RALLY_REVIEW_SECONDS must NOT be flagged.
+        # Long, high-confidence rally is still flagged: all scored rallies are
+        # reviewed regardless of duration/confidence.
         intervals = [
             {
                 "start_seconds": 1.0,
@@ -818,7 +821,7 @@ class TestShortRallyFlagging:
         result = self._run_with_intervals(
             tmp_path, video_path, checkpoint_path, corners, intervals, winners
         )
-        assert 0 not in result.low_confidence_rally_indices
+        assert 0 in result.low_confidence_rally_indices
 
     def test_no_duplicate_indices(
         self,
@@ -1130,7 +1133,7 @@ class TestCancellationHook:
 
 
 class TestThresholdUnification:
-    """confidence_threshold=None uses WinnerModelConfig.confidence_threshold."""
+    """confidence_threshold is still unified (None→config) but no longer gates review flagging."""
 
     def test_none_threshold_uses_winner_model_config_default(
         self,
@@ -1140,10 +1143,10 @@ class TestThresholdUnification:
         corners: list[tuple[int, int]],
         doubles_setup: AutoEditSetup,
     ) -> None:
-        """When confidence_threshold is None, WinnerModelConfig.confidence_threshold (0.75) is used.
+        """All scored rallies are flagged for review regardless of the resolved threshold.
 
-        Verify by injecting a confidence of exactly 0.74 (below 0.75 but above 0.7,
-        the old default) and asserting that rally is flagged.
+        confidence_threshold=None still resolves to WinnerModelConfig.confidence_threshold
+        (0.75), but flagging no longer depends on it: every scored rally is reviewed.
         """
         from ml.config import WinnerModelConfig
 
@@ -1187,7 +1190,7 @@ class TestThresholdUnification:
             )
 
         assert 2 in result.low_confidence_rally_indices, (
-            "Rally 2 (confidence=0.74) must be flagged when using the default threshold of 0.75"
+            "Every scored rally is flagged for human winner review, regardless of threshold"
         )
 
     def test_explicit_threshold_overrides_config(
@@ -1198,9 +1201,9 @@ class TestThresholdUnification:
         corners: list[tuple[int, int]],
         doubles_setup: AutoEditSetup,
     ) -> None:
-        """An explicit confidence_threshold value takes precedence over the config default."""
-        # Rally 2 has confidence 0.74: below 0.75 but above 0.70.
-        # With explicit threshold=0.70, it should NOT be flagged for confidence.
+        """An explicit confidence_threshold no longer changes flagging: all scored rallies are flagged."""
+        # Rally 2 has confidence 0.74.  The threshold no longer gates flagging,
+        # so rally 2 is flagged for review regardless of the explicit threshold.
         winners: list[tuple[int, float]] = [
             (0, 0.9),
             (1, 0.9),
@@ -1235,6 +1238,6 @@ class TestThresholdUnification:
                 confidence_threshold=0.70,  # explicit value lower than config default
             )
 
-        assert 2 not in result.low_confidence_rally_indices, (
-            "Rally 2 (confidence=0.74) must NOT be flagged with explicit threshold=0.70"
+        assert 2 in result.low_confidence_rally_indices, (
+            "All scored rallies are flagged regardless of the explicit threshold=0.70"
         )
