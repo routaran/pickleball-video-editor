@@ -86,6 +86,7 @@ DEBUG_LOCALE.txt
 # Kdenlive cache and proxy files
 proxy/
 **/proxy/
+relative_output.kdenlive
 
 # ML pipeline training cache and model checkpoints (large binaries)
 ml/cache/
