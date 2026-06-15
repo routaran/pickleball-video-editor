@@ -22,7 +22,14 @@ docs/*
 !docs/OUTPUT_QUICK_REFERENCE.md
 !docs/TESTING.md
 !docs/TEST_SUITE_SUMMARY.md
-.claude/
+# Ignore everything under .claude/ EXCEPT the wiki change-log, which is a
+# tracked historical record (wiki-build appends to it on every run). Use
+# .claude/* (not .claude/) so the negations below can re-include subpaths —
+# git cannot re-include a path whose parent dir is excluded outright.
+.claude/*
+!.claude/wiki/
+.claude/wiki/*
+!.claude/wiki/log.md
 
 # Build system generated files
 config.mk
