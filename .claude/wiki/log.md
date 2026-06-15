@@ -14,6 +14,37 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-06-14] ingest | staleness-driven (4 stale domain pages)
+
+- Pages checked: 11
+- Pages stale (git-log detected): 4 — `domains/core`, `domains/ui`, `domains/output`, `domains/tests`. NOTE: staleness detection worked normally this time because the source docs were just tracked (extended `.gitignore` allowlist in the source-update above) — previously these pages' sources were gitignored, so prior runs needed FORCED updates.
+- Recompiled (targeted updates reflecting the source-update edits):
+  - `domains/tests.md` — test-file count 41 → 49 (`tests/test_winner_estimator.py` added; 2b6344f).
+  - `domains/core.md` — RallyManager score cascade is now implemented (`cascade_scores_from -> list[int]`, `delete_rally -> tuple[Rally, list[int]]`, `insert_rally -> list[int]`); replaced the stale "cascade is a TODO stub" claim (db8178b).
+  - `domains/ui.md` — toast width now dynamic (one-third of parent, clamped 320–480px); `GameConfig` gained `session_state`/`court_corners`/`auto_mode`; added `J`/`E` + `Shift+J`/`Shift+E` touch-counter shortcuts (cfdc578, 6faa718, 63a752a).
+  - `domains/output.md` — NO content change: the page already stated `{basename}.kdenlive` (it was ahead of the source docs' stale `_rallies` suffix); only `last_compiled` bumped.
+- Skipped (up-to-date by git log): 7 — `domains/video`, `domains/ml`, `architecture/{tech-stack,auto-edit-pipeline,session-lifecycle}`, `gotchas/{pickleball-scoring,auto-edit-pitfalls}`.
+- `compiled_via` set to `ingest` for the 4 pages; `index.md`/`source-map.md` dates bumped to 2026-06-14.
+- Note: wiki content pages are gitignored (disk-only); only `log.md` is tracked, so the recompiled pages are written to disk but not committed.
+- Status: complete
+
+---
+
+## [2026-06-14] source-update | align (all docs)
+
+- Drift items: 17 (factual: 12, structural: 4, editorial: 0, candidate-new: 1)
+- Applied: 16  Skipped: 1  Edited inline: 0
+- Scope caveat: `wiki.config.md` sets no `code_scope`, so per-domain code scope was INFERRED from the dir layout (core→`src/core`, ui→`src/ui`, video→`src/video`, output→`src/output`, ml→`ml`, tests→`tests`; cross-cutting arch/gotcha scopes unioned).
+- Trigger commits: `db8178b` (RallyManager cascade/delete/insert return types), `cfdc578` (toast width now dynamic), `6faa718`+`9e4d6bf` (GameConfig gained court_corners/auto_mode/session_state), `63a752a` (J/E/Shift+J/Shift+E touch-counter shortcuts), `f27d67c` (export basename via generate_export_basename — dropped the `_rallies` suffix), `2b6344f` (added tests/test_winner_estimator.py → 48→49 test files).
+- Source docs touched (committed, one commit each): `docs/DETAILED_DESIGN.md` (37da661), `docs/TOAST_IMPLEMENTATION.md` (8387fdd), `docs/SETUP_DIALOG_GUIDE.md` (6a9ad6b), `docs/UI_SPEC.md` (90256ca), `docs/OUTPUT_MODULE_COMPLETE.md` (1a1700c), `docs/OUTPUT_GENERATION_USAGE.md` (13e337d), `docs/OUTPUT_GENERATION_INTEGRATION.md` (14849e8), `docs/OUTPUT_QUICK_REFERENCE.md` (03d39be), `docs/TESTING.md` (3a0de01), `docs/TEST_SUITE_SUMMARY.md` (f6149dd).
+- Infra: extended `.gitignore` wiki-source allowlist so these 10 docs are now tracked (commit 18d902b) — they were gitignored despite being `wiki.config.md` source_paths, which had left them invisible to git-log staleness detection. NOTE: the other ~12 clean source docs under `docs/` (SCORE_STATE_EXAMPLES, SESSION_MANAGER_*, REVIEW_MODE_*, DIALOGS_*, STATUS_OVERLAY, TYPOGRAPHY, SYSTEM_DIALOGS, PLAYBACK_CONTROLS, OUTPUT_GENERATION_*, SESSION_INTEGRATION_USAGE, PHASE_7.2) remain gitignored — extend the allowlist when they next need tracking.
+- Surfaced, not applied (per user choice): `docs/auto-editor-plan/current-state.md` candidate-new DRAFT for the new `ml/winner_tracking/` package (commit 2b6344f) — skipped this run.
+- False positives avoided: all decord/opencv doc mentions verified CORRECT (decord still declared in `ml/requirements.txt` and used by `ml/tools/frame_picker_dialog.py`); README.md/TECH_STACK.md clean (0 in-scope commits); the `ml/winner_tracking/` audit CONFIRMS rather than contradicts the "not building ball tracking" decisions in decisions.md/architecture.md.
+- Followed by: ingest of `domains/core`, `domains/ui`, `domains/output`, `domains/tests` (now git-visible since the docs are tracked).
+- Status: source edits complete; wiki ingest follows.
+
+---
+
 ## [2026-06-14] update | domains/ml.md (forced)
 
 - Forced recompile of a git-blind page (its sources are gitignored, so the staleness ingest above could not detect them). Source `docs/auto-editor-plan/implementation.md` changed (decord→ffmpeg) in the 2026-06-14 source-update.
