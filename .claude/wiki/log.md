@@ -14,6 +14,15 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-06-14] ingest | staleness-driven (1 stale gotcha page)
+
+- Pages checked: 11
+- Pages stale: 1 — `gotchas/auto-edit-pitfalls`
+- Recompiled: `gotchas/auto-edit-pitfalls.md` — triggered because its source `docs/auto-editor-plan/review-fixes.md` was newly git-tracked in `19387d0` (prior compile predated tracking). Re-merged `review-fixes.md` + memory sections "Key decisions" / "Fixes applied 2026-04-19 (post-review)"; content already accurate and complete (all six issues A–F + test-collection + 2 key-decision gotchas), so only `last_compiled` advanced to 2026-06-14. Page = 83 lines (gotcha target 60–120, hard_max 200). Cross-references verified.
+- Skipped (up-to-date): 10 — 6 domains, 3 architecture, `gotchas/pickleball-scoring`. (`18d902b` touched only `.gitignore`, so no source content changed for the 2026-05-26 pages.)
+- source-map: `auto-edit-pitfalls` compiled_via `init` → `ingest`
+- Status: complete
+
 ## [2026-06-14] ingest | staleness-driven (4 stale domain pages)
 
 - Pages checked: 11
