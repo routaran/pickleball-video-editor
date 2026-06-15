@@ -1,0 +1,30 @@
+=== winner-tracking audit eval ===
+rows=200  covered(track found)=197  coverage=98.5%
+
+class balance (covered): team0=99 team1=98 -> majority prior=0.503
+groups: 9 dates, 49 videos
+
+--- baselines on the SAME covered subset ---
+  global majority          : 0.503
+  per-date oracle majority  : 0.558
+  per-video oracle majority : 0.685
+
+--- geometric model (strictly geometric features) ---
+  leave-date-out  GroupKFold acc = 0.558  (balanced 0.559)
+  leave-video-out GroupKFold acc = 0.533  (balanced 0.533)
+
+--- control: label permutation (within date groups) ---
+  null acc mean=0.495  95th pct=0.558  max=0.624
+  real leave-date-out acc=0.558  -> permutation p=0.057
+
+--- control: nuisance-only model (track-quality fields, NO geometry) ---
+  leave-date-out acc = 0.543  (should be near prior 0.503)
+
+--- selective accuracy vs coverage (leave-date-out, abstain by confidence) ---
+  coverage=100% (n= 197)  acc=0.558  (covered-subset prior 0.503)
+  coverage=80% (n= 157)  acc=0.573  (covered-subset prior 0.510)
+  coverage=60% (n= 118)  acc=0.619  (covered-subset prior 0.517)
+  coverage=50% (n=  98)  acc=0.602  (covered-subset prior 0.510)
+  coverage=40% (n=  78)  acc=0.615  (covered-subset prior 0.513)
+  coverage=30% (n=  59)  acc=0.610  (covered-subset prior 0.576)
+  coverage=20% (n=  39)  acc=0.641  (covered-subset prior 0.692)

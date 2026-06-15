@@ -1,0 +1,38 @@
+=== winner-tracking audit eval ===
+rows=1846  covered(track found)=1846  coverage=100.0%
+target column: y_role
+predictive features (12): ['duration_s', 'first1s_hits', 'hits_per_sec', 'last1p5s_hits', 'last_gap', 'last_ioi', 'last_onset_strength', 'mean_ioi', 'n_hits', 'parity', 'std_ioi', 'term_energy_ratio']
+
+class balance (covered): team0=845 team1=1001 -> majority prior=0.542
+groups: 9 dates, 51 videos
+
+--- baselines on the SAME covered subset ---
+  global majority          : 0.542
+  per-date oracle majority  : 0.550
+  per-video oracle majority : 0.578
+
+--- geometric model (strictly geometric features) ---
+  leave-date-out  GroupKFold acc = 0.527  (balanced 0.528)
+  leave-video-out GroupKFold acc = 0.540  (balanced 0.541)
+
+--- sign analysis (is signal masked by Team1<->side inconsistency?) ---
+  leave-date-out raw=0.527  global-flip=0.527
+  oracle per-DATE  sign (date-OOF preds): 0.534
+  oracle per-VIDEO sign (date-OOF preds): 0.569
+  (per-video prior 0.578; lift = oracle_video_sign - prior)
+
+--- control: label permutation (within date groups) ---
+  null acc mean=0.500  95th pct=0.524  max=0.543
+  real leave-date-out acc=0.527  -> permutation p=0.033
+
+--- control: nuisance-only model (track-quality fields, NO geometry) ---
+  leave-date-out acc = 0.458  (should be near prior 0.542)
+
+--- selective accuracy vs coverage (leave-date-out, abstain by confidence) ---
+  coverage=100% (n=1846)  acc=0.527  (covered-subset prior 0.542)
+  coverage=80% (n=1476)  acc=0.536  (covered-subset prior 0.536)
+  coverage=60% (n=1107)  acc=0.541  (covered-subset prior 0.537)
+  coverage=50% (n= 923)  acc=0.532  (covered-subset prior 0.538)
+  coverage=40% (n= 738)  acc=0.527  (covered-subset prior 0.534)
+  coverage=30% (n= 553)  acc=0.517  (covered-subset prior 0.533)
+  coverage=20% (n= 369)  acc=0.501  (covered-subset prior 0.547)
