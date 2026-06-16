@@ -839,6 +839,7 @@ Actual cut:    ←0.5s→      |                             |      ←1.0s→
 │ + get_server_info() -> ServerInfo                             │
 │ + set_score(score: List[int]) -> None                         │
 │ + force_side_out() -> None                                    │
+│ + set_serving_team(serving_team: int) -> None                 │
 │ + save_snapshot() -> None                                     │
 │ + restore_snapshot() -> bool                                  │
 │ + to_dict() -> dict                                           │
@@ -900,6 +901,7 @@ Actual cut:    ←0.5s→      |                             |      ←1.0s→
 │ + get_rally(index: int) -> Rally                              │
 │ + get_last_rally_end_position() -> Optional[tuple[int,float]] │
 │ + update_rally_timing(index, start, end, ...)                 │
+│ + set_rally_timing(index, start, end) -> Rally                │
 │ + update_rally_winner(index: int, new_winner: str) -> None    │
 │ + update_rally_score(index: int, score: str, ...)             │
 │ + cascade_scores_from(index: int, ...) -> list[int]           │
