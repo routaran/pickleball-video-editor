@@ -5,7 +5,7 @@
 A comprehensive test suite has been created for the Pickleball Video Editor
 project. The initial three core-business-logic modules described in detail
 below (`test_score_state.py`, `test_rally_manager.py`, `test_output.py`) now
-contain ~116 tests; the overall suite has grown to 49 test files spanning UI
+contain ~116 tests; the overall suite has grown to 50 test files spanning UI
 widgets, dialogs, video, ML, and tooling. See `tests/` for the full current
 inventory; this document focuses on the initial three modules.
 
