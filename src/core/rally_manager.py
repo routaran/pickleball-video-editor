@@ -272,6 +272,94 @@ class RallyManager:
 
         return rally
 
+    def set_rally_timing(
+        self,
+        index: int,
+        start_seconds: float | None = None,
+        end_seconds: float | None = None,
+    ) -> Rally:
+        """Set rally timing from absolute timestamps (for direct numeric entry in Final Review).
+
+        Unlike :meth:`update_rally_timing`, which applies frame deltas to the
+        already-padded start_frame/end_frame, this method accepts raw
+        (pre-padding) timestamps in seconds and updates **both** the raw_*
+        timing fields and the padded start_frame/end_frame.  Frame-snapping
+        uses ``round()`` so that the caller's value is honoured modulo one
+        frame, whereas the legacy helper uses floor (``int()``) truncation.
+
+        Padding applied:
+        - ``start_frame = round(max(0, seconds + START_PADDING) * fps)``
+        - ``end_frame   = max(start_frame + 1, round((seconds + END_PADDING) * fps))``
+
+        When only one endpoint is supplied the other is left unchanged, except
+        that ``end_frame`` is always clamped to ``start_frame + 1`` so the
+        invariant ``end_frame > start_frame`` is preserved.
+
+        Args:
+            index: Rally index to update (0-based).
+            start_seconds: New raw start time in seconds (before padding), or
+                ``None`` to leave the start unchanged.
+            end_seconds: New raw end time in seconds (before padding), or
+                ``None`` to leave the end unchanged.
+
+        Returns:
+            The updated Rally object.
+
+        Raises:
+            IndexError: If *index* is out of range.
+            ValueError: If *start_seconds* < 0, or if the effective end is
+                less than the effective start (using raw_*_seconds when the
+                counterpart was not supplied).
+        """
+        if not (0 <= index < len(self.rallies)):
+            raise IndexError(
+                f"Rally index {index} out of range (0..{len(self.rallies) - 1})"
+            )
+
+        rally = self.rallies[index]
+
+        if start_seconds is None and end_seconds is None:
+            return rally
+
+        # LBYL: derive effective raw endpoints for cross-validation before any
+        # field is mutated.  Falls back to existing raw_* values so that
+        # single-endpoint calls still enforce end >= start.
+        eff_start: float | None = (
+            start_seconds if start_seconds is not None else rally.raw_start_seconds
+        )
+        eff_end: float | None = (
+            end_seconds if end_seconds is not None else rally.raw_end_seconds
+        )
+
+        if eff_start is not None and eff_start < 0:
+            raise ValueError(f"start_seconds must be >= 0, got {eff_start:.6g}")
+        if eff_end is not None and eff_end < 0:
+            raise ValueError(f"end_seconds must be >= 0, got {eff_end:.6g}")
+        if eff_start is not None and eff_end is not None and eff_end < eff_start:
+            raise ValueError(
+                f"end_seconds ({eff_end:.6g}) must be >= start_seconds ({eff_start:.6g})"
+            )
+
+        # Apply start endpoint (round, not int, for accurate frame-snapping).
+        if start_seconds is not None:
+            rally.raw_start_seconds = start_seconds
+            rally.raw_start_frame = round(start_seconds * self.fps)
+            padded = max(0.0, start_seconds + self.START_PADDING)
+            rally.start_frame = round(padded * self.fps)
+
+        # Apply end endpoint; clamp so end_frame always stays after start_frame.
+        if end_seconds is not None:
+            rally.raw_end_seconds = end_seconds
+            rally.raw_end_frame = round(end_seconds * self.fps)
+            new_end = round((end_seconds + self.END_PADDING) * self.fps)
+            rally.end_frame = max(rally.start_frame + 1, new_end)
+        elif start_seconds is not None:
+            # Only start changed: re-clamp end_frame in case the new start
+            # pushed it backward.
+            rally.end_frame = max(rally.start_frame + 1, rally.end_frame)
+
+        return rally
+
     def update_rally_winner(self, index: int, new_winner: str) -> None:
         """Flip the winner of a rally in-place and mark it as user-overridden.
 
@@ -317,6 +405,7 @@ class RallyManager:
         index: int,
         score_state: "ScoreState",
         new_score: str | None = None,
+        serving_team: int | None = None,
     ) -> list[int]:
         """Replay score state forward from rally[index], refreshing strings and snapshots.
 
@@ -342,9 +431,16 @@ class RallyManager:
             index: Rally index to begin cascade from (0-based)
             score_state: ``ScoreState`` instance to use for replay (mutated in-place)
             new_score: If provided, overrides ``score_at_start`` on rally[index] after
-                the snapshot seed.  The edit is applied via ``score_state.set_score``
-                so it inherits the correct serving-team perspective.  If ``None``,
-                the rally's existing ``score_at_start`` is preserved.
+                the snapshot seed and any serving-team override.  The edit is applied
+                via ``score_state.set_score`` so it is interpreted from the
+                (possibly overridden) serving team's perspective.  If ``None``, the
+                rally's existing ``score_at_start`` is preserved.
+            serving_team: If provided (0 or 1), forces the cascade anchor to start
+                with that team serving.  Applied BEFORE ``new_score`` so that any
+                supplied score string is interpreted from the correct team's
+                perspective.  When ``None`` (the default), behaviour is byte-for-byte
+                identical to the previous two-argument form — the seed alone
+                determines the serving orientation.
 
         Returns:
             List of downstream rally indices (all > *index*) whose winner string was
@@ -354,12 +450,16 @@ class RallyManager:
 
         Raises:
             IndexError: If *index* is out of range.
-            ValueError: If *new_score* is an invalid score string.  The exception
-                propagates before any rally data is mutated, leaving all rallies
-                in their original state.
+            ValueError: If *serving_team* is not 0, 1, or None; or if *new_score* is
+                an invalid score string.  Both exceptions propagate before any rally
+                data is mutated, leaving all rallies in their original state.
         """
         if not (0 <= index < len(self.rallies)):
             raise IndexError(f"Rally index {index} out of range (0..{len(self.rallies) - 1})")
+        # LBYL: validate serving_team before any mutation so the error is
+        # raised before the snapshot restore touches score_state.
+        if serving_team is not None and serving_team not in (0, 1):
+            raise ValueError(f"serving_team must be 0 or 1, got {serving_team!r}")
 
         rally = self.rallies[index]
 
@@ -372,12 +472,23 @@ class RallyManager:
             # Legacy rally without a snapshot — best-effort seed from the score string.
             score_state.set_score(rally.score_at_start)
 
+        # Override serving team BEFORE applying new_score so that the score
+        # string is interpreted from the intended team's perspective.
+        # When serving_team is None this block is entirely skipped — the call
+        # is regression-safe against the two-argument signature.
+        if serving_team is not None:
+            score_state.set_serving_team(serving_team)
+
         # Apply the user's new score on top of the seeded serving-team perspective.
         # If set_score raises ValueError it propagates here — before any rally
         # mutation — so data stays unchanged.
         if new_score is not None:
             score_state.set_score(new_score)
             rally.score_at_start = new_score
+        elif serving_team is not None:
+            # Serving team changed but no explicit new_score: refresh the score
+            # string so it reflects the new team's perspective (scores unchanged).
+            rally.score_at_start = score_state.get_score_string()
 
         # Refresh the edited rally's snapshot from the now-correct score state.
         rally.score_snapshot_at_start = score_state.save_snapshot()

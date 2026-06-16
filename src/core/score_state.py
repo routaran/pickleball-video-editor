@@ -266,6 +266,37 @@ class ScoreState:
             # Recalculate first_server based on serving team's new score
             self.first_server_player_index = 0 if serving_score % 2 == 0 else 1
 
+    def set_serving_team(self, serving_team: int) -> None:
+        """Override which team is currently serving without changing score tallies.
+
+        Used by cascade_scores_from when the caller supplies an explicit
+        serving_team seed so the replay starts from the correct orientation.
+
+        When the team is already serving, this is a no-op — server_number and
+        first_server_player_index are left untouched.  When switching to a
+        different team the behaviour mirrors force_side_out: doubles resets to
+        server 1 and recalculates first_server_player_index from the new
+        serving team's current score; singles only updates serving_team.
+
+        Args:
+            serving_team: 0 or 1.
+
+        Raises:
+            ValueError: If serving_team is not 0 or 1.
+        """
+        if serving_team not in (0, 1):
+            raise ValueError(f"serving_team must be 0 or 1, got {serving_team!r}")
+
+        if self.serving_team == serving_team:
+            return  # no-op: preserve server_number and first_server_player_index
+
+        self.serving_team = serving_team
+
+        if self.game_type == "doubles":
+            self.server_number = 1
+            new_serving_score = self.score[self.serving_team]
+            self.first_server_player_index = 0 if new_serving_score % 2 == 0 else 1
+
     def force_side_out(self) -> None:
         """Force a side-out without scoring (for intervention).
 
