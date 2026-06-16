@@ -14,6 +14,7 @@ from src.ui.styles.colors import (
     BG_TERTIARY,
     BG_BORDER,
     BG_HOVER,
+    BG_BORDER_HOVER,
     # Action colors
     RALLY_START,
     SERVER_WINS,
@@ -37,6 +38,7 @@ from src.ui.styles.colors import (
     GLOW_BLUE,
     GLOW_ORANGE,
     GLOW_RED,
+    PRIMARY_ACTION_TINT,
     # Utility class
     Colors,
     # Semantic aliases
@@ -98,6 +100,7 @@ __all__ = [
     "BG_TERTIARY",
     "BG_BORDER",
     "BG_HOVER",
+    "BG_BORDER_HOVER",
     # Action colors
     "RALLY_START",
     "SERVER_WINS",
@@ -121,6 +124,7 @@ __all__ = [
     "GLOW_BLUE",
     "GLOW_ORANGE",
     "GLOW_RED",
+    "PRIMARY_ACTION_TINT",
     # Utility class
     "Colors",
     # Semantic aliases

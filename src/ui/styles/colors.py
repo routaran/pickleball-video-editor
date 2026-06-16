@@ -22,11 +22,12 @@ from PyQt6.QtGui import QColor
 # Background Colors
 # ============================================================================
 
-BG_PRIMARY = "#1A1D23"      # Deep Slate - Main window background
-BG_SECONDARY = "#252A33"    # Elevated Surface - Panels, containers
-BG_TERTIARY = "#2D3340"     # Card Surface - Buttons, input fields
-BG_BORDER = "#3D4450"       # Subtle Edge - Dividers, borders
-BG_HOVER = "#353C4A"        # Hover Surface - Interactive element hover state
+BG_PRIMARY = "#1A1D23"       # Deep Slate - Main window background
+BG_SECONDARY = "#252A33"     # Elevated Surface - Panels, containers
+BG_TERTIARY = "#2D3340"      # Card Surface - Buttons, input fields
+BG_BORDER = "#3D4450"        # Subtle Edge - Dividers, borders
+BG_HOVER = "#353C4A"         # Hover Surface - Interactive element hover state
+BG_BORDER_HOVER = "#4D5460"  # Brightened border on hover (inputs, combos, team btns)
 
 
 # ============================================================================
@@ -77,6 +78,7 @@ GLOW_GREEN = "rgba(61, 220, 132, 0.4)"      # Green button glow
 GLOW_BLUE = "rgba(79, 195, 247, 0.4)"       # Blue button glow
 GLOW_ORANGE = "rgba(255, 179, 0, 0.4)"      # Orange button glow
 GLOW_RED = "rgba(239, 83, 80, 0.4)"         # Red button glow
+PRIMARY_ACTION_TINT = "rgba(61, 220, 132, 0.15)"  # 15% tint of PRIMARY_ACTION — selected items
 
 
 class Colors:
@@ -184,6 +186,7 @@ __all__ = [
     "BG_TERTIARY",
     "BG_BORDER",
     "BG_HOVER",
+    "BG_BORDER_HOVER",
 
     # Action colors
     "RALLY_START",
@@ -211,6 +214,7 @@ __all__ = [
     "GLOW_BLUE",
     "GLOW_ORANGE",
     "GLOW_RED",
+    "PRIMARY_ACTION_TINT",
 
     # Utility class
     "Colors",

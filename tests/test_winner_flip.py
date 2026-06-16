@@ -1,21 +1,45 @@
-"""Tests for the winner-flip primitive in RallyManager and ReviewModeWidget.
+"""Tests for the winner-control primitive in RallyManager and ReviewModeWidget.
 
 Covers:
 - Test 1: update_rally_winner mutates the correct rally in-place.
 - Test 2: Cascade — downstream score strings recalculate correctly after a flip.
-- Test 3: winner_flipped signal fires when the Flip Winner button is clicked.
+- Test 3: winner_set signal fires when a winner button is clicked in WinnerControlWidget.
 - Test 4: Low-confidence amber style applied/withheld by set_low_confidence_indices.
 
 Tests 1 and 2 are pure-logic and require no Qt.
 Tests 3 and 4 need a QApplication; they are skipped when Qt is unavailable.
+
+API mapping (old → new):
+  winner_flipped(int)          → winner_set(int, str)
+  flipWinnerButton (QPushButton) → WinnerControlWidget._server_btn / ._receiver_btn
+  ScoreEditWidget              → StateAnchorWidget
+  score_changed                → state_anchor_set(int, int, str)
 """
 
 import sys
+import types
+from unittest.mock import MagicMock
+
 import pytest
 
 from src.core.models import Rally, ScoreSnapshot
 from src.core.rally_manager import RallyManager
 from src.core.score_state import ScoreState
+
+# ---------------------------------------------------------------------------
+# Stub heavy ML dependencies so that importing src.ui.* succeeds on machines
+# without torch installed.  This mirrors the pattern in test_main_window.py.
+# ---------------------------------------------------------------------------
+if "torch" not in sys.modules:
+    sys.modules["torch"] = types.ModuleType("torch")  # type: ignore[assignment]
+
+if "ml.predict" not in sys.modules:
+    sys.modules["ml.predict"] = types.ModuleType("ml.predict")  # type: ignore[assignment]
+
+if "ml.auto_edit" not in sys.modules:
+    _auto_edit_stub = types.ModuleType("ml.auto_edit")
+    _auto_edit_stub.AutoEditSetup = MagicMock  # type: ignore[attr-defined]
+    sys.modules["ml.auto_edit"] = _auto_edit_stub  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -285,16 +309,27 @@ def _make_stub_rallies(count: int = 3) -> list[Rally]:
 
 
 # ---------------------------------------------------------------------------
-# Test 3: winner_flipped signal fires on button click
+# Test 3: winner_set signal fires on button click (replaces winner_flipped)
+#
+# Intent preserved: verify the correct rally index and winner string are
+# emitted when the user explicitly selects a winner via WinnerControlWidget.
+# The old test clicked a single "Flip Winner" toggle; the new API exposes two
+# explicit buttons ("Serving Team Won" / "Returning Team Won"), each of which
+# emits winner_set(rally_idx, "server"|"receiver").
 # ---------------------------------------------------------------------------
 
-class TestWinnerFlippedSignal:
-    """The Flip Winner button emits winner_flipped(current_index)."""
+class TestWinnerSetSignal:
+    """WinnerControlWidget buttons emit winner_set(rally_index, winner_string).
+
+    Note: _winner_control is accessed directly because Qt's findChild requires
+    the widget to be in the tree (which happens only after showEvent triggers
+    the deferred arrangement).  Accessing the attribute bypasses that constraint
+    while still testing the real widget and signal.
+    """
 
     @pytest.mark.skipif(not _qt_available(), reason=_QT_SKIP_REASON)
-    def test_signal_emits_correct_rally_index(self, qapp):
-        """Click Flip Winner on rally 1 → winner_flipped emits 1."""
-        from PyQt6.QtWidgets import QPushButton
+    def test_server_button_emits_server_winner_at_current_index(self, qapp):
+        """Click 'Serving Team Won' on rally 1 → winner_set emits (1, 'server')."""
         from src.ui.review_mode import ReviewModeWidget
 
         widget = ReviewModeWidget()
@@ -302,21 +337,19 @@ class TestWinnerFlippedSignal:
         widget.set_rallies(rallies, fps=60.0)
         widget.set_current_rally(1)
 
-        emitted: list[int] = []
-        widget.winner_flipped.connect(emitted.append)
+        emitted: list[tuple[int, str]] = []
+        widget.winner_set.connect(lambda idx, w: emitted.append((idx, w)))
 
-        # Find and click the flip button.
-        flip_btn = widget.findChild(QPushButton, "flipWinnerButton")
-        assert flip_btn is not None, "flipWinnerButton not found in widget tree"
-        flip_btn.click()
+        winner_control = widget._winner_control
+        assert winner_control is not None, "_winner_control not set on ReviewModeWidget"
+        winner_control._server_btn.click()
 
         assert len(emitted) == 1
-        assert emitted[0] == 1
+        assert emitted[0] == (1, "server")
 
     @pytest.mark.skipif(not _qt_available(), reason=_QT_SKIP_REASON)
-    def test_signal_emits_first_rally_index(self, qapp):
-        """Click Flip Winner on rally 0 → winner_flipped emits 0."""
-        from PyQt6.QtWidgets import QPushButton
+    def test_receiver_button_emits_receiver_winner_at_current_index(self, qapp):
+        """Click 'Returning Team Won' on rally 0 → winner_set emits (0, 'receiver')."""
         from src.ui.review_mode import ReviewModeWidget
 
         widget = ReviewModeWidget()
@@ -324,19 +357,19 @@ class TestWinnerFlippedSignal:
         widget.set_rallies(rallies, fps=60.0)
         widget.set_current_rally(0)
 
-        emitted: list[int] = []
-        widget.winner_flipped.connect(emitted.append)
+        emitted: list[tuple[int, str]] = []
+        widget.winner_set.connect(lambda idx, w: emitted.append((idx, w)))
 
-        flip_btn = widget.findChild(QPushButton, "flipWinnerButton")
-        assert flip_btn is not None
-        flip_btn.click()
+        winner_control = widget._winner_control
+        assert winner_control is not None
+        winner_control._receiver_btn.click()
 
-        assert emitted == [0]
+        assert len(emitted) == 1
+        assert emitted[0] == (0, "receiver")
 
     @pytest.mark.skipif(not _qt_available(), reason=_QT_SKIP_REASON)
-    def test_multiple_clicks_emit_multiple_signals(self, qapp):
-        """Each click on Flip Winner emits one signal."""
-        from PyQt6.QtWidgets import QPushButton
+    def test_multiple_clicks_each_emit_one_signal(self, qapp):
+        """Each winner button click emits exactly one winner_set signal."""
         from src.ui.review_mode import ReviewModeWidget
 
         widget = ReviewModeWidget()
@@ -344,28 +377,35 @@ class TestWinnerFlippedSignal:
         widget.set_rallies(rallies, fps=60.0)
         widget.set_current_rally(0)
 
-        emitted: list[int] = []
-        widget.winner_flipped.connect(emitted.append)
+        emitted: list[tuple[int, str]] = []
+        widget.winner_set.connect(lambda idx, w: emitted.append((idx, w)))
 
-        flip_btn = widget.findChild(QPushButton, "flipWinnerButton")
-        assert flip_btn is not None
-        flip_btn.click()
-        flip_btn.click()
+        winner_control = widget._winner_control
+        assert winner_control is not None
+        winner_control._server_btn.click()
+        winner_control._receiver_btn.click()
 
-        assert emitted == [0, 0]
+        assert emitted == [(0, "server"), (0, "receiver")]
 
 
 # ---------------------------------------------------------------------------
-# Test 4: low-confidence amber flag styling
+# Test 4: low-confidence amber flag styling on WinnerControlWidget
+#
+# Intent preserved: amber styling is applied to the winner control when the
+# current rally is in the low-confidence set and removed when it is not.
+# The old test checked the single "flipWinnerButton"; the new test checks
+# WinnerControlWidget's server button (both buttons receive the same style).
 # ---------------------------------------------------------------------------
 
 class TestLowConfidenceAmberStyle:
-    """set_low_confidence_indices applies/withholds amber styling correctly."""
+    """set_low_confidence_indices applies/withholds amber styling on WinnerControlWidget.
+
+    Note: _winner_control is accessed directly (same reason as TestWinnerSetSignal).
+    """
 
     @pytest.mark.skipif(not _qt_available(), reason=_QT_SKIP_REASON)
     def test_amber_style_applied_for_low_confidence_rally(self, qapp):
-        """Flip Winner button shows amber border when current rally is low-confidence."""
-        from PyQt6.QtWidgets import QPushButton
+        """Winner buttons show amber border when current rally is low-confidence."""
         from src.ui.review_mode import ReviewModeWidget
         from src.ui.styles import RECEIVER_WINS  # orange / amber
 
@@ -376,22 +416,19 @@ class TestLowConfidenceAmberStyle:
 
         widget.set_low_confidence_indices({0, 2})
 
-        flip_btn = widget.findChild(QPushButton, "flipWinnerButton")
-        assert flip_btn is not None
+        winner_control = widget._winner_control
+        assert winner_control is not None
 
-        stylesheet = flip_btn.styleSheet()
-        # The amber color constant must appear in the stylesheet to indicate
-        # the orange/warning style is active.
+        stylesheet = winner_control._server_btn.styleSheet()
         assert RECEIVER_WINS.lower() in stylesheet.lower(), (
             f"Expected amber color {RECEIVER_WINS!r} in stylesheet, got: {stylesheet!r}"
         )
 
     @pytest.mark.skipif(not _qt_available(), reason=_QT_SKIP_REASON)
     def test_amber_style_absent_for_normal_rally(self, qapp):
-        """Flip Winner button does NOT show amber when current rally is not low-confidence."""
-        from PyQt6.QtWidgets import QPushButton
+        """Winner buttons do NOT show amber when current rally is not low-confidence."""
         from src.ui.review_mode import ReviewModeWidget
-        from src.ui.styles import RECEIVER_WINS, SERVER_WINS  # orange, blue
+        from src.ui.styles import RECEIVER_WINS, SERVER_WINS
 
         widget = ReviewModeWidget()
         rallies = _make_stub_rallies(3)
@@ -400,10 +437,10 @@ class TestLowConfidenceAmberStyle:
 
         widget.set_low_confidence_indices({0, 2})  # 1 is excluded
 
-        flip_btn = widget.findChild(QPushButton, "flipWinnerButton")
-        assert flip_btn is not None
+        winner_control = widget._winner_control
+        assert winner_control is not None
 
-        stylesheet = flip_btn.styleSheet()
+        stylesheet = winner_control._server_btn.styleSheet()
         assert RECEIVER_WINS.lower() not in stylesheet.lower(), (
             f"Amber color {RECEIVER_WINS!r} must NOT appear for normal rally"
         )
@@ -415,7 +452,6 @@ class TestLowConfidenceAmberStyle:
     @pytest.mark.skipif(not _qt_available(), reason=_QT_SKIP_REASON)
     def test_style_updates_when_navigating_between_rallies(self, qapp):
         """Navigating from a low-confidence rally to a normal one updates the style."""
-        from PyQt6.QtWidgets import QPushButton
         from src.ui.review_mode import ReviewModeWidget
         from src.ui.styles import RECEIVER_WINS, SERVER_WINS
 
@@ -425,26 +461,25 @@ class TestLowConfidenceAmberStyle:
 
         widget.set_low_confidence_indices({0, 2})
 
-        flip_btn = widget.findChild(QPushButton, "flipWinnerButton")
-        assert flip_btn is not None
+        winner_control = widget._winner_control
+        assert winner_control is not None
 
         # Navigate to low-confidence rally 0 → amber expected.
         widget.set_current_rally(0)
-        assert RECEIVER_WINS.lower() in flip_btn.styleSheet().lower()
+        assert RECEIVER_WINS.lower() in winner_control._server_btn.styleSheet().lower()
 
         # Navigate to normal rally 1 → blue expected.
         widget.set_current_rally(1)
-        assert RECEIVER_WINS.lower() not in flip_btn.styleSheet().lower()
-        assert SERVER_WINS.lower() in flip_btn.styleSheet().lower()
+        assert RECEIVER_WINS.lower() not in winner_control._server_btn.styleSheet().lower()
+        assert SERVER_WINS.lower() in winner_control._server_btn.styleSheet().lower()
 
         # Navigate to low-confidence rally 2 → amber expected again.
         widget.set_current_rally(2)
-        assert RECEIVER_WINS.lower() in flip_btn.styleSheet().lower()
+        assert RECEIVER_WINS.lower() in winner_control._server_btn.styleSheet().lower()
 
     @pytest.mark.skipif(not _qt_available(), reason=_QT_SKIP_REASON)
     def test_empty_low_confidence_set_applies_normal_style(self, qapp):
         """An empty set leaves all rallies in normal (non-amber) style."""
-        from PyQt6.QtWidgets import QPushButton
         from src.ui.review_mode import ReviewModeWidget
         from src.ui.styles import RECEIVER_WINS, SERVER_WINS
 
@@ -455,9 +490,9 @@ class TestLowConfidenceAmberStyle:
 
         widget.set_low_confidence_indices(set())
 
-        flip_btn = widget.findChild(QPushButton, "flipWinnerButton")
-        assert flip_btn is not None
+        winner_control = widget._winner_control
+        assert winner_control is not None
 
-        stylesheet = flip_btn.styleSheet()
+        stylesheet = winner_control._server_btn.styleSheet()
         assert RECEIVER_WINS.lower() not in stylesheet.lower()
         assert SERVER_WINS.lower() in stylesheet.lower()

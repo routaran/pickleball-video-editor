@@ -5,20 +5,24 @@ and adjusting rally timings before generating Kdenlive output.
 
 Components:
 - RallyHeaderWidget: Shows "RALLY X OF Y" with progress indicator
-- TimingControlWidget: Adjust rally start/end times with +/- buttons
-- ScoreEditWidget: Edit rally score with cascade option
-- RallyCardWidget: Individual rally card for rally list
-- RallyListWidget: Responsive wrapping grid of rally cards (uses QListWidget IconMode)
+- TimingControlWidget: Adjust rally start/end times with configurable-step nudge
+  buttons and direct numeric entry fields
+- WinnerControlWidget: Explicit serving-team / returning-team winner selection
+- StateAnchorWidget: Set serving team and score at start of rally (always cascades)
+- RallyListWidget: Horizontal scrolling list of rally cards (QListWidget IconMode)
 - ReviewModeWidget: Main container composing all components
 
 The Review Mode replaces the Rally Controls and Toolbar sections when activated
 from the Main Window's "Final Review" button.
 """
 
+import re
+
 from PyQt6.QtCore import Qt, QSize, QTimer, QRegularExpression, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QRegularExpressionValidator, QShowEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -36,26 +40,30 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.app_config import AppSettings
-
 from src.core.models import Rally
 from src.ui.styles.components import ButtonStyles, InputStyles, set_class, set_label_role
 from src.ui.widgets.toast import ToastManager
 from src.ui.styles import (
     BG_BORDER,
+    BG_BORDER_HOVER,
+    BG_HOVER,
     BG_PRIMARY,
     BG_SECONDARY,
     BG_TERTIARY,
     BORDER_COLOR,
+    FOCUS_RING,
     PRIMARY_ACTION,
+    PRIMARY_ACTION_TINT,
     RADIUS_LG,
     RADIUS_MD,
+    RADIUS_SM,
     RECEIVER_WINS,
     SERVER_WINS,
     SPACE_LG,
     SPACE_MD,
     SPACE_SM,
-    SPACE_XL,
     TEXT_ACCENT,
+    TEXT_DISABLED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     TEXT_TERTIARY,
@@ -70,11 +78,16 @@ from src.ui.styles.fonts import ASPECT_ULTRAWIDE
 __all__ = [
     "RallyHeaderWidget",
     "TimingControlWidget",
-    "ScoreEditWidget",
+    "WinnerControlWidget",
+    "StateAnchorWidget",
     "RallyListWidget",
     "ReviewModeWidget",
 ]
 
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
 
 def _format_time(seconds: float) -> str:
     """Format seconds to MM:SS.s format for display.
@@ -90,13 +103,111 @@ def _format_time(seconds: float) -> str:
     return f"{minutes:02d}:{remaining_seconds:04.1f}"
 
 
+# Module-level compiled regexes for _parse_time_input (LBYL — no try/except for flow).
+# _COLON_TIME_RE: "digits:digits[.digits]" — MM:SS or MM:SS.s format.
+# _PLAIN_NUM_RE:  non-negative integer or decimal — plain seconds.
+_COLON_TIME_RE = re.compile(r'^\d+:(\d*\.?\d+)$')
+_PLAIN_NUM_RE = re.compile(r'^\d+(?:\.\d+)?$')
+
+
+def _parse_time_input(text: str) -> float | None:
+    """Parse a user-entered time string into seconds.
+
+    Accepts:
+    - Plain float seconds: ``"42.5"`` → 42.5
+    - MM:SS or MM:SS.s: ``"00:42.5"`` → 42.5, ``"1:23"`` → 83.0
+    - Returns ``None`` on empty input, non-numeric input, negative values,
+      or colon-format with seconds >= 60.
+    """
+    text = text.strip()
+    if not text:
+        return None
+    m = _COLON_TIME_RE.match(text)
+    if m:
+        secs = float(m.group(1))
+        if secs >= 60:
+            return None
+        minutes = int(text.split(":", 1)[0])
+        return minutes * 60 + secs
+    if _PLAIN_NUM_RE.match(text):
+        return float(text)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Step-selector QSS (used by TimingControlWidget combo)
+# ---------------------------------------------------------------------------
+_COMBO_QSS = f"""
+QComboBox {{
+    background-color: {BG_TERTIARY};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER_COLOR};
+    border-radius: {RADIUS_SM}px;
+    padding: 4px 8px;
+    min-height: 26px;
+    min-width: 72px;
+}}
+QComboBox:hover {{
+    border-color: {BG_BORDER_HOVER};
+}}
+QComboBox::drop-down {{
+    border: none;
+    width: 18px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {BG_SECONDARY};
+    border: 1px solid {BORDER_COLOR};
+    selection-background-color: {BG_HOVER};
+    selection-color: {TEXT_PRIMARY};
+    color: {TEXT_PRIMARY};
+    outline: none;
+}}
+"""
+
+# QSS for the mutually-exclusive team-selector buttons in StateAnchorWidget
+_TEAM_BTN_QSS = f"""
+QPushButton {{
+    background-color: {BG_TERTIARY};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER_COLOR};
+    border-radius: {RADIUS_SM}px;
+    padding: 5px 10px;
+    min-height: 28px;
+}}
+QPushButton:hover {{
+    background-color: {BG_HOVER};
+    border-color: {BG_BORDER_HOVER};
+}}
+QPushButton:checked {{
+    background-color: transparent;
+    color: {PRIMARY_ACTION};
+    border: 2px solid {PRIMARY_ACTION};
+}}
+QPushButton:checked:hover {{
+    background-color: {PRIMARY_ACTION};
+    color: {BG_PRIMARY};
+}}
+QPushButton:focus {{
+    border: 2px solid {FOCUS_RING};
+}}
+QPushButton:disabled {{
+    color: {TEXT_DISABLED};
+    border-color: {BORDER_COLOR};
+    background-color: {BG_TERTIARY};
+}}
+"""
+
+
+# ===========================================================================
+# RallyHeaderWidget
+# ===========================================================================
+
 class RallyHeaderWidget(QWidget):
     """Header showing current rally progress with "RALLY X OF Y" display.
 
     Displays:
-    - Large "RALLY X OF Y" text
-    - Exit Review button on the right
-    - Visual progress indicator bar
+    - Large "FINAL REVIEW MODE" title and rally counter
+    - Exit Review button and Return to Main Menu button
 
     Signals:
         exit_requested(): User clicked Exit Review button
@@ -107,50 +218,39 @@ class RallyHeaderWidget(QWidget):
     return_to_menu_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize the rally header widget.
-
-        Args:
-            parent: Parent widget
-        """
         super().__init__(parent)
         self._current_rally = 0
         self._total_rallies = 0
         self._init_ui()
 
     def _init_ui(self) -> None:
-        """Initialize UI components."""
         layout = QHBoxLayout(self)
         layout.setContentsMargins(SPACE_LG, SPACE_MD, SPACE_LG, SPACE_MD)
         layout.setSpacing(SPACE_MD)
 
-        # Title label
         self._title_label = QLabel("FINAL REVIEW MODE")
         self._title_label.setFont(Fonts.dialog_title())
         self._title_label.setStyleSheet(f"color: {TEXT_ACCENT};")
         layout.addWidget(self._title_label)
 
-        # Rally counter label
         self._counter_label = QLabel("Rally 0 of 0")
         self._counter_label.setFont(Fonts.body(size=16, weight=600))
         layout.addWidget(self._counter_label)
 
         layout.addStretch()
 
-        # Return to Main Menu button
         self._return_to_menu_button = QPushButton("Main Menu")
         self._return_to_menu_button.setFont(Fonts.button_other())
         self._return_to_menu_button.clicked.connect(self.return_to_menu_requested.emit)
         set_class(self._return_to_menu_button, "secondary")
         layout.addWidget(self._return_to_menu_button)
 
-        # Exit button
         self._exit_button = QPushButton("Exit Review")
         self._exit_button.setFont(Fonts.button_other())
         self._exit_button.clicked.connect(self.exit_requested.emit)
         set_class(self._exit_button, "secondary")
         layout.addWidget(self._exit_button)
 
-        # Container styling
         self.setStyleSheet(f"""
             RallyHeaderWidget {{
                 background-color: {BG_SECONDARY};
@@ -169,80 +269,109 @@ class RallyHeaderWidget(QWidget):
         """
         self._current_rally = current
         self._total_rallies = total
-        # Display as 1-based for user
         suffix = " (post-game)" if is_post_game else ""
         self._counter_label.setText(f"Rally {current + 1} of {total}{suffix}")
 
 
-class TimingControlWidget(QWidget):
-    """Widget for adjusting rally start/end times with +/- 0.1s buttons.
+# ===========================================================================
+# TimingControlWidget
+# ===========================================================================
 
-    Displays:
-    - Start time with -0.1s and +0.1s adjustment buttons
-    - End time with -0.1s and +0.1s adjustment buttons
-    - Duration (read-only, calculated)
+class TimingControlWidget(QWidget):
+    """Widget for adjusting rally start/end times.
+
+    Features:
+    - Configurable nudge step (0.1 / 0.25 / 0.5 / 1.0 s) via combo selector
+    - ±step nudge buttons (labels update when step changes)
+    - Direct numeric entry QLineEdits for start, end, and duration
+      (duration edits adjust end = start + duration)
+    - Offset captions and Reset button (unchanged behaviour)
 
     Signals:
-        timing_adjusted(str, float): Emitted when timing is adjusted
-            - field: "start" or "end"
-            - delta: Change in seconds (e.g., 0.1 or -0.1)
+        timing_adjusted(str, float): Nudge applied — (field "start"|"end", delta)
+        timing_set(str, float): Direct entry committed — (field "start"|"end",
+            absolute_seconds)
     """
 
     timing_adjusted = pyqtSignal(str, float)
+    timing_set = pyqtSignal(str, float)
+
+    _STEP_OPTIONS: tuple[float, ...] = (0.1, 0.25, 0.5, 1.0)
+    _STEP_LABELS: tuple[str, ...] = ("0.1 s", "0.25 s", "0.5 s", "1.0 s")
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize the timing control widget.
-
-        Args:
-            parent: Parent widget
-        """
         super().__init__(parent)
         self._start_time = 0.0
         self._end_time = 0.0
         self._orig_start = 0.0
         self._orig_end = 0.0
+        self._step = self._STEP_OPTIONS[0]
         self._init_ui()
 
     def _init_ui(self) -> None:
-        """Initialize UI components."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
         layout.setSpacing(SPACE_SM)
 
-        # Section title
+        # -- Section title ---------------------------------------------------
         title = QLabel("TIMING")
         title.setFont(Fonts.section_label())
         title.setText(title.text().upper())
         set_label_role(title, "sectionLabel")
         layout.addWidget(title)
 
-        # Controls grid
+        # -- Step selector row -----------------------------------------------
+        step_row = QHBoxLayout()
+        step_row.setSpacing(SPACE_SM)
+        step_row.addStretch()
+        step_label = QLabel("Step:")
+        step_label.setFont(Fonts.label())
+        set_label_role(step_label, "body")
+        step_row.addWidget(step_label)
+
+        self._step_combo = QComboBox()
+        self._step_combo.addItems(list(self._STEP_LABELS))
+        self._step_combo.setFont(Fonts.label())
+        self._step_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._step_combo.setStyleSheet(_COMBO_QSS)
+        self._step_combo.currentIndexChanged.connect(self._on_step_changed)
+        step_row.addWidget(self._step_combo)
+        layout.addLayout(step_row)
+
+        # -- Main controls grid ----------------------------------------------
         controls_layout = QGridLayout()
         controls_layout.setSpacing(SPACE_MD)
         controls_layout.setColumnStretch(1, 1)
         controls_layout.setColumnStretch(4, 1)
 
-        # Start time controls — row 0
+        # Row 0 — labels + direct-entry fields
         start_label = QLabel("START")
         start_label.setFont(Fonts.label())
         set_label_role(start_label, "body")
         controls_layout.addWidget(start_label, 0, 0)
 
-        self._start_time_label = QLabel("00:00.0")
-        self._start_time_label.setFont(Fonts.timestamp())
-        controls_layout.addWidget(self._start_time_label, 0, 1)
+        self._start_entry = QLineEdit("00:00.0")
+        self._start_entry.setFont(Fonts.timestamp())
+        self._start_entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._start_entry.setToolTip("Enter time as MM:SS.s or raw seconds")
+        self._start_entry.setStyleSheet(InputStyles.line_edit())
+        self._start_entry.editingFinished.connect(self._on_start_entry_committed)
+        controls_layout.addWidget(self._start_entry, 0, 1)
 
-        # End time controls — row 0
         end_label = QLabel("END")
         end_label.setFont(Fonts.label())
         set_label_role(end_label, "body")
         controls_layout.addWidget(end_label, 0, 3)
 
-        self._end_time_label = QLabel("00:00.0")
-        self._end_time_label.setFont(Fonts.timestamp())
-        controls_layout.addWidget(self._end_time_label, 0, 4)
+        self._end_entry = QLineEdit("00:00.0")
+        self._end_entry.setFont(Fonts.timestamp())
+        self._end_entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._end_entry.setToolTip("Enter time as MM:SS.s or raw seconds")
+        self._end_entry.setStyleSheet(InputStyles.line_edit())
+        self._end_entry.editingFinished.connect(self._on_end_entry_committed)
+        controls_layout.addWidget(self._end_entry, 0, 4)
 
-        # Offset captions — row 1, hidden until timing is modified
+        # Row 1 — offset captions (hidden until timing is modified)
         _offset_style = (
             f"color: {TEXT_TERTIARY}; font-size: 12px;"
             " background: transparent; border: none;"
@@ -257,44 +386,53 @@ class TimingControlWidget(QWidget):
         self._end_offset_label.hide()
         controls_layout.addWidget(self._end_offset_label, 1, 3, 1, 2)
 
-        # Adjustment buttons — row 2
-        start_minus_btn = QPushButton("-0.1s")
-        start_minus_btn.setFont(Fonts.button_other())
-        start_minus_btn.clicked.connect(lambda: self._adjust_start(-0.1))
-        self._style_adjust_button(start_minus_btn)
-        controls_layout.addWidget(start_minus_btn, 2, 0)
+        # Row 2 — nudge buttons (labels update with step)
+        self._start_minus_btn = QPushButton("-0.1 s")
+        self._start_minus_btn.setFont(Fonts.button_other())
+        self._start_minus_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._start_minus_btn.clicked.connect(lambda: self._adjust_start(-1))
+        self._style_adjust_button(self._start_minus_btn)
+        controls_layout.addWidget(self._start_minus_btn, 2, 0)
 
-        start_plus_btn = QPushButton("+0.1s")
-        start_plus_btn.setFont(Fonts.button_other())
-        start_plus_btn.clicked.connect(lambda: self._adjust_start(0.1))
-        self._style_adjust_button(start_plus_btn)
-        controls_layout.addWidget(start_plus_btn, 2, 1)
+        self._start_plus_btn = QPushButton("+0.1 s")
+        self._start_plus_btn.setFont(Fonts.button_other())
+        self._start_plus_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._start_plus_btn.clicked.connect(lambda: self._adjust_start(1))
+        self._style_adjust_button(self._start_plus_btn)
+        controls_layout.addWidget(self._start_plus_btn, 2, 1)
 
-        end_minus_btn = QPushButton("-0.1s")
-        end_minus_btn.setFont(Fonts.button_other())
-        end_minus_btn.clicked.connect(lambda: self._adjust_end(-0.1))
-        self._style_adjust_button(end_minus_btn)
-        controls_layout.addWidget(end_minus_btn, 2, 3)
+        self._end_minus_btn = QPushButton("-0.1 s")
+        self._end_minus_btn.setFont(Fonts.button_other())
+        self._end_minus_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._end_minus_btn.clicked.connect(lambda: self._adjust_end(-1))
+        self._style_adjust_button(self._end_minus_btn)
+        controls_layout.addWidget(self._end_minus_btn, 2, 3)
 
-        end_plus_btn = QPushButton("+0.1s")
-        end_plus_btn.setFont(Fonts.button_other())
-        end_plus_btn.clicked.connect(lambda: self._adjust_end(0.1))
-        self._style_adjust_button(end_plus_btn)
-        controls_layout.addWidget(end_plus_btn, 2, 4)
+        self._end_plus_btn = QPushButton("+0.1 s")
+        self._end_plus_btn.setFont(Fonts.button_other())
+        self._end_plus_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._end_plus_btn.clicked.connect(lambda: self._adjust_end(1))
+        self._style_adjust_button(self._end_plus_btn)
+        controls_layout.addWidget(self._end_plus_btn, 2, 4)
 
-        # Duration display — row 3 cols 0-1; Reset button — row 3 cols 3-4
+        # Row 3 — duration entry + reset
         duration_label = QLabel("DURATION")
         duration_label.setFont(Fonts.label())
         set_label_role(duration_label, "body")
         controls_layout.addWidget(duration_label, 3, 0)
 
-        self._duration_label = QLabel("00:00.0")
-        self._duration_label.setFont(Fonts.timestamp())
-        controls_layout.addWidget(self._duration_label, 3, 1)
+        self._duration_entry = QLineEdit("00:00.0")
+        self._duration_entry.setFont(Fonts.timestamp())
+        self._duration_entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._duration_entry.setToolTip("Edit duration to move end time (end = start + duration)")
+        self._duration_entry.setStyleSheet(InputStyles.line_edit())
+        self._duration_entry.editingFinished.connect(self._on_duration_entry_committed)
+        controls_layout.addWidget(self._duration_entry, 3, 1)
 
         self._reset_button = QPushButton("Reset")
         self._reset_button.setFont(Fonts.button_other())
         self._reset_button.setToolTip("Restore original timing")
+        self._reset_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._reset_button.clicked.connect(self._on_reset_clicked)
         self._reset_button.setStyleSheet(ButtonStyles.compact())
         self._reset_button.setEnabled(False)
@@ -302,7 +440,6 @@ class TimingControlWidget(QWidget):
 
         layout.addLayout(controls_layout)
 
-        # Container styling
         self.setStyleSheet(f"""
             TimingControlWidget {{
                 background-color: {BG_SECONDARY};
@@ -312,74 +449,112 @@ class TimingControlWidget(QWidget):
         """)
 
     def _style_adjust_button(self, button: QPushButton) -> None:
-        """Apply consistent styling to adjustment buttons.
-
-        Args:
-            button: Button to style
-        """
         button.setStyleSheet(ButtonStyles.compact())
 
-    def _adjust_start(self, delta: float) -> None:
-        """Handle start time adjustment.
+    # -- Step selector -------------------------------------------------------
 
-        Args:
-            delta: Time change in seconds
-        """
+    @pyqtSlot(int)
+    def _on_step_changed(self, index: int) -> None:
+        """Update step value and nudge-button labels when combo selection changes."""
+        if 0 <= index < len(self._STEP_OPTIONS):
+            self._step = self._STEP_OPTIONS[index]
+            lbl = self._STEP_LABELS[index]
+            self._start_minus_btn.setText(f"-{lbl}")
+            self._start_plus_btn.setText(f"+{lbl}")
+            self._end_minus_btn.setText(f"-{lbl}")
+            self._end_plus_btn.setText(f"+{lbl}")
+
+    # -- Nudge actions -------------------------------------------------------
+
+    def _adjust_start(self, multiplier: float) -> None:
+        """Apply a nudge to start time.  multiplier is +1 or -1."""
+        delta = self._step * multiplier
         self._start_time += delta
-        if self._start_time < 0:
+        if self._start_time < 0.0:
             self._start_time = 0.0
-        self._update_display()
+        self._sync_entry_fields()
         self._check_modified()
         self.timing_adjusted.emit("start", delta)
 
-    def _adjust_end(self, delta: float) -> None:
-        """Handle end time adjustment.
-
-        Args:
-            delta: Time change in seconds
-        """
+    def _adjust_end(self, multiplier: float) -> None:
+        """Apply a nudge to end time.  multiplier is +1 or -1."""
+        delta = self._step * multiplier
         self._end_time += delta
         if self._end_time < self._start_time:
             self._end_time = self._start_time
-        self._update_display()
+        self._sync_entry_fields()
         self._check_modified()
         self.timing_adjusted.emit("end", delta)
 
-    def _check_modified(self) -> None:
-        """Update Reset button state and offset captions based on delta from originals."""
-        start_delta = round(self._start_time - self._orig_start, 1)
-        end_delta = round(self._end_time - self._orig_end, 1)
+    # -- Direct-entry handlers -----------------------------------------------
 
-        is_modified = start_delta != 0.0 or end_delta != 0.0
-        self._reset_button.setEnabled(is_modified)
+    @pyqtSlot()
+    def _on_start_entry_committed(self) -> None:
+        """Parse the start entry and emit timing_set if value changed."""
+        text = self._start_entry.text().strip()
+        value = _parse_time_input(text)
+        if value is None:
+            # Restore display to the current internal value
+            self._sync_entry_fields()
+            return
+        value = max(0.0, min(value, self._end_time))
+        if abs(value - self._start_time) < 1e-6:
+            self._sync_entry_fields()
+            return
+        self._start_time = value
+        self._sync_entry_fields()
+        self._check_modified()
+        self.timing_set.emit("start", self._start_time)
 
-        if start_delta != 0.0:
-            sign = "+" if start_delta > 0 else ""
-            self._start_offset_label.setText(f"{sign}{start_delta:.1f}s from original")
-            self._start_offset_label.show()
-        else:
-            self._start_offset_label.hide()
+    @pyqtSlot()
+    def _on_end_entry_committed(self) -> None:
+        """Parse the end entry and emit timing_set if value changed."""
+        text = self._end_entry.text().strip()
+        value = _parse_time_input(text)
+        if value is None:
+            self._sync_entry_fields()
+            return
+        value = max(self._start_time, value)
+        if abs(value - self._end_time) < 1e-6:
+            self._sync_entry_fields()
+            return
+        self._end_time = value
+        self._sync_entry_fields()
+        self._check_modified()
+        self.timing_set.emit("end", self._end_time)
 
-        if end_delta != 0.0:
-            sign = "+" if end_delta > 0 else ""
-            self._end_offset_label.setText(f"{sign}{end_delta:.1f}s from original")
-            self._end_offset_label.show()
-        else:
-            self._end_offset_label.hide()
+    @pyqtSlot()
+    def _on_duration_entry_committed(self) -> None:
+        """Parse the duration entry, translate to new end time, emit timing_set."""
+        text = self._duration_entry.text().strip()
+        value = _parse_time_input(text)
+        if value is None or value < 0:
+            self._sync_entry_fields()
+            return
+        new_end = self._start_time + value
+        if abs(new_end - self._end_time) < 1e-6:
+            self._sync_entry_fields()
+            return
+        self._end_time = new_end
+        self._sync_entry_fields()
+        self._check_modified()
+        self.timing_set.emit("end", self._end_time)
+
+    # -- Reset ---------------------------------------------------------------
 
     @pyqtSlot()
     def _on_reset_clicked(self) -> None:
         """Restore start/end to the originals stored when the rally was loaded.
 
-        Emits corrective ``timing_adjusted`` deltas so the parent widget and
-        model stay in sync.
+        Emits corrective ``timing_adjusted`` deltas so the parent and model
+        stay in sync.
         """
         start_corrective = self._orig_start - self._start_time
         end_corrective = self._orig_end - self._end_time
 
         self._start_time = self._orig_start
         self._end_time = self._orig_end
-        self._update_display()
+        self._sync_entry_fields()
         self._check_modified()
 
         if start_corrective != 0.0:
@@ -387,18 +562,52 @@ class TimingControlWidget(QWidget):
         if end_corrective != 0.0:
             self.timing_adjusted.emit("end", end_corrective)
 
-    def _update_display(self) -> None:
-        """Update all time displays."""
-        self._start_time_label.setText(_format_time(self._start_time))
-        self._end_time_label.setText(_format_time(self._end_time))
+    # -- Display sync --------------------------------------------------------
+
+    def _sync_entry_fields(self) -> None:
+        """Update all three QLineEdit fields from _start_time/_end_time.
+
+        Signals are blocked during the update to prevent recursive commits.
+        """
         duration = max(0.0, self._end_time - self._start_time)
-        self._duration_label.setText(_format_time(duration))
+        for widget, value in (
+            (self._start_entry, self._start_time),
+            (self._end_entry, self._end_time),
+            (self._duration_entry, duration),
+        ):
+            widget.blockSignals(True)
+            widget.setText(_format_time(value))
+            widget.blockSignals(False)
+
+    def _check_modified(self) -> None:
+        """Update Reset button state and offset captions based on delta from originals."""
+        start_delta = round(self._start_time - self._orig_start, 3)
+        end_delta = round(self._end_time - self._orig_end, 3)
+
+        is_modified = start_delta != 0.0 or end_delta != 0.0
+        self._reset_button.setEnabled(is_modified)
+
+        if start_delta != 0.0:
+            sign = "+" if start_delta > 0 else ""
+            self._start_offset_label.setText(f"{sign}{start_delta:.2f}s from original")
+            self._start_offset_label.show()
+        else:
+            self._start_offset_label.hide()
+
+        if end_delta != 0.0:
+            sign = "+" if end_delta > 0 else ""
+            self._end_offset_label.setText(f"{sign}{end_delta:.2f}s from original")
+            self._end_offset_label.show()
+        else:
+            self._end_offset_label.hide()
+
+    # -- Public API ----------------------------------------------------------
 
     def set_times(self, start_seconds: float, end_seconds: float) -> None:
-        """Set the displayed start and end times.
+        """Set and display the start and end times.
 
-        Also stores the provided values as the originals for the current rally
-        so the Reset button and offset captions have a reference point.
+        Stores the provided values as the originals for the current rally
+        so Reset and offset captions have a reference point.
 
         Args:
             start_seconds: Rally start time in seconds
@@ -408,237 +617,343 @@ class TimingControlWidget(QWidget):
         self._end_time = end_seconds
         self._orig_start = start_seconds
         self._orig_end = end_seconds
-        self._update_display()
+        self._sync_entry_fields()
         self._check_modified()
 
 
-class ScoreEditWidget(QWidget):
-    """Widget for editing rally score with optional cascade.
+# ===========================================================================
+# WinnerControlWidget
+# ===========================================================================
 
-    Displays:
-    - Current score (read-only)
-    - Arrow indicator
-    - New score input field with inline format validation
-    - Cascade checkbox
+class WinnerControlWidget(QWidget):
+    """Explicit two-option winner selection control.
+
+    Replaces the single "Flip Winner" button.  Displays two buttons labeled
+    with the actual team names derived from the current rally's
+    ``score_snapshot_at_start.serving_team`` field:
+
+    - "Team X Won" → emits winner_selected("server")
+    - "Team Y Won" → emits winner_selected("receiver")
+
+    Low-confidence rallies are highlighted with an amber border on both
+    buttons (amber = RECEIVER_WINS; normal = SERVER_WINS).
 
     Signals:
-        score_changed(str, bool): Emitted when score is changed
-            - new_score: New score string (validated)
-            - cascade: Whether to cascade to later rallies
+        winner_selected(str): ``"server"`` or ``"receiver"``
     """
 
-    score_changed = pyqtSignal(str, bool)
+    winner_selected = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize the score edit widget.
-
-        Args:
-            parent: Parent widget
-        """
         super().__init__(parent)
-        self._game_mode = "doubles"
-        self._validator: QRegularExpressionValidator | None = None
+        self._low_confidence = False
         self._init_ui()
-        self._update_validator()
 
     def _init_ui(self) -> None:
-        """Initialize UI components."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
         layout.setSpacing(SPACE_SM)
 
-        # Section title
-        title = QLabel("SCORE")
+        # Section label
+        title = QLabel("WINNER")
         title.setFont(Fonts.section_label())
         title.setText(title.text().upper())
         set_label_role(title, "sectionLabel")
         layout.addWidget(title)
 
-        # Score edit layout
-        score_layout = QHBoxLayout()
-        score_layout.setSpacing(SPACE_MD)
-
-        # Current score display
-        current_layout = QVBoxLayout()
-        current_layout.setSpacing(SPACE_SM // 2)
-
-        current_label = QLabel("CURRENT")
-        current_label.setFont(Fonts.secondary())
-        current_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        current_layout.addWidget(current_label)
-
-        self._current_score_label = QLabel("0-0-2")
-        self._current_score_label.setFont(Fonts.display(size=20, weight=700))
-        self._current_score_label.setStyleSheet(f"""
-            QLabel {{
-                background-color: {BG_TERTIARY};
-                color: {TEXT_SECONDARY};
-                border: 1px solid {BORDER_COLOR};
-                border-radius: {RADIUS_MD}px;
-                padding: {SPACE_SM}px {SPACE_MD}px;
-            }}
-        """)
-        self._current_score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        current_layout.addWidget(self._current_score_label)
-
-        score_layout.addLayout(current_layout)
-
-        # Arrow indicator — Lucide arrow-right
-        arrow_label = QLabel()
-        arrow_label.setPixmap(make_pixmap("arrow-right", TEXT_SECONDARY, 24))
-        arrow_label.setFixedSize(24, 24)
-        arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        score_layout.addWidget(arrow_label)
-
-        # New score input
-        new_layout = QVBoxLayout()
-        new_layout.setSpacing(SPACE_SM // 2)
-
-        new_label = QLabel("NEW SCORE")
-        new_label.setFont(Fonts.secondary())
-        new_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        new_layout.addWidget(new_label)
-
-        self._new_score_input = QLineEdit()
-        self._new_score_input.setFont(Fonts.display(size=20, weight=700))
-        self._new_score_input.setPlaceholderText("X-Y-Z")
-        self._new_score_input.editingFinished.connect(self._on_editing_finished)
-        self._new_score_input.setStyleSheet(InputStyles.line_edit())
-        new_layout.addWidget(self._new_score_input)
-
-        score_layout.addLayout(new_layout)
-
-        layout.addLayout(score_layout)
-
-        # Inline error label — shown when the entered score does not match the
-        # expected format (e.g. "7-5-2" for doubles, "7-5" for singles).
-        self._error_label = QLabel("Use the format 7-5-2")
-        self._error_label.setStyleSheet(
-            f"color: {DANGER_TEXT}; font-size: 12px; background: transparent; border: none;"
+        # Read-only serving-team info line
+        self._serving_info_label = QLabel("Serving: —")
+        self._serving_info_label.setFont(Fonts.secondary())
+        self._serving_info_label.setStyleSheet(
+            f"color: {TEXT_SECONDARY}; background: transparent; border: none;"
         )
-        self._error_label.hide()
-        layout.addWidget(self._error_label)
+        layout.addWidget(self._serving_info_label)
 
-        # Cascade checkbox
-        self._cascade_checkbox = QCheckBox("Cascade to later rallies")
-        self._cascade_checkbox.setFont(Fonts.label())
-        self._cascade_checkbox.setStyleSheet(InputStyles.checkbox())
-        layout.addWidget(self._cascade_checkbox)
+        # Two winner buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(SPACE_SM)
+
+        self._server_btn = QPushButton("Serving Team Won")
+        self._server_btn.setFont(Fonts.button_other())
+        self._server_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._server_btn.setToolTip("Mark the currently serving team as the winner")
+        self._server_btn.clicked.connect(lambda: self.winner_selected.emit("server"))
+        btn_row.addWidget(self._server_btn)
+
+        self._receiver_btn = QPushButton("Returning Team Won")
+        self._receiver_btn.setFont(Fonts.button_other())
+        self._receiver_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._receiver_btn.setToolTip("Mark the returning (non-serving) team as the winner")
+        self._receiver_btn.clicked.connect(lambda: self.winner_selected.emit("receiver"))
+        btn_row.addWidget(self._receiver_btn)
+
+        layout.addLayout(btn_row)
 
         # Container styling
         self.setStyleSheet(f"""
-            ScoreEditWidget {{
+            WinnerControlWidget {{
                 background-color: {BG_SECONDARY};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: {RADIUS_MD}px;
             }}
         """)
 
-    @pyqtSlot()
-    def _on_editing_finished(self) -> None:
-        """Handle editingFinished — validate the format then emit score_changed.
+        # Apply initial button style (normal, not low-confidence)
+        self._apply_button_style()
 
-        Uses the regex for the current game mode:
-        - doubles:          ``^\\d{1,2}-\\d{1,2}-[12]$``  (e.g. "7-5-2")
-        - singles/highlights: ``^\\d{1,2}-\\d{1,2}$``   (e.g. "7-5")
+    def _apply_button_style(self) -> None:
+        """Style both winner buttons based on the current low-confidence flag."""
+        color = RECEIVER_WINS if self._low_confidence else SERVER_WINS
+        self._server_btn.setStyleSheet(ButtonStyles.outline(color))
+        self._receiver_btn.setStyleSheet(ButtonStyles.outline(color))
 
-        Emits ``score_changed`` only when the format is Acceptable; shows the
-        inline error label and activates the ``[error="true"]`` border otherwise.
+    # -- Public API ----------------------------------------------------------
+
+    def set_teams(self, serving_name: str, returning_name: str) -> None:
+        """Update button labels and info display for the current rally.
+
+        Args:
+            serving_name: Display name for the serving team (e.g. "Alice & Bob")
+            returning_name: Display name for the returning team
         """
-        text = self._new_score_input.text().strip()
-        if not text:
-            self._set_error_state(False)
-            return
-        rx = QRegularExpression(self._current_pattern())
-        if rx.match(text).hasMatch():
-            self._set_error_state(False)
-            cascade = self._cascade_checkbox.isChecked()
-            self.score_changed.emit(text, cascade)
-        else:
-            self._set_error_state(True)
+        self._server_btn.setText(f"{serving_name} Won")
+        self._receiver_btn.setText(f"{returning_name} Won")
+        self._serving_info_label.setText(f"Serving: {serving_name}")
+
+    def set_low_confidence(self, low: bool) -> None:
+        """Toggle amber / blue styling for low-confidence rally classifications.
+
+        Args:
+            low: True → amber RECEIVER_WINS border; False → blue SERVER_WINS border
+        """
+        self._low_confidence = low
+        self._apply_button_style()
+
+
+# ===========================================================================
+# StateAnchorWidget  (replaces ScoreEditWidget)
+# ===========================================================================
+
+class StateAnchorWidget(QWidget):
+    """Control for setting the game state (serving team + score) at rally start.
+
+    Always cascades to later rallies — the cascade checkbox from the previous
+    ScoreEditWidget has been removed.  MainWindow is responsible for cascade logic.
+
+    Validation follows the same regex patterns as the old ScoreEditWidget:
+    - doubles:  ``^\\d{1,2}-\\d{1,2}-[12]$``
+    - singles / highlights: ``^\\d{1,2}-\\d{1,2}$``
+
+    The Apply button is disabled until the score field contains a valid value.
+    An inline error label appears for invalid (non-empty) input.
+
+    Signals:
+        state_anchor_applied(int, str): (serving_team 0|1, score_string)
+            Emitted when the user clicks Apply with a valid score.
+    """
+
+    state_anchor_applied = pyqtSignal(int, str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._game_mode = "doubles"
+        self._serving_team = 0
+        self._team1_name = "Team 1"
+        self._team2_name = "Team 2"
+        self._validator: QRegularExpressionValidator | None = None
+        self._init_ui()
+        self._update_validator()
+
+    def _init_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        layout.setSpacing(SPACE_SM)
+
+        # Section label
+        title = QLabel("GAME STATE")
+        title.setFont(Fonts.section_label())
+        title.setText(title.text().upper())
+        set_label_role(title, "sectionLabel")
+        layout.addWidget(title)
+
+        # Sub-heading clarifying the action
+        subtitle = QLabel("Set score and serving team at start of rally")
+        subtitle.setFont(Fonts.secondary())
+        subtitle.setStyleSheet(
+            f"color: {TEXT_SECONDARY}; background: transparent; border: none;"
+        )
+        layout.addWidget(subtitle)
+
+        # Serving-team selector
+        team_header = QLabel("Serving team:")
+        team_header.setFont(Fonts.label())
+        set_label_role(team_header, "body")
+        layout.addWidget(team_header)
+
+        team_btn_row = QHBoxLayout()
+        team_btn_row.setSpacing(SPACE_SM)
+
+        self._team1_btn = QPushButton("Team 1")
+        self._team1_btn.setCheckable(True)
+        self._team1_btn.setChecked(True)
+        self._team1_btn.setFont(Fonts.button_other())
+        self._team1_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._team1_btn.setStyleSheet(_TEAM_BTN_QSS)
+        self._team1_btn.clicked.connect(lambda: self._set_serving_team(0))
+        team_btn_row.addWidget(self._team1_btn)
+
+        self._team2_btn = QPushButton("Team 2")
+        self._team2_btn.setCheckable(True)
+        self._team2_btn.setChecked(False)
+        self._team2_btn.setFont(Fonts.button_other())
+        self._team2_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._team2_btn.setStyleSheet(_TEAM_BTN_QSS)
+        self._team2_btn.clicked.connect(lambda: self._set_serving_team(1))
+        team_btn_row.addWidget(self._team2_btn)
+
+        team_btn_row.addStretch()
+        layout.addLayout(team_btn_row)
+
+        # Score entry row
+        score_row = QHBoxLayout()
+        score_row.setSpacing(SPACE_SM)
+
+        score_label = QLabel("Score:")
+        score_label.setFont(Fonts.label())
+        set_label_role(score_label, "body")
+        score_row.addWidget(score_label)
+
+        self._score_input = QLineEdit()
+        self._score_input.setFont(Fonts.display(size=18, weight=700))
+        self._score_input.setPlaceholderText("X-Y-Z")
+        self._score_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._score_input.setStyleSheet(InputStyles.line_edit())
+        self._score_input.textChanged.connect(self._on_score_text_changed)
+        score_row.addWidget(self._score_input, 1)
+
+        layout.addLayout(score_row)
+
+        # Inline error label
+        self._error_label = QLabel("Use format X-Y-Z (doubles) or X-Y (singles)")
+        self._error_label.setStyleSheet(
+            f"color: {DANGER_TEXT}; font-size: 12px; background: transparent; border: none;"
+        )
+        self._error_label.hide()
+        layout.addWidget(self._error_label)
+
+        # Apply button — disabled until score is valid
+        self._apply_btn = QPushButton("Apply to Rally")
+        self._apply_btn.setFont(Fonts.button_other())
+        self._apply_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._apply_btn.setEnabled(False)
+        self._apply_btn.setStyleSheet(ButtonStyles.outline(PRIMARY_ACTION))
+        self._apply_btn.clicked.connect(self._on_apply_clicked)
+        layout.addWidget(self._apply_btn)
+
+        self.setStyleSheet(f"""
+            StateAnchorWidget {{
+                background-color: {BG_SECONDARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {RADIUS_MD}px;
+            }}
+        """)
+
+    # -- Internal helpers ----------------------------------------------------
 
     def _current_pattern(self) -> str:
-        """Return the validation regex pattern for the current game mode.
-
-        Returns:
-            Anchored regex string for full-string matching.
-        """
         if self._game_mode == "doubles":
             return r"^\d{1,2}-\d{1,2}-[12]$"
         return r"^\d{1,2}-\d{1,2}$"
 
+    def _is_valid_score(self, text: str) -> bool:
+        rx = QRegularExpression(self._current_pattern())
+        return rx.match(text.strip()).hasMatch()
+
     def _set_error_state(self, error: bool) -> None:
-        """Toggle the error visual state on the score input and inline label.
-
-        Sets the ``error`` dynamic property on the QLineEdit so the
-        ``QLineEdit[error="true"]`` rule in InputStyles.line_edit() activates
-        the red border.
-
-        Args:
-            error: True to show error state; False to clear it.
-        """
-        self._new_score_input.setProperty("error", "true" if error else "false")
-        self._new_score_input.style().unpolish(self._new_score_input)
-        self._new_score_input.style().polish(self._new_score_input)
+        self._score_input.setProperty("error", "true" if error else "false")
+        self._score_input.style().unpolish(self._score_input)
+        self._score_input.style().polish(self._score_input)
         if error:
             self._error_label.show()
         else:
             self._error_label.hide()
 
+    def _set_serving_team(self, team: int) -> None:
+        """Mutually-exclusive toggle for the two team buttons."""
+        self._serving_team = team
+        self._team1_btn.setChecked(team == 0)
+        self._team2_btn.setChecked(team == 1)
+
+    def _update_validator(self) -> None:
+        """Rebuild QRegularExpressionValidator for the current game mode.
+
+        Reference kept in ``self._validator`` to prevent GC under PyQt6.
+        """
+        pattern = self._current_pattern()
+        self._validator = QRegularExpressionValidator(QRegularExpression(pattern))
+        self._score_input.setValidator(self._validator)
+        if self._game_mode == "doubles":
+            self._score_input.setPlaceholderText("X-Y-Z")
+        else:
+            self._score_input.setPlaceholderText("X-Y")
+
+    # -- Signal handlers -----------------------------------------------------
+
+    @pyqtSlot(str)
+    def _on_score_text_changed(self, text: str) -> None:
+        is_valid = self._is_valid_score(text)
+        self._apply_btn.setEnabled(is_valid)
+        # Only show error for non-empty invalid input
+        self._set_error_state(bool(text) and not is_valid)
+
+    @pyqtSlot()
+    def _on_apply_clicked(self) -> None:
+        text = self._score_input.text().strip()
+        if self._is_valid_score(text):
+            self.state_anchor_applied.emit(self._serving_team, text)
+
+    # -- Public API ----------------------------------------------------------
+
     def set_mode(self, mode: str) -> None:
-        """Set the game mode and rebuild the score input validator.
+        """Set the game mode and rebuild the score validator.
 
         Args:
-            mode: One of ``"doubles"``, ``"singles"``, or ``"highlights"``.
-                  Doubles expects X-Y-Z; singles / highlights expect X-Y.
+            mode: ``"doubles"``, ``"singles"``, or ``"highlights"``
         """
         self._game_mode = mode
         self._update_validator()
 
-    def _update_validator(self) -> None:
-        """Rebuild the QRegularExpressionValidator for the current mode.
-
-        A reference is kept in ``self._validator`` so Python's garbage collector
-        does not free it — ``QLineEdit.setValidator`` does not take ownership
-        in the PyQt6 bindings.
-        """
-        pattern = self._current_pattern()
-        self._validator = QRegularExpressionValidator(QRegularExpression(pattern))
-        self._new_score_input.setValidator(self._validator)
-        if self._game_mode == "doubles":
-            self._new_score_input.setPlaceholderText("X-Y-Z")
-        else:
-            self._new_score_input.setPlaceholderText("X-Y")
-
-    def set_current_score(self, score: str) -> None:
-        """Set the displayed current score.
-
-        Also clears the new-score input and any active error state so the
-        widget is in a clean state when switching between rallies.
+    def set_state(self, score: str, serving_team: int) -> None:
+        """Prefill the widget for the current rally.
 
         Args:
-            score: Score string (e.g., "3-2-1")
+            score: Score string at rally start (e.g., "3-2-1")
+            serving_team: Serving team index (0 or 1)
         """
-        self._current_score_label.setText(score)
-        self._new_score_input.clear()
+        self._score_input.blockSignals(True)
+        self._score_input.setText(score)
+        self._score_input.blockSignals(False)
+        self._set_serving_team(serving_team)
+        is_valid = self._is_valid_score(score)
+        self._apply_btn.setEnabled(is_valid)
         self._set_error_state(False)
 
-    def get_new_score(self) -> str:
-        """Get the entered new score.
+    def set_team_names(self, team1_name: str, team2_name: str) -> None:
+        """Update the labels on the serving-team toggle buttons.
 
-        Returns:
-            New score string from input field
+        Args:
+            team1_name: Display name for team 1 (e.g., "Alice & Bob")
+            team2_name: Display name for team 2
         """
-        return self._new_score_input.text()
+        self._team1_name = team1_name
+        self._team2_name = team2_name
+        self._team1_btn.setText(team1_name)
+        self._team2_btn.setText(team2_name)
 
-    def get_cascade(self) -> bool:
-        """Get the cascade checkbox state.
 
-        Returns:
-            True if cascade is checked
-        """
-        return self._cascade_checkbox.isChecked()
-
+# ===========================================================================
+# RallyListWidget
+# ===========================================================================
 
 class RallyListWidget(QWidget):
     """Horizontal scrolling list of rally cards using QListWidget IconMode.
@@ -654,42 +969,32 @@ class RallyListWidget(QWidget):
     rally_selected = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize the rally list widget.
-
-        Args:
-            parent: Parent widget
-        """
         super().__init__(parent)
         self._rallies: list[Rally] = []
         self._current_index = 0
         self._init_ui()
 
     def _init_ui(self) -> None:
-        """Initialize UI components."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
         layout.setSpacing(SPACE_SM)
 
-        # Use QListWidget in IconMode - single horizontal row with scroll
         self._list_widget = QListWidget()
-        self._list_widget.setObjectName("rallyList")  # Set object name for theme targeting
+        self._list_widget.setObjectName("rallyList")
         self._list_widget.setViewMode(QListWidget.ViewMode.IconMode)
         self._list_widget.setFlow(QListWidget.Flow.LeftToRight)
-        self._list_widget.setWrapping(False)  # Single row, no wrapping
+        self._list_widget.setWrapping(False)  # Single row; control panel needs full vertical height
         self._list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
         self._list_widget.setSpacing(4)
-        self._list_widget.setGridSize(QSize(70, 50))  # Grid cell size
+        self._list_widget.setGridSize(QSize(70, 50))
         self._list_widget.setUniformItemSizes(True)
         self._list_widget.setMovement(QListWidget.Movement.Static)
         self._list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self._list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # Derive height from the grid cell size, inter-item spacing, the
-        # horizontal scrollbar, and the frame border so the value stays correct
-        # if those dimensions change rather than using a magic constant.
-        _grid_h = self._list_widget.gridSize().height()   # 50 px
-        _spacing = self._list_widget.spacing()             # 4 px
+        _grid_h = self._list_widget.gridSize().height()
+        _spacing = self._list_widget.spacing()
         _scrollbar_h = self._list_widget.horizontalScrollBar().sizeHint().height()
         _frame_h = self._list_widget.frameWidth() * 2
         _derived_h = _grid_h + 2 * _spacing + _scrollbar_h + _frame_h
@@ -699,7 +1004,6 @@ class RallyListWidget(QWidget):
         )
         self._list_widget.setFixedHeight(_derived_h)
 
-        # Style the list widget with object-scoped selectors
         self._list_widget.setStyleSheet(f"""
             QListWidget#rallyList {{
                 background: {BG_PRIMARY};
@@ -713,9 +1017,9 @@ class RallyListWidget(QWidget):
                 padding: {SPACE_SM}px;
             }}
             QListWidget#rallyList::item:selected {{
-                background: rgba(74, 222, 128, 0.15);
+                background: {PRIMARY_ACTION_TINT};
                 border: 2px solid {PRIMARY_ACTION};
-                            }}
+            }}
             QListWidget#rallyList::item:hover {{
                 background: {BG_BORDER};
                 border-color: {PRIMARY_ACTION};
@@ -736,7 +1040,6 @@ class RallyListWidget(QWidget):
         self._list_widget.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self._list_widget)
 
-        # Container styling
         self.setStyleSheet(f"""
             RallyListWidget {{
                 background-color: {BG_SECONDARY};
@@ -748,16 +1051,7 @@ class RallyListWidget(QWidget):
     def _create_card_widget(
         self, rally_num: int, score: str, is_post_game: bool = False
     ) -> QWidget:
-        """Create a card widget for a rally item.
-
-        Args:
-            rally_num: Rally number (1-based for display)
-            score: Score string
-            is_post_game: When True, shows a muted "PG" indicator on the card
-
-        Returns:
-            QWidget containing rally card content
-        """
+        """Create a card widget for a rally item."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -769,7 +1063,6 @@ class RallyListWidget(QWidget):
         num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         num_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent; border: none;")
 
-        # Post-game label replaces the score string with a "PG" tag
         if is_post_game:
             score_label = QLabel("PG")
             score_label.setFont(Fonts.display(size=9))
@@ -786,26 +1079,19 @@ class RallyListWidget(QWidget):
 
         layout.addWidget(num_label)
         layout.addWidget(score_label)
-
-        # Make the widget transparent so item styling shows through
         widget.setStyleSheet("background: transparent;")
         return widget
 
     def set_rallies(self, rallies: list[Rally]) -> None:
-        """Populate the rally list with cards.
-
-        Args:
-            rallies: List of Rally objects
-        """
+        """Populate the rally list with cards."""
         self._rallies = rallies
         self._list_widget.clear()
 
         for idx, rally in enumerate(rallies):
             item = QListWidgetItem()
-            # Create custom widget for the item
             widget = self._create_card_widget(idx + 1, rally.score_at_start, rally.is_post_game)
             item.setSizeHint(QSize(62, 42))
-            item.setData(Qt.ItemDataRole.UserRole, idx)  # Store index
+            item.setData(Qt.ItemDataRole.UserRole, idx)
             self._list_widget.addItem(item)
             self._list_widget.setItemWidget(item, widget)
 
@@ -814,30 +1100,24 @@ class RallyListWidget(QWidget):
 
     @pyqtSlot(QListWidgetItem)
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
-        """Handle rally item click.
-
-        Args:
-            item: Clicked list widget item
-        """
         idx = item.data(Qt.ItemDataRole.UserRole)
         if idx is not None:
             self.rally_selected.emit(idx)
 
     def set_current_rally(self, index: int) -> None:
-        """Set the currently selected rally.
-
-        Args:
-            index: Rally index (0-based)
-        """
+        """Set the currently selected rally."""
         if 0 <= index < self._list_widget.count():
             self._current_index = index
             self._list_widget.setCurrentRow(index)
-            # Ensure selected item is visible
             self._list_widget.scrollToItem(
                 self._list_widget.item(index),
-                QListWidget.ScrollHint.EnsureVisible
+                QListWidget.ScrollHint.EnsureVisible,
             )
 
+
+# ===========================================================================
+# ReviewModeWidget
+# ===========================================================================
 
 class ReviewModeWidget(QWidget):
     """Main container for Final Review Mode with tall or wide arrangement.
@@ -864,34 +1144,38 @@ class ReviewModeWidget(QWidget):
     mpv Safety Contract
     -------------------
     ``_video_placeholder`` is the X11 native-window target for mpv.  It is
-    NEVER placed inside a QScrollArea in either arrangement.  MainWindow
-    reparents ``_video_container`` into ``_video_placeholder`` via the
-    enter_review_mode / exit_review_mode paths; those paths must not be
-    changed by this module.
+    NEVER placed inside a QScrollArea in either arrangement.
 
     Signals:
         rally_changed(int): Current rally index changed
-        timing_adjusted(int, str, float): Rally timing adjusted
-            - rally_idx: Rally index
-            - field: "start" or "end"
-            - delta: Time change in seconds
-        score_changed(int, str, bool): Rally score changed
-            - rally_idx: Rally index
-            - new_score: New score string
-            - cascade: Cascade to later rallies
+        timing_adjusted(int, str, float): Nudge applied
+            - rally_idx, field "start"|"end", delta
+        timing_set(int, str, float): Direct entry committed
+            - rally_idx, field "start"|"end", absolute_seconds
+        winner_set(int, str): Winner explicitly set
+            - rally_idx, "server"|"receiver"
+        state_anchor_set(int, int, str): Game state anchor applied
+            - rally_idx, serving_team 0|1, score_string
+        delete_rally_requested(int): User requested rally deletion
+        insert_rally_requested(int): User requested rally insertion after index
         exit_requested(): Exit review mode
+        return_to_menu_requested(): Return to main menu
         generate_requested(): Generate Kdenlive project
+        export_ffmpeg_requested(): Export MP4 via FFmpeg
         play_rally_requested(int): Play the specified rally
         navigate_previous(): Navigate to previous rally
         navigate_next(): Navigate to next rally
+        game_completed_toggled(bool): Mark Game Completed toggled
+        export_path_changed(str): Export path field changed
     """
 
     rally_changed = pyqtSignal(int)
     timing_adjusted = pyqtSignal(int, str, float)
-    score_changed = pyqtSignal(int, str, bool)
-    winner_flipped = pyqtSignal(int)  # rally index — emitted when user flips the rally winner
-    delete_rally_requested = pyqtSignal(int)  # rally index — emitted when user requests deletion
-    insert_rally_requested = pyqtSignal(int)  # rally index — emitted when user requests insert after
+    timing_set = pyqtSignal(int, str, float)
+    winner_set = pyqtSignal(int, str)
+    state_anchor_set = pyqtSignal(int, int, str)
+    delete_rally_requested = pyqtSignal(int)
+    insert_rally_requested = pyqtSignal(int)
     exit_requested = pyqtSignal()
     return_to_menu_requested = pyqtSignal()
     generate_requested = pyqtSignal()
@@ -899,62 +1183,52 @@ class ReviewModeWidget(QWidget):
     play_rally_requested = pyqtSignal(int)
     navigate_previous = pyqtSignal()
     navigate_next = pyqtSignal()
-    game_completed_toggled = pyqtSignal(bool)  # Emitted when Mark Game Completed is toggled
-    export_path_changed = pyqtSignal(str)  # Emitted when export path is set
+    game_completed_toggled = pyqtSignal(bool)
+    export_path_changed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize the review mode widget.
-
-        Args:
-            parent: Parent widget
-        """
         super().__init__(parent)
         self._rallies: list[Rally] = []
         self._current_index = 0
-        self._fps = 60.0  # Default fps, should be set by parent
+        self._fps = 60.0
         self._game_completed = False
         self._final_score = ""
         self._winning_team_names: list[str] = []
-        self._export_path: str = ""  # Custom export path, empty means use dialog
+        self._export_path: str = ""
         self._low_confidence_indices: set[int] = set()
 
-        # Load settings for geometry persistence (DisplayConfig added by Task 1).
+        # Team name state (set via set_team_names)
+        self._team1_players: list[str] = []
+        self._team2_players: list[str] = []
+        self._team1_name: str = "Team 1"
+        self._team2_name: str = "Team 2"
+
         self._app_settings = AppSettings.load()
 
-        # Debounce timer so splitter moves are not saved on every pixel drag.
         self._splitter_save_timer = QTimer(self)
         self._splitter_save_timer.setSingleShot(True)
         self._splitter_save_timer.setInterval(500)
         self._splitter_save_timer.timeout.connect(self._save_splitter_sizes)
 
         self._init_ui()
-        # Note: splitter signal connections are made inside _arrange_tall() /
-        # _arrange_wide(), which are called from showEvent().  Do NOT connect
-        # _outer_splitter.splitterMoved here — the splitter is None at this point.
 
     def _init_ui(self) -> None:
         """Create stable leaf widgets and the arrangement host.
 
-        The full layout is deferred to :meth:`_arrange_tall` or
-        :meth:`_arrange_wide`, called once from :meth:`showEvent`.  Splitting
-        construction from arrangement means the section widgets are stable
-        across repeated enter→exit→enter review cycles, and
-        ``_video_placeholder`` is placed in its final parent (outside any
-        QScrollArea) before mpv reparents its native X11 window into it.
+        Full layout is deferred to _arrange_tall / _arrange_wide, called once
+        from showEvent.
         """
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
         main_layout.setSpacing(SPACE_MD)
 
-        # ── Header ───────────────────────────────────────────────────────────
+        # Header
         self._header = RallyHeaderWidget()
         self._header.exit_requested.connect(self.exit_requested.emit)
         self._header.return_to_menu_requested.connect(self.return_to_menu_requested.emit)
         main_layout.addWidget(self._header)
 
-        # ── Arrangement host ─────────────────────────────────────────────────
-        # _arrange_tall() or _arrange_wide() adds its root widget here exactly
-        # once.  Subsequent showEvent calls are no-ops for the layout.
+        # Arrangement host
         self._arrangement_host = QWidget(self)
         self._arrangement_host.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -964,54 +1238,43 @@ class ReviewModeWidget(QWidget):
         _host_layout.setSpacing(0)
         main_layout.addWidget(self._arrangement_host, stretch=1)
 
-        # ── Video placeholder ────────────────────────────────────────────────
-        # MPV reparenting target.  WA_NativeWindow gives this widget its own
-        # X11 window ID.  winId() is called immediately so the X11 window is
-        # created now, before any parent assignment.  On X11, XReparentWindow
-        # preserves the window ID, so the value returned here remains valid
-        # after _arrange_tall/_arrange_wide reparents the widget into a splitter.
-        #
-        # CRITICAL: This widget must NEVER be placed inside a QScrollArea in
-        # either the tall or wide arrangement.
+        # Video placeholder (MPV reparenting target — NEVER inside a QScrollArea)
         self._video_placeholder = QWidget()
         self._video_placeholder.setObjectName("video_placeholder")
         self._video_placeholder.setMinimumSize(320, 180)
         self._video_placeholder.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self._video_placeholder.setStyleSheet("")
-        self._video_placeholder.winId()  # Force native X11 window creation NOW
+        self._video_placeholder.winId()
 
-        # ── Control panel content widget ─────────────────────────────────────
-        # Plain widget with no scroll.  _arrange_* wraps it in a QScrollArea.
+        # Control panel content widget
         self._control_panel_widget = QWidget()
         self._control_panel_widget.setStyleSheet("background-color: transparent;")
         self._build_control_panel()
 
-        # ── Rally strip (nav row + rally list) ───────────────────────────────
+        # Rally strip (nav row + rally list)
         self._rally_strip_widget = QWidget()
         self._build_rally_strip()
 
-        # ── Export / generate widget ─────────────────────────────────────────
+        # Export / generate widget
         self._export_widget = QWidget()
         self._export_widget.setObjectName("generateContainer")
         self._build_export_widget()
 
-        # ── Splitter references — assigned in _arrange_* ─────────────────────
+        # Splitter references — assigned in _arrange_*
         self._outer_splitter: QSplitter | None = None
         self._inner_splitter: QSplitter | None = None
         self._master_splitter: QSplitter | None = None
 
-        # Arrangement token — set once in showEvent; guards against re-arrangement.
         self._arrangement: str = ""  # "tall" | "wide"
 
-        # Main widget background
         self.setStyleSheet(f"ReviewModeWidget {{ background-color: {BG_PRIMARY}; }}")
 
     # =========================================================================
-    # Section-widget builders — called once from _init_ui
+    # Section-widget builders
     # =========================================================================
 
     def _build_control_panel(self) -> None:
-        """Populate ``_control_panel_widget`` with play/flip/timing/score controls."""
+        """Populate _control_panel_widget with play / winner / timing / anchor controls."""
         cp_layout = QVBoxLayout(self._control_panel_widget)
         cp_layout.setContentsMargins(0, 0, 0, 0)
         cp_layout.setSpacing(SPACE_MD)
@@ -1021,20 +1284,15 @@ class ReviewModeWidget(QWidget):
         play_rally_button.setIcon(make_icon("play", PRIMARY_ACTION, 16))
         play_rally_button.setIconSize(QSize(16, 16))
         play_rally_button.setFont(Fonts.button_rally())
+        play_rally_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         play_rally_button.clicked.connect(self._on_play_clicked)
         play_rally_button.setStyleSheet(ButtonStyles.outline(PRIMARY_ACTION, rally_tier=True))
         cp_layout.addWidget(play_rally_button)
 
-        # Flip Winner button
-        self._flip_winner_button = QPushButton("Flip Winner")
-        self._flip_winner_button.setFont(Fonts.button_other())
-        self._flip_winner_button.setObjectName("flipWinnerButton")
-        self._flip_winner_button.clicked.connect(self._on_flip_winner_clicked)
-        self._flip_winner_button.setToolTip(
-            "Swap server/receiver for this rally and recalculate all subsequent scores"
-        )
-        self._apply_flip_button_style(low_confidence=False)
-        cp_layout.addWidget(self._flip_winner_button)
+        # Explicit winner control (replaces the old "Flip Winner" button)
+        self._winner_control = WinnerControlWidget()
+        self._winner_control.winner_selected.connect(self._on_winner_set)
+        cp_layout.addWidget(self._winner_control)
 
         # Delete / Insert row
         edit_row = QHBoxLayout()
@@ -1043,6 +1301,7 @@ class ReviewModeWidget(QWidget):
         self._delete_rally_button = QPushButton("Delete Rally")
         self._delete_rally_button.setFont(Fonts.button_other())
         self._delete_rally_button.setObjectName("deleteRallyButton")
+        self._delete_rally_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._delete_rally_button.clicked.connect(self._on_delete_rally_clicked)
         self._delete_rally_button.setToolTip(
             "Remove this rally and recalculate all subsequent scores"
@@ -1053,6 +1312,7 @@ class ReviewModeWidget(QWidget):
         self._insert_rally_button = QPushButton("Insert Rally After")
         self._insert_rally_button.setFont(Fonts.button_other())
         self._insert_rally_button.setObjectName("insertRallyButton")
+        self._insert_rally_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._insert_rally_button.clicked.connect(self._on_insert_rally_clicked)
         self._insert_rally_button.setToolTip(
             "Insert a new rally after this one with a placeholder timing and score"
@@ -1062,25 +1322,25 @@ class ReviewModeWidget(QWidget):
 
         cp_layout.addLayout(edit_row)
 
-        # Timing controls
+        # Timing controls (with configurable step + direct entry)
         self._timing_widget = TimingControlWidget()
         self._timing_widget.timing_adjusted.connect(self._on_timing_adjusted)
+        self._timing_widget.timing_set.connect(self._on_timing_set)
         cp_layout.addWidget(self._timing_widget)
 
-        # Score editing
-        self._score_widget = ScoreEditWidget()
-        self._score_widget.score_changed.connect(self._on_score_changed)
-        cp_layout.addWidget(self._score_widget)
+        # Game-state anchor (replaces ScoreEditWidget; always cascades)
+        self._state_anchor = StateAnchorWidget()
+        self._state_anchor.state_anchor_applied.connect(self._on_state_anchor_applied)
+        cp_layout.addWidget(self._state_anchor)
 
         cp_layout.addStretch()
 
     def _build_rally_strip(self) -> None:
-        """Populate ``_rally_strip_widget`` with the navigation row and rally list."""
+        """Populate _rally_strip_widget with the navigation row and rally list."""
         rs_layout = QVBoxLayout(self._rally_strip_widget)
         rs_layout.setContentsMargins(0, 0, 0, 0)
         rs_layout.setSpacing(SPACE_SM)
 
-        # Navigation header row
         nav_row = QHBoxLayout()
         nav_row.setSpacing(SPACE_MD)
 
@@ -1090,7 +1350,6 @@ class ReviewModeWidget(QWidget):
         nav_row.addWidget(list_title)
         nav_row.addStretch()
 
-        # Prev button — promoted to attribute so set_current_rally can disable it.
         self._prev_button = QPushButton("Prev")
         self._prev_button.setIcon(make_icon("chevron-left", TEXT_PRIMARY, 16))
         self._prev_button.setIconSize(QSize(16, 16))
@@ -1100,7 +1359,6 @@ class ReviewModeWidget(QWidget):
         self._style_nav_button(self._prev_button)
         nav_row.addWidget(self._prev_button)
 
-        # Next button — promoted to attribute so set_current_rally can disable it.
         self._next_button = QPushButton("Next")
         self._next_button.setIcon(make_icon("chevron-right", TEXT_PRIMARY, 16))
         self._next_button.setIconSize(QSize(16, 16))
@@ -1113,18 +1371,16 @@ class ReviewModeWidget(QWidget):
 
         rs_layout.addLayout(nav_row)
 
-        # Rally list widget
         self._rally_list = RallyListWidget()
         self._rally_list.rally_selected.connect(self._on_rally_selected)
         rs_layout.addWidget(self._rally_list)
 
     def _build_export_widget(self) -> None:
-        """Populate ``_export_widget`` with the generate/export container content."""
+        """Populate _export_widget with the generate/export container content."""
         ex_layout = QVBoxLayout(self._export_widget)
         ex_layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
         ex_layout.setSpacing(SPACE_SM)
 
-        # Summary row
         summary_row = QHBoxLayout()
         summary_row.setSpacing(SPACE_SM)
         summary_icon = QLabel()
@@ -1138,30 +1394,26 @@ class ReviewModeWidget(QWidget):
         summary_row.addStretch()
         ex_layout.addLayout(summary_row)
 
-        # Mark Game Completed checkbox
         self._mark_complete_checkbox = QCheckBox("Mark Game Completed")
         self._mark_complete_checkbox.setFont(Fonts.button_other())
         self._mark_complete_checkbox.toggled.connect(self._on_mark_complete_toggled)
         ex_layout.addWidget(self._mark_complete_checkbox)
 
-        # Final score display (hidden until checkbox checked)
         self._final_score_label = QLabel("")
         self._final_score_label.setFont(Fonts.display(size=16, weight=600))
         self._final_score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._final_score_label.hide()
         ex_layout.addWidget(self._final_score_label)
 
-        # Export Options header
         export_header = QLabel("Export Options")
         export_header.setFont(Fonts.body(size=14, weight=600))
         export_header.setStyleSheet(f"color: {TEXT_SECONDARY};")
         ex_layout.addWidget(export_header)
 
-        # Two export cards side by side
         export_cards_layout = QHBoxLayout()
         export_cards_layout.setSpacing(SPACE_MD)
 
-        # === Kdenlive Card ===
+        # Kdenlive Card
         kdenlive_card = QWidget()
         kdenlive_card.setObjectName("kdenliveCard")
         kdenlive_layout = QVBoxLayout(kdenlive_card)
@@ -1193,8 +1445,6 @@ class ReviewModeWidget(QWidget):
 
         kdenlive_layout.addStretch()
 
-        # Generate button — the lone filled-green primary action in this view.
-        # Disabled until at least one rally is present (set_rallies enables it).
         self._generate_button = QPushButton("GENERATE PROJECT")
         self._generate_button.setFont(Fonts.button_rally())
         self._generate_button.clicked.connect(self.generate_requested.emit)
@@ -1212,7 +1462,7 @@ class ReviewModeWidget(QWidget):
         kdenlive_card.setMinimumHeight(180)
         export_cards_layout.addWidget(kdenlive_card, 1)
 
-        # === FFmpeg Card ===
+        # FFmpeg Card
         ffmpeg_card = QWidget()
         ffmpeg_card.setObjectName("ffmpegCard")
         ffmpeg_layout = QVBoxLayout(ffmpeg_card)
@@ -1232,8 +1482,6 @@ class ReviewModeWidget(QWidget):
 
         ffmpeg_layout.addStretch()
 
-        # FFmpeg export button — blue outline secondary (not the primary action).
-        # Disabled until at least one rally is present (set_rallies enables it).
         self._ffmpeg_button = QPushButton("EXPORT MP4")
         self._ffmpeg_button.setFont(Fonts.button_rally())
         self._ffmpeg_button.clicked.connect(self.export_ffmpeg_requested.emit)
@@ -1269,7 +1517,7 @@ class ReviewModeWidget(QWidget):
     def _arrange_tall(self) -> None:
         """Assemble the default vertical (tall) arrangement.
 
-        Structure (``_video_placeholder`` is NOT inside any QScrollArea)::
+        Structure (_video_placeholder is NOT inside any QScrollArea)::
 
             _outer_splitter (Vertical, childrenCollapsible=False):
               top_section (min 200 px):
@@ -1280,13 +1528,9 @@ class ReviewModeWidget(QWidget):
                 bottom_content:
                   _rally_strip_widget
                   _export_widget
-
-        Splitter signal is connected here (not in __init__) because the
-        splitter is created here.
         """
         host_layout = self._arrangement_host.layout()
 
-        # Control panel scroll (right of video in the inner splitter)
         control_panel_scroll = QScrollArea()
         control_panel_scroll.setWidgetResizable(True)
         control_panel_scroll.setHorizontalScrollBarPolicy(
@@ -1303,16 +1547,14 @@ class ReviewModeWidget(QWidget):
         )
         control_panel_scroll.setWidget(self._control_panel_widget)
 
-        # Inner horizontal splitter: video | controls
         self._inner_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._inner_splitter.setChildrenCollapsible(False)
-        self._inner_splitter.addWidget(self._video_placeholder)  # NOT in scroll
+        self._inner_splitter.addWidget(self._video_placeholder)
         self._inner_splitter.addWidget(control_panel_scroll)
         self._inner_splitter.setSizes([600, 320])
-        self._inner_splitter.setStretchFactor(0, 1)  # video stretches
-        self._inner_splitter.setStretchFactor(1, 0)  # controls stay
+        self._inner_splitter.setStretchFactor(0, 1)
+        self._inner_splitter.setStretchFactor(1, 0)
 
-        # Top section wrapper
         top_section = QWidget()
         top_section.setMinimumHeight(200)
         top_layout = QVBoxLayout(top_section)
@@ -1320,8 +1562,6 @@ class ReviewModeWidget(QWidget):
         top_layout.setSpacing(0)
         top_layout.addWidget(self._inner_splitter)
 
-        # Bottom scroll area: rally strip + export.
-        # Only the bottom section scrolls; the video in the top section stays fixed.
         bottom_content = QWidget()
         bottom_content.setStyleSheet(f"background-color: {BG_PRIMARY};")
         bottom_content_layout = QVBoxLayout(bottom_content)
@@ -1341,7 +1581,6 @@ class ReviewModeWidget(QWidget):
         )
         bottom_scroll.setWidget(bottom_content)
 
-        # Outer vertical splitter: top section | bottom scroll
         self._outer_splitter = QSplitter(Qt.Orientation.Vertical)
         self._outer_splitter.setChildrenCollapsible(False)
         self._outer_splitter.addWidget(top_section)
@@ -1356,7 +1595,7 @@ class ReviewModeWidget(QWidget):
     def _arrange_wide(self) -> None:
         """Assemble the ultrawide horizontal arrangement.
 
-        Structure (``_video_placeholder`` is NOT inside any QScrollArea)::
+        Structure (_video_placeholder is NOT inside any QScrollArea)::
 
             _master_splitter (Horizontal, childrenCollapsible=False):
               left_panel (NOT in scroll, stretchFactor=1):
@@ -1366,26 +1605,17 @@ class ReviewModeWidget(QWidget):
                 right_panel:
                   _control_panel_widget
                   _export_widget
-
-        Only the right column (controls + export) is scrollable.
-        The video and rally-list strip are never placed inside a QScrollArea.
-
-        Splitter signal is connected here (not in __init__) because the
-        splitter is created here.
         """
         host_layout = self._arrangement_host.layout()
 
-        # Left panel: video (stretch) + rally strip below.
-        # Neither widget is inside a scroll area.
         left_panel = QWidget()
         left_panel.setStyleSheet(f"background-color: {BG_PRIMARY};")
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(SPACE_SM)
-        left_layout.addWidget(self._video_placeholder, stretch=1)  # NOT in scroll
+        left_layout.addWidget(self._video_placeholder, stretch=1)
         left_layout.addWidget(self._rally_strip_widget)
 
-        # Right panel content (placed inside right_scroll below)
         right_panel = QWidget()
         right_panel.setStyleSheet("background-color: transparent;")
         right_layout = QVBoxLayout(right_panel)
@@ -1395,7 +1625,6 @@ class ReviewModeWidget(QWidget):
         right_layout.addWidget(self._export_widget)
         right_layout.addStretch()
 
-        # Right scroll area — the ONLY scrollable region in wide mode
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1407,13 +1636,12 @@ class ReviewModeWidget(QWidget):
         )
         right_scroll.setWidget(right_panel)
 
-        # Master horizontal splitter: left panel | right scroll
         self._master_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._master_splitter.setChildrenCollapsible(False)
         self._master_splitter.addWidget(left_panel)
         self._master_splitter.addWidget(right_scroll)
-        self._master_splitter.setStretchFactor(0, 1)  # video side stretches
-        self._master_splitter.setStretchFactor(1, 0)  # controls column fixed
+        self._master_splitter.setStretchFactor(0, 1)
+        self._master_splitter.setStretchFactor(1, 0)
         self._master_splitter.splitterMoved.connect(self._on_splitter_moved)
 
         host_layout.addWidget(self._master_splitter)
@@ -1423,15 +1651,6 @@ class ReviewModeWidget(QWidget):
     # =========================================================================
 
     def _style_nav_button(self, button: QPushButton) -> None:
-        """Apply consistent styling to navigation buttons.
-
-        Uses the ``nav`` property class from theme.qss
-        (QPushButton[buttonClass="nav"]) which provides min-width 100px,
-        36px height, and green focus ring.
-
-        Args:
-            button: Button to style
-        """
         set_class(button, "nav")
 
     # =========================================================================
@@ -1439,25 +1658,9 @@ class ReviewModeWidget(QWidget):
     # =========================================================================
 
     def showEvent(self, event: QShowEvent) -> None:
-        """Choose and build the arrangement ONCE at review entry.
-
-        The arrangement is frozen for the remainder of the review session.
-        Re-arrangement is deliberately not supported across resizes within a
-        review session: mpv native-window reparenting is fragile and repeated
-        enter→exit→enter cycles may cause native-window regressions.
-
-        The window aspect ratio at the moment ``showEvent`` fires determines
-        which arrangement is built.  If ``width / height >= ASPECT_ULTRAWIDE``
-        (2.0), the wide horizontal arrangement is used; otherwise the tall
-        vertical arrangement is used.
-
-        Splitter sizes are applied after the arrangement is built: persisted
-        sizes from DisplayConfig take precedence; proportional defaults are
-        used otherwise.
-        """
+        """Choose and build the arrangement ONCE at review entry."""
         super().showEvent(event)
 
-        # Build the arrangement exactly once.
         if not self._arrangement:
             window = self.window()
             w = window.width()
@@ -1469,7 +1672,6 @@ class ReviewModeWidget(QWidget):
                 self._arrange_tall()
                 self._arrangement = "tall"
 
-        # Apply splitter sizes (persisted → proportional default).
         _display = getattr(self._app_settings, "display", None)
 
         if self._arrangement == "wide" and self._master_splitter is not None:
@@ -1477,7 +1679,6 @@ class ReviewModeWidget(QWidget):
             if _h_sizes and len(_h_sizes) == 2 and sum(_h_sizes) > 0:
                 self._master_splitter.setSizes(list(_h_sizes))
                 return
-            # Default: video side ~60%, controls column ~40% (min 460 px).
             _avail_w = self._arrangement_host.width()
             if _avail_w > 0:
                 _right_w = max(460, int(_avail_w * 0.40))
@@ -1489,7 +1690,6 @@ class ReviewModeWidget(QWidget):
             if _v_sizes and len(_v_sizes) == 2 and sum(_v_sizes) > 0:
                 self._outer_splitter.setSizes(list(_v_sizes))
                 return
-            # Default: 65 / 35 top/bottom proportional split.
             _avail_h = self._arrangement_host.height()
             if _avail_h > 0:
                 _top_h = max(200, int(_avail_h * 0.65))
@@ -1498,11 +1698,9 @@ class ReviewModeWidget(QWidget):
 
     @pyqtSlot(int, int)
     def _on_splitter_moved(self, pos: int, index: int) -> None:
-        """Restart the save-debounce timer when any active splitter is dragged."""
         self._splitter_save_timer.start()
 
     def _save_splitter_sizes(self) -> None:
-        """Write the active splitter sizes to DisplayConfig and persist."""
         _display = getattr(self._app_settings, "display", None)
         if _display is None:
             return
@@ -1515,120 +1713,83 @@ class ReviewModeWidget(QWidget):
                 _display.review_splitter_h = self._master_splitter.sizes()
                 self._app_settings.save()
 
+    # =========================================================================
+    # Signal bridge slots
+    # =========================================================================
+
     @pyqtSlot(str, float)
     def _on_timing_adjusted(self, field: str, delta: float) -> None:
-        """Handle timing adjustment from TimingControlWidget.
-
-        Args:
-            field: "start" or "end"
-            delta: Time change in seconds
-        """
+        """Forward TimingControlWidget nudge to the outer timing_adjusted signal."""
         self.timing_adjusted.emit(self._current_index, field, delta)
 
-    @pyqtSlot(str, bool)
-    def _on_score_changed(self, new_score: str, cascade: bool) -> None:
-        """Handle score change from ScoreEditWidget.
+    @pyqtSlot(str, float)
+    def _on_timing_set(self, field: str, abs_seconds: float) -> None:
+        """Forward TimingControlWidget direct-entry commit to timing_set."""
+        self.timing_set.emit(self._current_index, field, abs_seconds)
 
-        Args:
-            new_score: New score string
-            cascade: Whether to cascade changes
-        """
-        self.score_changed.emit(self._current_index, new_score, cascade)
+    @pyqtSlot(str)
+    def _on_winner_set(self, winner: str) -> None:
+        """Forward WinnerControlWidget selection to winner_set."""
+        self.winner_set.emit(self._current_index, winner)
 
-    @pyqtSlot()
-    def _on_flip_winner_clicked(self) -> None:
-        """Handle Flip Winner button click.
-
-        Emits winner_flipped with the current rally index so MainWindow can
-        update rally_manager and cascade scores.
-        """
-        self.winner_flipped.emit(self._current_index)
+    @pyqtSlot(int, str)
+    def _on_state_anchor_applied(self, serving_team: int, score: str) -> None:
+        """Forward StateAnchorWidget apply to state_anchor_set."""
+        self.state_anchor_set.emit(self._current_index, serving_team, score)
 
     @pyqtSlot()
     def _on_delete_rally_clicked(self) -> None:
-        """Handle Delete Rally button click.
-
-        Emits delete_rally_requested with the current rally index so MainWindow
-        can confirm, delete from rally_manager, and cascade scores.
-        """
         self.delete_rally_requested.emit(self._current_index)
 
     @pyqtSlot()
     def _on_insert_rally_clicked(self) -> None:
-        """Handle Insert Rally After button click.
-
-        Emits insert_rally_requested with the current rally index so MainWindow
-        can build a placeholder rally, insert it, and cascade scores.
-        """
         self.insert_rally_requested.emit(self._current_index)
-
-    def _apply_flip_button_style(self, low_confidence: bool) -> None:
-        """Apply styling to the Flip Winner button.
-
-        When low_confidence is True the button uses the orange/amber palette
-        to draw the user's attention to an uncertain classification.
-
-        Args:
-            low_confidence: Whether the current rally has a low-confidence winner
-        """
-        if low_confidence:
-            border_color = RECEIVER_WINS      # orange — draws attention to uncertain call
-        else:
-            border_color = SERVER_WINS        # blue — neutral / informational
-
-        # ButtonStyles.outline rules scope to this widget; QPushButton {} inside
-        # the factory string matches only _flip_winner_button itself.
-        self._flip_winner_button.setStyleSheet(ButtonStyles.outline(border_color))
-
-    def set_low_confidence_indices(self, indices: set[int]) -> None:
-        """Mark specific rally indices as having low-confidence winner classifications.
-
-        The Flip Winner button will be shown with a more prominent orange style
-        when the currently displayed rally is in this set.
-
-        Args:
-            indices: Set of rally indices (0-based) that have low confidence
-        """
-        self._low_confidence_indices = indices
-        # Re-style button if the current rally is affected
-        low_conf = self._current_index in self._low_confidence_indices
-        self._apply_flip_button_style(low_confidence=low_conf)
-
-    def get_low_confidence_indices(self) -> set[int]:
-        """Return the current set of low-confidence rally indices.
-
-        Returns:
-            Copy of the set so callers cannot accidentally mutate internal state.
-        """
-        return set(self._low_confidence_indices)
 
     @pyqtSlot(int)
     def _on_rally_selected(self, index: int) -> None:
-        """Handle rally selection from RallyListWidget.
-
-        Args:
-            index: Rally index (0-based)
-        """
         self.set_current_rally(index)
 
     @pyqtSlot()
     def _on_previous_clicked(self) -> None:
-        """Handle previous button click."""
         if self._current_index > 0:
             self.set_current_rally(self._current_index - 1)
             self.navigate_previous.emit()
 
     @pyqtSlot()
     def _on_next_clicked(self) -> None:
-        """Handle next button click."""
         if self._current_index < len(self._rallies) - 1:
             self.set_current_rally(self._current_index + 1)
             self.navigate_next.emit()
 
     @pyqtSlot()
     def _on_play_clicked(self) -> None:
-        """Handle play rally button click."""
         self.play_rally_requested.emit(self._current_index)
+
+    # =========================================================================
+    # Winner-control label helper
+    # =========================================================================
+
+    def _update_winner_control(self, index: int) -> None:
+        """Refresh WinnerControlWidget labels for the rally at *index*.
+
+        Derives serving/returning team names from
+        ``rally.score_snapshot_at_start.serving_team``.  Falls back to
+        ``"unknown"`` when the snapshot is missing.
+        """
+        rally = self._rallies[index]
+        snapshot = rally.score_snapshot_at_start
+        if snapshot is None:
+            self._winner_control.set_teams("unknown", "unknown")
+            return
+        serving_idx = snapshot.serving_team          # 0 or 1
+        returning_idx = 1 - serving_idx
+        serving_name = self._team1_name if serving_idx == 0 else self._team2_name
+        returning_name = self._team1_name if returning_idx == 0 else self._team2_name
+        self._winner_control.set_teams(serving_name, returning_name)
+
+    # =========================================================================
+    # Public API — rally population and navigation
+    # =========================================================================
 
     def set_rallies(
         self,
@@ -1642,23 +1803,21 @@ class ReviewModeWidget(QWidget):
         Args:
             rallies: List of Rally objects.
             fps: Video frames per second for time calculations.
-            is_highlights: If True, hide score-related controls.
+            is_highlights: If True, hide winner / score controls.
             game_mode: Score format — ``"doubles"`` (X-Y-Z), ``"singles"``
-                       (X-Y), or ``"highlights"`` (no score).  Controls which
-                       regex pattern the ScoreEditWidget validator uses.
+                       (X-Y), or ``"highlights"`` (no score).
         """
         self._rallies = rallies
         self._fps = fps
-        self._is_highlights = is_highlights
 
-        # Hide score widget in highlights mode; otherwise update the validator.
         if is_highlights:
-            self._score_widget.hide()
+            self._state_anchor.hide()
+            self._winner_control.hide()
         else:
-            self._score_widget.show()
-            self._score_widget.set_mode(game_mode)
+            self._state_anchor.show()
+            self._state_anchor.set_mode(game_mode)
+            self._winner_control.show()
 
-        # Enable export buttons and delete button only when there is at least one rally.
         has_rallies = len(rallies) > 0
         self._generate_button.setEnabled(has_rallies)
         self._ffmpeg_button.setEnabled(has_rallies)
@@ -1672,7 +1831,7 @@ class ReviewModeWidget(QWidget):
             self.set_current_rally(0)
 
     def set_current_rally(self, index: int) -> None:
-        """Set the currently displayed rally.
+        """Set the currently displayed rally and refresh all child controls.
 
         Args:
             index: Rally index (0-based)
@@ -1683,81 +1842,108 @@ class ReviewModeWidget(QWidget):
         self._current_index = index
         rally = self._rallies[index]
 
-        # Update header (pass post-game flag for visual indicator)
+        # Header
         self._header.set_rally(index, len(self._rallies), is_post_game=rally.is_post_game)
 
-        # Update timing controls (convert frames to seconds using actual fps)
+        # Timing controls — convert frames to seconds
         start_seconds = rally.start_frame / self._fps
         end_seconds = rally.end_frame / self._fps
         self._timing_widget.set_times(start_seconds, end_seconds)
 
-        # Update score widget
-        self._score_widget.set_current_score(rally.score_at_start)
+        # Winner control — derive serving/returning team names from snapshot
+        self._update_winner_control(index)
+        low_conf = index in self._low_confidence_indices
+        self._winner_control.set_low_confidence(low_conf)
 
-        # Update rally list selection
+        # State anchor — prefill score and serving team
+        snapshot = rally.score_snapshot_at_start
+        serving_team = snapshot.serving_team if snapshot is not None else 0
+        self._state_anchor.set_state(rally.score_at_start, serving_team)
+
+        # Rally list
         self._rally_list.set_current_rally(index)
 
-        # Refresh Flip Winner button styling based on low-confidence flag
-        low_conf = index in self._low_confidence_indices
-        self._apply_flip_button_style(low_confidence=low_conf)
-
-        # Disable Prev/Next at list boundaries so keyboard/click never navigates
-        # past the first or last rally.
+        # Prev / Next boundary guards
         self._prev_button.setEnabled(index > 0)
         self._next_button.setEnabled(index < len(self._rallies) - 1)
 
-        # Emit signal
+        # Notify observers
         self.rally_changed.emit(index)
 
-    def get_current_rally_index(self) -> int:
-        """Get the current rally index.
+    def set_team_names(self, team1: list[str], team2: list[str]) -> None:
+        """Supply player names for both teams.
 
-        Returns:
-            Current rally index (0-based)
+        Used to label the winner buttons and state-anchor team selector with
+        human-readable names.  Fallback when a list is empty: "Team 1"/"Team 2".
+        The "unknown" label is reserved for missing snapshot data only.
+
+        Args:
+            team1: Player names for team 1 (e.g. ``["Alice", "Bob"]``)
+            team2: Player names for team 2
         """
+        self._team1_players = list(team1)
+        self._team2_players = list(team2)
+        self._team1_name = " & ".join(team1) if team1 else "Team 1"
+        self._team2_name = " & ".join(team2) if team2 else "Team 2"
+
+        self._state_anchor.set_team_names(self._team1_name, self._team2_name)
+
+        # Refresh winner control if a rally is already loaded
+        if self._rallies and 0 <= self._current_index < len(self._rallies):
+            self._update_winner_control(self._current_index)
+
+    def get_current_rally_index(self) -> int:
+        """Return the current rally index (0-based)."""
         return self._current_index
 
     def navigate_to_previous(self) -> None:
-        """Navigate to the previous rally."""
+        """Navigate to the previous rally (programmatic, no signal)."""
         if self._current_index > 0:
             self.set_current_rally(self._current_index - 1)
 
     def navigate_to_next(self) -> None:
-        """Navigate to the next rally."""
+        """Navigate to the next rally (programmatic, no signal)."""
         if self._current_index < len(self._rallies) - 1:
             self.set_current_rally(self._current_index + 1)
 
     def get_video_placeholder(self) -> QWidget:
-        """Get the video placeholder widget for external embedding.
-
-        MainWindow can use this to parent the video widget inside the review mode.
-
-        Returns:
-            Video placeholder widget
-        """
+        """Return the video placeholder widget for MPV embedding."""
         return self._video_placeholder
 
     def get_inner_splitter(self) -> QSplitter | None:
-        """Get the inner horizontal splitter (tall arrangement only).
-
-        Returns:
-            Inner QSplitter (horizontal) in tall mode; None in wide mode or
-            before the first showEvent.
-        """
+        """Return the inner horizontal splitter (tall arrangement only)."""
         return self._inner_splitter
 
     def get_outer_splitter(self) -> QSplitter | None:
-        """Get the outer vertical splitter (tall arrangement only).
-
-        Returns:
-            Outer QSplitter (vertical) in tall mode; None in wide mode or
-            before the first showEvent.
-        """
+        """Return the outer vertical splitter (tall arrangement only)."""
         return self._outer_splitter
+
+    # =========================================================================
+    # Low-confidence indices
+    # =========================================================================
+
+    def set_low_confidence_indices(self, indices: set[int]) -> None:
+        """Mark specific rally indices as having low-confidence winner classifications.
+
+        The winner control is styled with amber when the current rally is in this set.
+
+        Args:
+            indices: Set of rally indices (0-based) with low confidence
+        """
+        self._low_confidence_indices = indices
+        low_conf = self._current_index in self._low_confidence_indices
+        self._winner_control.set_low_confidence(low_conf)
+
+    def get_low_confidence_indices(self) -> set[int]:
+        """Return a copy of the low-confidence rally index set."""
+        return set(self._low_confidence_indices)
+
+    # =========================================================================
+    # Game-completion controls
+    # =========================================================================
 
     @pyqtSlot(bool)
     def _on_mark_complete_toggled(self, checked: bool) -> None:
-        """Handle Mark Game Completed checkbox toggle."""
         self._game_completed = checked
         if checked:
             self._final_score_label.show()
@@ -1768,13 +1954,12 @@ class ReviewModeWidget(QWidget):
     def set_game_completion_info(
         self,
         final_score: str,
-        winning_team_names: list[str]
+        winning_team_names: list[str],
     ) -> None:
         """Set the game completion display info."""
         self._final_score = final_score
         self._winning_team_names = winning_team_names
 
-        # Format display: "11-9\nJane/Joe Win"
         if winning_team_names:
             winner_str = " & ".join(winning_team_names) + " Win"
         else:
@@ -1786,32 +1971,24 @@ class ReviewModeWidget(QWidget):
         self._final_score_label.setText(display_text)
 
     def is_game_completed(self) -> bool:
-        """Check if game is marked as completed."""
+        """Return whether the game has been marked as completed."""
         return self._game_completed
 
     def get_game_completion_info(self) -> tuple[str, list[str]]:
-        """Get game completion info for export."""
+        """Return (final_score, winning_team_names) for export."""
         return self._final_score, self._winning_team_names
 
     def hide_game_completion_controls(self) -> None:
-        """Hide game completion controls (for highlights mode)."""
+        """Hide game-completion controls (highlights mode)."""
         self._mark_complete_checkbox.hide()
         self._final_score_label.hide()
 
     def set_game_completed(self, checked: bool, announce: bool = False) -> None:
-        """Set the mark-complete checkbox state and optionally announce via a toast.
-
-        This is the public API for external callers (e.g. MainWindow auto-detecting
-        a game-over score).  Prefer this over reaching into ``_mark_complete_checkbox``
-        directly.
-
-        When ``announce`` is ``True`` and the game is being marked complete, an
-        info toast is shown prompting the user to verify the detected result.
+        """Set the mark-complete checkbox state.
 
         Args:
             checked: Whether the game should be marked as completed.
-            announce: When ``True`` and ``checked`` is ``True``, show an info
-                      toast with the final score detected.
+            announce: When True and checked is True, show an info toast.
         """
         self._mark_complete_checkbox.setChecked(checked)
         if announce and checked and self._final_score:
@@ -1821,9 +1998,12 @@ class ReviewModeWidget(QWidget):
             )
             ToastManager.show_info(self, message)
 
+    # =========================================================================
+    # Export path
+    # =========================================================================
+
     @pyqtSlot()
     def _on_browse_clicked(self) -> None:
-        """Handle Browse button click - open file dialog for export path."""
         from pathlib import Path
 
         default_dir = str(Path.home() / "Videos")
@@ -1831,31 +2011,25 @@ class ReviewModeWidget(QWidget):
             self,
             "Select Export Location",
             default_dir,
-            "Kdenlive Project (*.kdenlive);;All Files (*)"
+            "Kdenlive Project (*.kdenlive);;All Files (*)",
         )
-
         if file_path:
             self._export_path_edit.setText(file_path)
 
     @pyqtSlot(str)
     def _on_export_path_changed(self, path: str) -> None:
-        """Handle export path text changes."""
         self._export_path = path
         self.export_path_changed.emit(path)
 
     def get_export_path(self) -> str:
-        """Get the currently set export path.
-
-        Returns:
-            Export path string, or empty string if not set
-        """
+        """Return the currently set export path (empty string = use dialog)."""
         return self._export_path
 
     def set_export_path(self, path: str) -> None:
-        """Set the export path display.
+        """Set the export path display field.
 
         Args:
-            path: Path to display in the export path field
+            path: Path string to display
         """
         self._export_path = path
         self._export_path_edit.setText(path)

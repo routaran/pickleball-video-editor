@@ -2028,8 +2028,9 @@ class MainWindow(QMainWindow):
             # Connect review widget signals
             self._review_widget.rally_changed.connect(self._on_review_rally_changed)
             self._review_widget.timing_adjusted.connect(self._on_review_timing_adjusted)
-            self._review_widget.score_changed.connect(self._on_review_score_changed)
-            self._review_widget.winner_flipped.connect(self._on_review_winner_flipped)
+            self._review_widget.timing_set.connect(self._on_review_timing_set)
+            self._review_widget.winner_set.connect(self._on_review_winner_set)
+            self._review_widget.state_anchor_set.connect(self._on_review_state_anchor_set)
             self._review_widget.delete_rally_requested.connect(self._on_review_rally_deleted)
             self._review_widget.insert_rally_requested.connect(self._on_review_rally_inserted)
             self._review_widget.play_rally_requested.connect(self._on_review_play_rally)
@@ -2066,9 +2067,21 @@ class MainWindow(QMainWindow):
                 self._video_container.setGeometry(0, 0, video_placeholder.width(), video_placeholder.height())
             video_placeholder.resizeEvent = _placeholder_resize
 
+        # Repopulate score snapshots for legacy sessions that may lack them.
+        # cascade_scores_from(0, ...) is idempotent when snapshots are already
+        # present because it re-seeds from the existing snapshot before replaying.
+        # Only relevant for scored modes (highlights has no score_state).
+        if not self._is_highlights_mode and self.score_state is not None:
+            _rallies_check = self.rally_manager.get_rallies()
+            if any(r.score_snapshot_at_start is None for r in _rallies_check):
+                self.rally_manager.cascade_scores_from(0, self.score_state)
+
         # Populate with current rallies
         rallies = self.rally_manager.get_rallies()
         self._review_widget.set_rallies(rallies, fps=self.video_fps, is_highlights=self._is_highlights_mode)
+
+        # Supply team names so winner buttons and state-anchor labels use real names
+        self._review_widget.set_team_names(self.config.team1_players, self.config.team2_players)
 
         # Set default export path suggestion
         default_path = str(self.config.video_path.parent / f"{self.config.export_base_filename()}.kdenlive")
@@ -2243,81 +2256,67 @@ class MainWindow(QMainWindow):
         else:
             self.score_state.set_score(rally.score_at_start)
 
-    @pyqtSlot(int, str, bool)
-    def _on_review_score_changed(self, index: int, new_score: str, cascade: bool) -> None:
-        """Handle score change in review mode.
+    @pyqtSlot(int, int, str)
+    def _on_review_state_anchor_set(self, index: int, serving_team: int, score: str) -> None:
+        """Handle game-state anchor (serving team + score) from review mode.
 
-        Updates the rally's score_at_start and optionally cascades to later rallies.
-        The cascade path delegates entirely to
+        Always cascades to later rallies: passes *serving_team* and *score* to
         :meth:`~src.core.rally_manager.RallyManager.cascade_scores_from` so that
         both ``score_at_start`` strings and ``score_snapshot_at_start`` snapshots
-        are refreshed atomically on every downstream rally.
+        are refreshed atomically on every downstream rally.  On error the
+        exception propagates before any rally is mutated, leaving the model
+        unchanged.
 
         Args:
-            index: Rally index (0-based)
-            new_score: New score string
-            cascade: If True, recalculate subsequent rally scores
+            index: Rally index (0-based) at which the anchor is set
+            serving_team: Serving team index (0 or 1) at this anchor point
+            score: New score string (validated by StateAnchorWidget before emit)
         """
-        # Check if index is valid
         if not (0 <= index < self.rally_manager.get_rally_count()):
             return
 
-        # Check if new score is non-empty
-        if not new_score:
+        if not score:
             return
 
         # Cascade requires a live ScoreState; highlights mode has none.
         if self.score_state is None:
             return
 
-        if cascade:
-            # Delegate entirely to cascade_scores_from so that both
-            # score_at_start strings and score_snapshot_at_start snapshots are
-            # refreshed.  On ValueError the method raises before mutating any
-            # rally, so data remains consistent on error.
-            try:
-                changed_indices = self.rally_manager.cascade_scores_from(
-                    index, self.score_state, new_score=new_score
-                )
-
-                # Update review widget with new rally data
-                if self._review_widget is not None:
-                    rallies = self.rally_manager.get_rallies()
-                    self._review_widget.set_rallies(rallies, fps=self.video_fps)
-                    self._review_widget.set_current_rally(index)
-
-                    # F6: extend low-confidence attention set with re-derived indices
-                    if changed_indices:
-                        existing = self._review_widget.get_low_confidence_indices()
-                        self._review_widget.set_low_confidence_indices(
-                            existing | set(changed_indices)
-                        )
-
-                toast_msg = (
-                    f"Score updated and cascaded to "
-                    f"{self.rally_manager.get_rally_count() - index} rallies"
-                )
-                if changed_indices:
-                    n = len(changed_indices)
-                    toast_msg += (
-                        f" — {n} downstream winner(s) re-derived from model predictions"
-                    )
-                ToastManager.show_success(self, toast_msg, duration_ms=3000)
-            except (ValueError, IndexError) as e:
-                ToastManager.show_error(
-                    self,
-                    f"Invalid score format: {e}",
-                    duration_ms=3000,
-                )
-                return
-        else:
-            # Non-cascade: update this rally's string only — no snapshot change.
-            self.rally_manager.update_rally_score(index, new_score)
-            ToastManager.show_success(
-                self,
-                f"Score updated for rally {index + 1}",
-                duration_ms=2000,
+        try:
+            changed_indices = self.rally_manager.cascade_scores_from(
+                index, self.score_state, new_score=score, serving_team=serving_team
             )
+
+            # Update review widget with new rally data
+            if self._review_widget is not None:
+                rallies = self.rally_manager.get_rallies()
+                self._review_widget.set_rallies(rallies, fps=self.video_fps)
+                self._review_widget.set_current_rally(index)
+
+                # F6: extend low-confidence attention set with re-derived indices
+                if changed_indices:
+                    existing = self._review_widget.get_low_confidence_indices()
+                    self._review_widget.set_low_confidence_indices(
+                        existing | set(changed_indices)
+                    )
+
+            toast_msg = (
+                f"State updated and cascaded to "
+                f"{self.rally_manager.get_rally_count() - index} rallies"
+            )
+            if changed_indices:
+                n = len(changed_indices)
+                toast_msg += (
+                    f" — {n} downstream winner(s) re-derived from model predictions"
+                )
+            ToastManager.show_success(self, toast_msg, duration_ms=3000)
+        except (ValueError, IndexError) as e:
+            ToastManager.show_error(
+                self,
+                f"Invalid score format: {e}",
+                duration_ms=3000,
+            )
+            return
 
         # Mark session as dirty
         self._dirty = True
@@ -2325,19 +2324,75 @@ class MainWindow(QMainWindow):
         # Refresh game completion info after any score edit
         self._refresh_game_completion_info()
 
-    @pyqtSlot(int)
-    def _on_review_winner_flipped(self, index: int) -> None:
-        """Handle winner flip request from review mode.
+    @pyqtSlot(int, str, float)
+    def _on_review_timing_set(self, index: int, field: str, seconds: float) -> None:
+        """Handle direct timing entry from review mode.
 
-        Flips the rally.winner at index between "server" and "receiver", then
-        replays ScoreState forward from that point to recompute score_at_start
-        for all subsequent rallies.  This mirrors the cascade logic in
-        _on_review_score_changed but derives the starting score from the
-        rally's own score_at_start (which is already correct up to this point)
-        rather than from a user-supplied string.
+        TimingControlWidget populates itself with padded boundary times
+        (``rally.start_frame / fps`` and ``rally.end_frame / fps``) and emits
+        the same padded scale when the user commits a direct entry.
+        :meth:`~src.core.rally_manager.RallyManager.set_rally_timing` expects
+        raw (pre-padding) mark times and re-applies padding internally, so we
+        convert before calling:
+
+        - start: ``raw = padded_start - START_PADDING``  (START_PADDING = -0.5,
+          so ``raw = padded_start + 0.5``)
+        - end:   ``raw = padded_end - END_PADDING``      (END_PADDING = 1.0,
+          so ``raw = padded_end - 1.0``)
+
+        After applying, the timing widget is refreshed from the model so the
+        displayed value reflects frame-snapping rather than the raw typed value.
 
         Args:
-            index: Rally index (0-based) whose winner should be flipped
+            index: Rally index (0-based)
+            field: ``"start"`` or ``"end"``
+            seconds: Padded boundary time in seconds (as shown in the widget)
+        """
+        if not (0 <= index < self.rally_manager.get_rally_count()):
+            return
+
+        try:
+            if field == "start":
+                # Widget shows padded start; convert to raw mark time.
+                # raw = padded - START_PADDING  (START_PADDING is negative, so this adds 0.5)
+                raw_seconds = seconds - RallyManager.START_PADDING
+                self.rally_manager.set_rally_timing(index, start_seconds=raw_seconds)
+            elif field == "end":
+                # Widget shows padded end; convert to raw mark time.
+                # raw = padded - END_PADDING  (END_PADDING = 1.0, so this subtracts 1.0)
+                raw_seconds = seconds - RallyManager.END_PADDING
+                self.rally_manager.set_rally_timing(index, end_seconds=raw_seconds)
+            else:
+                return
+        except (ValueError, IndexError) as e:
+            ToastManager.show_error(
+                self,
+                f"Invalid timing: {e}",
+                duration_ms=3000,
+            )
+            return
+
+        # Mark session as dirty
+        self._dirty = True
+
+        # Refresh the timing widget from the model so the displayed value
+        # reflects frame-snapping/clamping — do not trust the raw typed value.
+        if self._review_widget is not None:
+            self._review_widget.set_current_rally(index)
+
+    @pyqtSlot(int, str)
+    def _on_review_winner_set(self, index: int, winner: str) -> None:
+        """Handle explicit winner assignment from review mode.
+
+        No-op when the rally's winner is already the requested value.
+        On success, cascades scores forward from *index* so all downstream
+        score_at_start strings and score_snapshot_at_start snapshots are kept
+        consistent.  On cascade error the winner mutation is rolled back atomically
+        so the model is never left in a partially-updated state.
+
+        Args:
+            index: Rally index (0-based)
+            winner: ``"server"`` or ``"receiver"``
         """
         if not (0 <= index < self.rally_manager.get_rally_count()):
             return
@@ -2349,10 +2404,13 @@ class MainWindow(QMainWindow):
         rally = self.rally_manager.get_rally(index)
         old_winner = rally.winner
         old_winner_overridden = rally.winner_overridden
-        new_winner = "receiver" if old_winner == "server" else "server"
 
-        # Mutate the winner in rally_manager (also sets winner_overridden=True)
-        self.rally_manager.update_rally_winner(index, new_winner)
+        # No-op guard: avoid a needless cascade when the winner is unchanged
+        if old_winner == winner:
+            return
+
+        # Mutate the winner (also sets winner_overridden=True)
+        self.rally_manager.update_rally_winner(index, winner)
 
         # Cascade: reseed from the rally's snapshot (or score string for legacy
         # rallies) and replay every rally from index onward, updating both
@@ -2375,8 +2433,8 @@ class MainWindow(QMainWindow):
 
             # Build toast message
             toast_msg = (
-                f"Winner flipped for rally {index + 1}: "
-                f"{old_winner} \u2192 {new_winner}, cascade applied"
+                f"Winner set for rally {index + 1}: "
+                f"{old_winner} -> {winner}, cascade applied"
             )
             if changed_indices:
                 n = len(changed_indices)
@@ -2390,7 +2448,7 @@ class MainWindow(QMainWindow):
             rally.winner_overridden = old_winner_overridden
             ToastManager.show_error(
                 self,
-                f"Could not cascade winner flip: {e}",
+                f"Could not cascade winner change: {e}",
                 duration_ms=3000,
             )
             return
