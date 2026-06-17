@@ -348,11 +348,67 @@ def _run_baselines(
 # Model evaluation (lazy torch import)
 # ---------------------------------------------------------------------------
 
+def _compute_side_metrics(
+    val_examples: list,
+    all_labels: list[int],
+    all_preds: list[int],
+    terminal_event_annotations: Path | None,
+    side_map: Path | None,
+) -> dict[str, Any]:
+    """Assemble the Phase-5 side/event metrics block for the model result.
+
+    Always reports team metrics (per-team accuracy, confusion, balanced
+    accuracy).  When *terminal_event_annotations* is supplied it adds the
+    primary near/far terminal-event-side metric; when *side_map* is supplied it
+    adds the secondary (non-decisive) winner-side diagnostics.
+
+    Args:
+        val_examples:               Validation RallyExample list (provides keys).
+        all_labels:                 Ground-truth labels aligned with predictions.
+        all_preds:                  Model predictions aligned with labels.
+        terminal_event_annotations: Optional terminal-event annotation file path.
+        side_map:                   Optional side-map file path.
+
+    Returns:
+        A dict with ``"team"`` always present, plus ``"terminal_event_side"``
+        and/or ``"winner_side_diagnostic"`` when their inputs are supplied.
+    """
+    from ml.evaluation.side_metrics import (
+        compute_team_metrics,
+        compute_terminal_event_side_metrics,
+        compute_winner_side_diagnostics,
+        load_side_map,
+        load_terminal_event_annotations,
+    )
+
+    keys = [(str(ex.video_path), ex.rally_index) for ex in val_examples]
+
+    metrics: dict[str, Any] = {
+        "team": compute_team_metrics(all_labels, all_preds),
+    }
+
+    if terminal_event_annotations is not None:
+        annotations = load_terminal_event_annotations(terminal_event_annotations)
+        metrics["terminal_event_side"] = compute_terminal_event_side_metrics(
+            all_labels, all_preds, keys, annotations
+        )
+
+    if side_map is not None:
+        camera_near = load_side_map(side_map)
+        metrics["winner_side_diagnostic"] = compute_winner_side_diagnostics(
+            all_labels, all_preds, keys, camera_near
+        )
+
+    return metrics
+
+
 def _run_model(
     val_examples: list,
     checkpoint_path: Path,
     device: str,
     include_calibration: bool,
+    terminal_event_annotations: Path | None = None,
+    side_map: Path | None = None,
 ) -> dict[str, Any] | None:
     """Load and evaluate the winner classifier on the val split.
 
@@ -364,6 +420,10 @@ def _run_model(
         checkpoint_path:     Path to the ``.pt`` checkpoint.
         device:              PyTorch device string (e.g. ``"cpu"``).
         include_calibration: Whether to compute ECE calibration stats.
+        terminal_event_annotations: Optional terminal-event annotation file for
+                             the primary near/far terminal-event-side metric.
+        side_map:            Optional side-map file for the secondary
+                             (non-decisive) winner-side diagnostics.
 
     Returns:
         Dictionary with model evaluation metrics, or None if the model cannot
@@ -488,6 +548,17 @@ def _run_model(
     if game_metrics is not None:
         result["game_metrics"] = game_metrics
 
+    # --- side/event metrics (Phase 5) ---
+    # Predictions are in the same order as val_examples (no-split dataset +
+    # shuffle=False loader), so val_examples[i] keys all_preds[i]/all_labels[i].
+    result["side_metrics"] = _compute_side_metrics(
+        val_examples,
+        all_labels,
+        all_preds,
+        terminal_event_annotations,
+        side_map,
+    )
+
     return result
 
 
@@ -532,6 +603,8 @@ def run_evaluation(
     train_manifest: Path | None = None,
     val_manifest: Path | None = None,
     test_manifest: Path | None = None,
+    terminal_event_annotations: Path | None = None,
+    side_map: Path | None = None,
 ) -> dict[str, Any]:
     """Run the full evaluation and return a result dictionary.
 
@@ -559,6 +632,10 @@ def run_evaluation(
         val_manifest:        Optional pinned val-split manifest (evaluation set).
         test_manifest:       Optional pinned test-split manifest (evaluation set;
                              takes precedence over val_manifest).
+        terminal_event_annotations: Optional terminal-event annotation file for
+                             the primary near/far terminal-event-side metric.
+        side_map:            Optional side-map file for the secondary
+                             (non-decisive) winner-side diagnostics.
 
     Returns:
         Dictionary with keys:
@@ -608,7 +685,12 @@ def run_evaluation(
     model_result: dict[str, Any] | None = None
     if checkpoint is not None:
         model_result = _run_model(
-            val_examples, checkpoint, device, include_calibration
+            val_examples,
+            checkpoint,
+            device,
+            include_calibration,
+            terminal_event_annotations,
+            side_map,
         )
     else:
         # Attempt auto-discovery
@@ -619,7 +701,12 @@ def run_evaluation(
                 file=sys.stderr,
             )
             model_result = _run_model(
-                val_examples, discovered, device, include_calibration
+                val_examples,
+                discovered,
+                device,
+                include_calibration,
+                terminal_event_annotations,
+                side_map,
             )
         else:
             print(
@@ -645,6 +732,86 @@ def run_evaluation(
 # ---------------------------------------------------------------------------
 # Table rendering
 # ---------------------------------------------------------------------------
+
+def _fmt_acc(value: float | None) -> str:
+    """Format an optional accuracy as a percentage or ``n/a`` when ``None``."""
+    if value is None:
+        return "n/a"
+    return f"{value:.1%}"
+
+
+def _render_side_metrics_lines(sm: dict[str, Any]) -> list[str]:
+    """Render the Phase-5 side/event metrics block.
+
+    Keeps the primary (terminal-event-side) and secondary (winner-side)
+    sections visually distinct, and prints the non-decisive disclaimer verbatim
+    so the two can never be conflated.
+
+    Args:
+        sm: The ``side_metrics`` dict from a model result.
+
+    Returns:
+        Lines to append to the human-readable table.
+    """
+    lines: list[str] = []
+
+    team = sm.get("team")
+    if team is not None:
+        lines.append("")
+        lines.append("  --- Team metrics (always reportable) ---")
+        lines.append(f"  Balanced accuracy : {_fmt_acc(team.get('balanced_accuracy'))}")
+        t0 = team.get("team_0", {})
+        t1 = team.get("team_1", {})
+        lines.append(
+            f"  Team 0 acc        : {_fmt_acc(t0.get('accuracy'))}"
+            f"  (n={t0.get('n_total', 0)})"
+        )
+        lines.append(
+            f"  Team 1 acc        : {_fmt_acc(t1.get('accuracy'))}"
+            f"  (n={t1.get('n_total', 0)})"
+        )
+
+    tes = sm.get("terminal_event_side")
+    if tes is not None:
+        lines.append("")
+        lines.append("  --- Terminal-event side (PRIMARY far-side metric) ---")
+        near = tes.get("near", {})
+        far = tes.get("far", {})
+        unknown = tes.get("unknown", {})
+        lines.append(
+            f"  Near acc          : {_fmt_acc(near.get('accuracy'))}"
+            f"  (n={near.get('n_total', 0)})"
+        )
+        lines.append(
+            f"  Far acc           : {_fmt_acc(far.get('accuracy'))}"
+            f"  (n={far.get('n_total', 0)})"
+        )
+        lines.append(f"  Unknown count     : {unknown.get('n_total', 0)}")
+        lines.append(
+            f"  Mapped / unmapped : {tes.get('n_mapped', 0)} / {tes.get('n_unmapped', 0)}"
+        )
+
+    wsd = sm.get("winner_side_diagnostic")
+    if wsd is not None:
+        lines.append("")
+        lines.append("  --- Winner side (SECONDARY, non-decisive) ---")
+        lines.append(f"  {wsd.get('disclaimer', '')}")
+        near = wsd.get("winner_near", {})
+        far = wsd.get("winner_far", {})
+        lines.append(
+            f"  Winner-near acc   : {_fmt_acc(near.get('accuracy'))}"
+            f"  (n={near.get('n_total', 0)})"
+        )
+        lines.append(
+            f"  Winner-far acc    : {_fmt_acc(far.get('accuracy'))}"
+            f"  (n={far.get('n_total', 0)})"
+        )
+        lines.append(
+            f"  Mapped / unmapped : {wsd.get('n_mapped', 0)} / {wsd.get('n_unmapped', 0)}"
+        )
+
+    return lines
+
 
 def _render_table(result: dict[str, Any]) -> str:
     """Render the evaluation result as a human-readable text table.
@@ -768,6 +935,9 @@ def _render_table(result: dict[str, Any]) -> str:
             lines.append(
                 f"  Mean rally acc    : {gm['mean_rally_winner_accuracy']:.1%}"
             )
+        sm = model.get("side_metrics")
+        if sm is not None:
+            lines.extend(_render_side_metrics_lines(sm))
     else:
         lines.append("")
         lines.append(
@@ -869,6 +1039,27 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "precedence over --val-manifest as the evaluation set."
         ),
     )
+    # ---- Side/event metrics (Phase 5) ----
+    parser.add_argument(
+        "--terminal-event-annotations",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Terminal-event-side annotation JSON. Enables the PRIMARY near/far "
+            "terminal-event-side accuracy metric (the only valid far-side metric)."
+        ),
+    )
+    parser.add_argument(
+        "--side-map",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Per-rally camera-near-team side map JSON. Enables SECONDARY "
+            "winner-side diagnostics (explicitly non-decisive for far-side)."
+        ),
+    )
     return parser
 
 
@@ -900,6 +1091,8 @@ def main(argv: list[str] | None = None) -> int:
         train_manifest=args.train_manifest,
         val_manifest=args.val_manifest,
         test_manifest=args.test_manifest,
+        terminal_event_annotations=args.terminal_event_annotations,
+        side_map=args.side_map,
     )
 
     if args.emit_json:

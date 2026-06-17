@@ -9,6 +9,16 @@ from ml.evaluation.game_metrics import (
     aggregate_game_metrics,
     game_score_sequence_metrics,
 )
+from ml.evaluation.side_metrics import (
+    SideMetricBucket,
+    SideMetricsError,
+    TerminalEventAnnotation,
+    compute_team_metrics,
+    compute_terminal_event_side_metrics,
+    compute_winner_side_diagnostics,
+    load_side_map,
+    load_terminal_event_annotations,
+)
 from ml.evaluation.split_manifest import (
     SplitLeakageError,
     SplitManifest,
@@ -35,4 +45,13 @@ __all__ = [
     "load_split_manifest",
     "detect_split_leakage",
     "load_split_manifests",
+    # side_metrics
+    "SideMetricBucket",
+    "TerminalEventAnnotation",
+    "SideMetricsError",
+    "compute_team_metrics",
+    "compute_terminal_event_side_metrics",
+    "compute_winner_side_diagnostics",
+    "load_terminal_event_annotations",
+    "load_side_map",
 ]

@@ -149,7 +149,14 @@ class TestRunEvaluation:
             captured["val_for_baselines"] = val
             return [{"name": "stub", "n_total": len(val), "n_correct": 0, "n_wrong": len(val), "accuracy": 0.0}]
 
-        def fake_run_model(val: list[RallyExample], checkpoint: Path, device: str, include_calibration: bool) -> dict[str, Any]:
+        def fake_run_model(
+            val: list[RallyExample],
+            checkpoint: Path,
+            device: str,
+            include_calibration: bool,
+            terminal_event_annotations: Path | None = None,
+            side_map: Path | None = None,
+        ) -> dict[str, Any]:
             captured["val_for_model"] = val
             captured["checkpoint"] = checkpoint
             captured["device"] = device
@@ -532,7 +539,14 @@ class TestGameLevelMetrics:
             "mean_rally_winner_accuracy": 0.667,
         }
 
-        def fake_run_model(val, checkpoint, device, include_calibration):
+        def fake_run_model(
+            val,
+            checkpoint,
+            device,
+            include_calibration,
+            terminal_event_annotations=None,
+            side_map=None,
+        ):
             return {
                 "name": "winner_classifier",
                 "n_total": len(val),
