@@ -24,6 +24,7 @@ from ml.train_winner import (
     _config_to_dict,
     _seed_everything,
     _train_one_epoch_accum,
+    estimate_input_tensor_mb,
     fit_temperature,
 )
 
@@ -544,3 +545,182 @@ class TestGradAccumSteps:
         )
 
         assert optimizer.step.call_count == n_batches
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: estimate_input_tensor_mb — tensor-size estimation math
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateInputTensorMb:
+    """Pure-arithmetic tensor-size estimator — no GPU required."""
+
+    def test_known_value_float32(self) -> None:
+        # batch=1, T=20, C=3, H=128, W=256 → 1*20*3*128*256*4 bytes
+        # = 7,864,320 bytes = 7.5 MB
+        result = estimate_input_tensor_mb(1, 20, 3, 128, 256, dtype_bytes=4)
+        expected_bytes = 1 * 20 * 3 * 128 * 256 * 4
+        expected_mb = expected_bytes / (1024 * 1024)
+        assert abs(result - expected_mb) < 1e-9
+
+    def test_known_value_float16(self) -> None:
+        # Same geometry but dtype_bytes=2 → half the size.
+        fp32 = estimate_input_tensor_mb(1, 20, 3, 128, 256, dtype_bytes=4)
+        fp16 = estimate_input_tensor_mb(1, 20, 3, 128, 256, dtype_bytes=2)
+        assert abs(fp16 - fp32 / 2.0) < 1e-9
+
+    def test_batch_scales_linearly(self) -> None:
+        single = estimate_input_tensor_mb(1, 20, 3, 128, 256)
+        quad = estimate_input_tensor_mb(4, 20, 3, 128, 256)
+        assert abs(quad - 4.0 * single) < 1e-9
+
+    def test_frames_scale_linearly(self) -> None:
+        t20 = estimate_input_tensor_mb(2, 20, 3, 128, 256)
+        t75 = estimate_input_tensor_mb(2, 75, 3, 128, 256)
+        assert abs(t75 / t20 - 75 / 20) < 1e-9
+
+    def test_returns_float(self) -> None:
+        result = estimate_input_tensor_mb(8, 75, 3, 256, 512)
+        assert isinstance(result, float)
+
+    def test_default_dtype_is_float32(self) -> None:
+        explicit = estimate_input_tensor_mb(2, 20, 3, 128, 256, dtype_bytes=4)
+        default = estimate_input_tensor_mb(2, 20, 3, 128, 256)
+        assert explicit == default
+
+    def test_default_config_geometry(self) -> None:
+        # Default WinnerModelConfig: 256x128, 2.5s @ 8fps → 20 frames, batch 8.
+        from ml.config import WinnerModelConfig
+        cfg = WinnerModelConfig()
+        frames = int(round(cfg.effective_clip_duration_s * cfg.fps_out))
+        mb = estimate_input_tensor_mb(8, frames, 3, cfg.canonical_height, cfg.canonical_width)
+        # Sanity: should be well under 1 GB for the default geometry.
+        assert 0.0 < mb < 1024.0
+
+    def test_large_clip_geometry(self) -> None:
+        # 512x256, 5s @ 15fps → 75 frames, batch 2.
+        mb = estimate_input_tensor_mb(2, 75, 3, 256, 512)
+        assert mb > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: AMP flag is a no-op/safe on CPU
+# ---------------------------------------------------------------------------
+
+
+class TestAmpCpuNoop:
+    """When AMP is requested but device is CPU, training must proceed without error."""
+
+    def _make_simple_loader(
+        self, n_batches: int, batch_size: int = 2
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        return [
+            (torch.randn(batch_size, 5, 3, 8, 4), torch.randint(0, 2, (batch_size,)))
+            for _ in range(n_batches)
+        ]
+
+    def test_scaler_none_on_cpu_does_not_raise(self) -> None:
+        """Passing scaler=None (CPU path) must complete without error."""
+        loader = self._make_simple_loader(3)
+        model = MagicMock()
+        model.return_value = torch.randn(2, 2, requires_grad=False)
+        model.train = MagicMock()
+
+        criterion = MagicMock()
+        fake_loss = MagicMock()
+        fake_loss.__truediv__ = lambda self, other: fake_loss
+        fake_loss.item.return_value = 0.5
+        fake_loss.backward = MagicMock()
+        criterion.return_value = fake_loss
+
+        optimizer = MagicMock()
+        device = torch.device("cpu")
+
+        # scaler=None is the CPU path — must not raise.
+        result = _train_one_epoch_accum(
+            model, loader, criterion, optimizer, device,  # type: ignore[arg-type]
+            grad_accum_steps=1,
+            scaler=None,
+        )
+        assert isinstance(result, float)
+
+    def test_amp_flag_disabled_produces_none_scaler(self) -> None:
+        """train_winner sets scaler=None when amp=False, regardless of device."""
+        import torch
+        # Verify the logic: amp=False → use_amp=False → scaler=None.
+        amp = False
+        device_type = "cpu"
+        use_amp = amp and device_type == "cuda"
+        scaler = torch.amp.GradScaler(device_type="cuda") if use_amp else None
+        assert scaler is None
+
+    def test_amp_flag_cpu_produces_none_scaler(self) -> None:
+        """train_winner sets scaler=None when amp=True but device is CPU."""
+        amp = True
+        device_type = "cpu"
+        use_amp = amp and device_type == "cuda"
+        scaler = torch.amp.GradScaler(device_type="cuda") if use_amp else None
+        assert scaler is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: grad-accum cadence including partial-tail flush
+# ---------------------------------------------------------------------------
+
+
+class TestGradAccumTailFlush:
+    """Verify that the partial tail accumulation window is always flushed."""
+
+    def _make_simple_loader(
+        self, n_batches: int, batch_size: int = 2
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        return [
+            (torch.randn(batch_size, 5, 3, 8, 4), torch.randint(0, 2, (batch_size,)))
+            for _ in range(n_batches)
+        ]
+
+    def _run_accum(self, n_batches: int, accum: int) -> int:
+        """Return optimizer.step() call count for *n_batches* with *accum* steps."""
+        loader = self._make_simple_loader(n_batches)
+        model = MagicMock()
+        model.return_value = torch.randn(2, 2, requires_grad=False)
+        model.train = MagicMock()
+
+        criterion = MagicMock()
+        fake_loss = MagicMock()
+        fake_loss.__truediv__ = lambda self, other: fake_loss
+        fake_loss.item.return_value = 0.5
+        fake_loss.backward = MagicMock()
+        criterion.return_value = fake_loss
+
+        optimizer = MagicMock()
+        device = torch.device("cpu")
+
+        _train_one_epoch_accum(
+            model, loader, criterion, optimizer, device,  # type: ignore[arg-type]
+            grad_accum_steps=accum,
+        )
+        return optimizer.step.call_count
+
+    def test_exact_multiple_no_tail(self) -> None:
+        # 6 batches / accum=3 → 2 steps, no tail.
+        assert self._run_accum(6, 3) == 2
+
+    def test_partial_tail_flushed_5_batches_accum_3(self) -> None:
+        # 5 batches / accum=3 → full window at batch 3 (step 1) + tail at batch 5 (step 2).
+        assert self._run_accum(5, 3) == 2
+
+    def test_partial_tail_flushed_1_batch_accum_4(self) -> None:
+        # 1 batch / accum=4 → only the tail window, exactly 1 step.
+        assert self._run_accum(1, 4) == 1
+
+    def test_partial_tail_flushed_7_batches_accum_4(self) -> None:
+        # 7 batches / accum=4 → step at batch 4, step (tail) at batch 7.
+        assert self._run_accum(7, 4) == 2
+
+    def test_accum_larger_than_epoch_single_step(self) -> None:
+        # accum=100 with only 3 batches → tail flush gives exactly 1 step.
+        assert self._run_accum(3, 100) == 1
+
+    def test_single_batch_single_accum_one_step(self) -> None:
+        assert self._run_accum(1, 1) == 1

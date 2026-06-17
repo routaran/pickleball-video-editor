@@ -419,6 +419,35 @@ def _train_one_epoch(
     return total_loss / n_samples if n_samples > 0 else 0.0
 
 
+def estimate_input_tensor_mb(
+    batch_size: int,
+    frames_per_clip: int,
+    channels: int,
+    height: int,
+    width: int,
+    *,
+    dtype_bytes: int = 4,
+) -> float:
+    """Estimate the memory footprint of one input batch in megabytes.
+
+    Pure arithmetic — no tensors allocated, CPU-safe, and unit-testable.
+    The estimate covers the input batch only (not gradients or activations).
+
+    Args:
+        batch_size: Number of samples in the micro-batch.
+        frames_per_clip: Number of frames per clip (T dimension).
+        channels: Number of colour channels (C, typically 3).
+        height: Frame height in pixels (H).
+        width: Frame width in pixels (W).
+        dtype_bytes: Bytes per element.  4 for float32 (default), 2 for float16.
+
+    Returns:
+        Estimated batch memory in megabytes as a Python float.
+    """
+    n_elements = batch_size * frames_per_clip * channels * height * width
+    return (n_elements * dtype_bytes) / (1024 * 1024)
+
+
 def _train_one_epoch_accum(
     model: WinnerClassifier,
     loader: DataLoader,
@@ -426,7 +455,7 @@ def _train_one_epoch_accum(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     grad_accum_steps: int = 1,
-    scaler: "torch.cuda.amp.GradScaler | None" = None,
+    scaler: "torch.amp.GradScaler | None" = None,
     log_batch_sanity: bool = False,
 ) -> float:
     """Run one full training pass with optional gradient accumulation and AMP.
@@ -467,7 +496,7 @@ def _train_one_epoch_accum(
             _print_batch_sanity(clips, labels)
 
         if scaler is not None:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast(device_type=device.type):
                 logits = model(clips)
                 loss = criterion(logits, labels) / accum_steps
             scaler.scale(loss).backward()
@@ -657,8 +686,8 @@ def train_winner(
     use_amp = amp and device.type == "cuda"
     if amp and not use_amp:
         print("Warning: --amp requested but device is CPU; AMP disabled.")
-    scaler: torch.cuda.amp.GradScaler | None = (
-        torch.cuda.amp.GradScaler() if use_amp else None
+    scaler: torch.amp.GradScaler | None = (
+        torch.amp.GradScaler(device_type="cuda") if use_amp else None
     )
 
     # ---- Paths ----
@@ -782,15 +811,52 @@ def train_winner(
     patience_counter = 0
     early_stop_patience = 5
 
+    # ---- Resource diagnostics (Phase 6) ----
+    frames_per_clip = int(round(model_cfg.effective_clip_duration_s * model_cfg.fps_out))
     effective_batch = batch_size * max(grad_accum_steps, 1)
-    print(f"\nTraining settings:")
-    print(f"  seed            : {seed}")
-    print(f"  batch_size      : {batch_size}")
-    print(f"  grad_accum_steps: {grad_accum_steps}")
-    print(f"  effective_batch : {effective_batch}")
-    print(f"  num_workers     : {num_workers}")
-    print(f"  amp             : {use_amp}")
-    print(f"  checkpoint_out  : {checkpoint_path}")
+    mb_per_sample = estimate_input_tensor_mb(
+        1,
+        frames_per_clip,
+        3,
+        model_cfg.canonical_height,
+        model_cfg.canonical_width,
+    )
+    mb_per_micro_batch = estimate_input_tensor_mb(
+        batch_size,
+        frames_per_clip,
+        3,
+        model_cfg.canonical_height,
+        model_cfg.canonical_width,
+    )
+
+    print(f"\nWinnerModelConfig:")
+    print(f"  canonical_width           : {model_cfg.canonical_width}")
+    print(f"  canonical_height          : {model_cfg.canonical_height}")
+    print(f"  clip_duration_s           : {model_cfg.clip_duration_s}")
+    print(f"  effective_clip_duration_s : {model_cfg.effective_clip_duration_s}")
+    print(f"  fps_out                   : {model_cfg.fps_out}")
+    print(f"  frames_per_clip (T)       : {frames_per_clip}")
+    print(f"  clip_extract_max_dim      : {model_cfg.clip_extract_max_dim}")
+    print(f"  confidence_threshold      : {model_cfg.confidence_threshold}")
+    print(f"  clip_window_policy        : {model_cfg.clip_window_policy}")
+    print(f"  padding_policy            : {model_cfg.padding_policy}")
+
+    print(f"\nTraining runtime:")
+    print(f"  device                    : {device}")
+    print(f"  seed                      : {seed}")
+    print(f"  batch_size                : {batch_size}")
+    print(f"  grad_accum_steps          : {grad_accum_steps}")
+    print(f"  effective_batch_size      : {effective_batch}")
+    print(f"  num_workers               : {num_workers}")
+    print(f"  AMP enabled               : {use_amp}")
+    print(f"  checkpoint_out            : {checkpoint_path}")
+    print(f"  train_manifest            : {train_manifest}")
+    print(f"  val_manifest              : {val_manifest}")
+
+    print(f"\nEstimated input tensor:")
+    print(f"  shape per sample          : ({frames_per_clip}, 3, {model_cfg.canonical_height}, {model_cfg.canonical_width})")
+    print(f"  MB per sample (float32)   : {mb_per_sample:.3f}")
+    print(f"  MB per micro-batch (float32): {mb_per_micro_batch:.3f}")
 
     print("\n=== Training ===")
     header = (
@@ -867,6 +933,14 @@ def train_winner(
     print("\n=== Per-video validation (final epoch) ===")
     per_video = _per_video_validate(model, val_dataset, device, batch_size)
     _print_per_video_report(per_video)
+
+    # ---- CUDA memory diagnostics (Phase 6) ----
+    if device.type == "cuda" and torch.cuda.is_available():
+        allocated_mb = torch.cuda.max_memory_allocated(device) / (1024 * 1024)
+        reserved_mb = torch.cuda.max_memory_reserved(device) / (1024 * 1024)
+        print(f"\nCUDA memory diagnostics:")
+        print(f"  max memory allocated  : {allocated_mb:.1f} MB")
+        print(f"  max memory reserved   : {reserved_mb:.1f} MB")
 
     # ---- Temperature scaling ----
     # Reload the best checkpoint weights, collect val logits, and fit a scalar
