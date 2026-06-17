@@ -12,8 +12,6 @@ All tests run on CPU with mocked video I/O and a stub model so no GPU, real
 video, or heavy checkpoint is required.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 
@@ -194,6 +192,44 @@ class TestEffectiveClipDurationOverride:
 
         assert config.clip_duration_override_s == 4.0
         assert config.effective_clip_duration_s == 4.0
+
+
+# ---------------------------------------------------------------------------
+# (d) checkpoint schema-version mismatch warning
+# ---------------------------------------------------------------------------
+
+
+class TestSchemaVersionMismatchWarning:
+    def test_future_schema_version_emits_exactly_one_user_warning(self) -> None:
+        """A checkpoint written by a newer schema version triggers one UserWarning."""
+        checkpoint: dict[str, Any] = {
+            "checkpoint_schema_version": "3.0",
+            "config": {"canonical_width": 256, "clip_duration_s": 2.5},
+        }
+
+        with pytest.warns(UserWarning, match="3.0") as record:
+            load_winner_config_from_checkpoint(checkpoint)
+
+        schema_warnings = [
+            w for w in record if "schema version" in str(w.message).lower()
+        ]
+        assert len(schema_warnings) == 1
+
+    def test_matching_schema_version_emits_no_schema_warning(
+        self, recwarn: pytest.WarningsChecker
+    ) -> None:
+        """A checkpoint whose schema version matches the reader emits no warning."""
+        checkpoint: dict[str, Any] = {
+            "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "config": {"canonical_width": 256, "clip_duration_s": 2.5},
+        }
+
+        load_winner_config_from_checkpoint(checkpoint)
+
+        schema_warnings = [
+            w for w in recwarn if "schema version" in str(w.message).lower()
+        ]
+        assert schema_warnings == []
 
 
 # ---------------------------------------------------------------------------

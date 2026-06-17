@@ -194,7 +194,20 @@ def load_winner_config_from_checkpoint(
             )
         return WinnerModelConfig()
 
-    # Copy only recognised dataclass fields — extra keys (schema version,
+    # Warn when the checkpoint was written by a newer schema version so the
+    # operator knows the load may be a best-effort reconstruction.
+    saved_schema_version = checkpoint.get("checkpoint_schema_version")
+    if saved_schema_version is not None and saved_schema_version != CHECKPOINT_SCHEMA_VERSION:
+        warnings.warn(
+            f"Winner checkpoint schema version '{saved_schema_version}' differs "
+            f"from this reader's expected version '{CHECKPOINT_SCHEMA_VERSION}'. "
+            "The config block will be reconstructed on a best-effort basis; "
+            "consider retraining with the current codebase.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # Copy only recognised dataclass fields — extra keys (e.g.
     # effective_clip_duration_s) are handled explicitly below.
     config_data: dict[str, Any] = {
         f.name: raw_config[f.name]
