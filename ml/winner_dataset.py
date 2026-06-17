@@ -332,7 +332,7 @@ def _fetch_clip_tensor(
 
         J        = max(1, round(_TEMPORAL_JITTER_S * config.fps_out))
         pad_s    = J / config.fps_out
-        base     = clamp_to_rally_start_v1(raw_start, end, effective_duration)
+        base     = clamp_to_rally_start_v1(raw_start_seconds, end, effective_duration)
         start_s  = max(base - pad_s, raw_start_seconds, 0)
         end_s    = end_seconds + pad_s
 

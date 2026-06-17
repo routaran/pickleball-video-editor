@@ -389,9 +389,27 @@ def _compute_side_metrics(
 
     if terminal_event_annotations is not None:
         annotations = load_terminal_event_annotations(terminal_event_annotations)
-        metrics["terminal_event_side"] = compute_terminal_event_side_metrics(
+        te_result = compute_terminal_event_side_metrics(
             all_labels, all_preds, keys, annotations
         )
+        metrics["terminal_event_side"] = te_result
+
+        n_total = len(keys)
+        n_unmapped = te_result.get("n_unmapped", 0)
+        if n_total > 0 and n_unmapped == n_total:
+            example_dataset_key = keys[0] if keys else None
+            example_annotation_key = next(iter(annotations), None) if annotations else None
+            print(
+                "[evaluate_winner] WARNING: terminal-event side metric: ALL "
+                f"{n_total} example(s) are unmapped (n_unmapped == n_total). "
+                "The side metric is meaningless. This almost always means the "
+                "video_path format in the annotation file does not match the "
+                "dataset (e.g. relative path in annotation vs absolute path in "
+                "dataset or vice versa). "
+                f"Example dataset key: {example_dataset_key!r}. "
+                f"Example annotation key: {example_annotation_key!r}.",
+                file=sys.stderr,
+            )
 
     if side_map is not None:
         camera_near = load_side_map(side_map)

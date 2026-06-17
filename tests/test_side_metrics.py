@@ -307,3 +307,118 @@ class TestEvaluateWinnerSideRendering:
         # No terminal-event/winner-side sections without their inputs.
         assert "PRIMARY far-side metric" not in text
         assert "SECONDARY" not in text
+
+
+# ---------------------------------------------------------------------------
+# All-unmapped warning in _compute_side_metrics
+# ---------------------------------------------------------------------------
+
+
+class TestAllUnmappedWarning:
+    """When annotations are provided but NO example key matches, a loud
+    warning must be emitted so operators notice the path-format mismatch.
+    """
+
+    def test_all_unmapped_emits_warning(self, tmp_path: Path, capsys) -> None:
+        """Annotations use a relative path; dataset examples use absolute paths.
+
+        Every example should land in n_unmapped, triggering the warning.
+        """
+        import types
+
+        from ml.tools.evaluate_winner import _compute_side_metrics
+
+        # Annotation file uses a relative path.
+        ann_path = tmp_path / "annotations.json"
+        ann_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "annotations": [
+                        {
+                            "video_path": "relative/game.mp4",  # relative key
+                            "rally_index": 0,
+                            "terminal_event_side": "far",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Dataset examples use absolute paths — mismatch is intentional.
+        ex0 = types.SimpleNamespace(
+            video_path=Path("/absolute/path/to/game.mp4"),
+            rally_index=0,
+        )
+        ex1 = types.SimpleNamespace(
+            video_path=Path("/absolute/path/to/game.mp4"),
+            rally_index=1,
+        )
+
+        _compute_side_metrics(
+            val_examples=[ex0, ex1],
+            all_labels=[0, 1],
+            all_preds=[0, 1],
+            terminal_event_annotations=ann_path,
+            side_map=None,
+        )
+
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.err, "Expected a WARNING on stderr"
+        assert "unmapped" in captured.err.lower(), (
+            "Warning should mention unmapped"
+        )
+        assert "n_unmapped == n_total" in captured.err or "ALL" in captured.err, (
+            "Warning should make the all-unmapped condition explicit"
+        )
+        # The operator should see one dataset key and one annotation key so they
+        # can diagnose the mismatch at a glance.
+        assert "game.mp4" in captured.err, (
+            "Warning should print an example path so the mismatch is visible"
+        )
+
+    def test_partial_unmapped_does_not_warn(self, tmp_path: Path, capsys) -> None:
+        """When at least one example matches, no spurious warning is emitted."""
+        import types
+
+        from ml.tools.evaluate_winner import _compute_side_metrics
+
+        ann_path = tmp_path / "annotations.json"
+        ann_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "annotations": [
+                        {
+                            "video_path": "/absolute/path/to/game.mp4",
+                            "rally_index": 0,
+                            "terminal_event_side": "near",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        ex0 = types.SimpleNamespace(
+            video_path=Path("/absolute/path/to/game.mp4"),
+            rally_index=0,
+        )
+        ex1 = types.SimpleNamespace(
+            video_path=Path("/absolute/path/to/game.mp4"),
+            rally_index=1,  # unmapped, but not ALL
+        )
+
+        _compute_side_metrics(
+            val_examples=[ex0, ex1],
+            all_labels=[0, 1],
+            all_preds=[0, 1],
+            terminal_event_annotations=ann_path,
+            side_map=None,
+        )
+
+        captured = capsys.readouterr()
+        # Partial unmapping is expected and must NOT produce a noisy warning.
+        assert "n_unmapped == n_total" not in captured.err
+        assert "ALL" not in captured.err or "WARNING" not in captured.err
