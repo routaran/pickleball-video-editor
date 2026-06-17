@@ -155,12 +155,24 @@ def predict_winners(
 
     results: list[tuple[int, float]] = []
 
+    # Cache/policy tag describing the clip-window + padding policy the model was
+    # trained under (Phase 4).  Passed to extract_clip so the prediction-time
+    # raw-frame cache never collides with clips produced under a different
+    # policy, mirroring the training dataset's cache key.
+    policy_tag = f"{config.clip_window_policy}+{config.padding_policy}"
+
     for idx, (start_s, end_s) in enumerate(rally_intervals):
         # Use the effective (ablation-aware) clip duration so prediction
         # extracts the SAME window length the model was trained on.  Reading
         # config.clip_duration_s here would ignore any clip_duration_override_s
         # recorded in the checkpoint and silently mismatch training geometry.
-        clip_start = max(0.0, end_s - config.effective_clip_duration_s)
+        #
+        # Phase-4 clamp_to_rally_start_v1: never start the clip before the
+        # rally's own start (start_s), so a long window on a short rally cannot
+        # pull in frames from the previous point.  The result is floored at 0.0
+        # for a valid seek offset.
+        desired_start = end_s - config.effective_clip_duration_s
+        clip_start = max(0.0, start_s, desired_start)
         clip_end = end_s
 
         logger.debug(
@@ -178,6 +190,7 @@ def predict_winners(
             clip_end,
             config.fps_out,
             extract_size,
+            policy_tag,
         )
 
         # Warp to canonical court view: (T, canonical_height, canonical_width, 3) uint8.

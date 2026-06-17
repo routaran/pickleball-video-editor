@@ -181,6 +181,7 @@ class TestWinnerDatasetAugmentationRegression:
                 end_seconds=12.5,
                 corners=[(10, 20), (310, 20), (310, 220), (10, 220)],
                 winning_team=winning_team,
+                raw_start_seconds=10.0,
             )
         ]
         return ds

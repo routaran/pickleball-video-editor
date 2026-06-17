@@ -285,6 +285,7 @@ def _patch_predict_winner_io(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         clip_end: float,
         _fps: int,
         _extract_size: Any,
+        _policy_tag: Any = None,
     ) -> np.ndarray:
         captured["clip_starts"].append(clip_start)
         captured["clip_ends"].append(clip_end)

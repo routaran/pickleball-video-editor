@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 # :func:`load_winner_config_from_checkpoint`).
 CHECKPOINT_SCHEMA_VERSION: str = "2.0"
 
+# Default clip-window and padding policy identifiers (Phase 4).  Versioned
+# strings so that checkpoints, dataset caches, and evaluation output record
+# exactly which windowing geometry produced the clips.  Bump the version
+# suffix (``_v2`` etc.) whenever the clamping or padding behaviour changes so
+# old caches/checkpoints never collide with new geometry.
+DEFAULT_CLIP_WINDOW_POLICY: str = "clamp_to_rally_start_v1"
+DEFAULT_PADDING_POLICY: str = "repeat_first_frame_v1"
+
 
 @dataclass
 class AudioConfig:
@@ -100,6 +108,13 @@ class WinnerModelConfig:
             ``clip_duration_s`` for the current run without changing the
             stored default.  Intended for clip-window ablation experiments.
             Use :py:meth:`effective_clip_duration_s` to read the active value.
+        clip_window_policy: Versioned identifier for how clip windows are
+            clamped to the rally.  ``"clamp_to_rally_start_v1"`` clamps the
+            window start to the rally's ``raw_start_seconds`` so 5s clips never
+            include frames from the previous point.
+        padding_policy: Versioned identifier for how clips shorter than the
+            requested frame count are padded.  ``"repeat_first_frame_v1"``
+            left-pads by repeating the first available frame.
     """
 
     checkpoint_path: Path = Path("ml/checkpoints/best_winner.pt")
@@ -121,6 +136,15 @@ class WinnerModelConfig:
     # 640 caps that to a few MB/clip. MUST be identical for training and
     # inference — both read this field — or the model sees mismatched inputs.
     clip_extract_max_dim: int = 640
+    # Phase 4 — clip-window and padding policy identifiers.  These are versioned
+    # strings (not behaviour switches): the dataset always clamps clips to the
+    # rally's raw_start_seconds and repeats the first available frame when the
+    # clamped window is shorter than the requested frame count.  Recording the
+    # policy names in the checkpoint and the dataset cache key means a clip
+    # produced under a future policy revision can never silently reuse a cache
+    # entry (or be loaded by an evaluator) that assumed the old geometry.
+    clip_window_policy: str = DEFAULT_CLIP_WINDOW_POLICY
+    padding_policy: str = DEFAULT_PADDING_POLICY
 
     @property
     def effective_clip_duration_s(self) -> float:

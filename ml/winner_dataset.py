@@ -39,6 +39,7 @@ from ml.video_features import (
 __all__ = [
     "WinnerDataset",
     "load_winner_dataset",
+    "clamp_to_rally_start_v1",
 ]
 
 # Forward-declare for type hints without a circular import at the module level.
@@ -123,9 +124,21 @@ class _RallyRecord:
         end_seconds: Rally end timestamp in seconds (clip anchor).
         corners: Four (x, y) court-corner pixel coordinates.
         winning_team: Ground-truth label (0 or 1).
+        raw_start_seconds: Rally start timestamp in seconds.  Used by the
+            Phase-4 clip-window clamp so a clip never begins before the rally's
+            own start (which would pull in frames from the previous point).
+            Constructors that have no start time should pass ``0.0``; that
+            value never clamps a window tighter than the existing
+            video-start floor of ``0.0``.
     """
 
-    __slots__ = ("video_path", "end_seconds", "corners", "winning_team")
+    __slots__ = (
+        "video_path",
+        "end_seconds",
+        "corners",
+        "winning_team",
+        "raw_start_seconds",
+    )
 
     def __init__(
         self,
@@ -133,11 +146,13 @@ class _RallyRecord:
         end_seconds: float,
         corners: list[tuple[int, int]],
         winning_team: int,
+        raw_start_seconds: float = 0.0,
     ) -> None:
         self.video_path = video_path
         self.end_seconds = end_seconds
         self.corners = corners
         self.winning_team = winning_team
+        self.raw_start_seconds = raw_start_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +233,88 @@ def _vertical_flip_frames(frames_hwc: np.ndarray) -> np.ndarray:
 # Core per-sample fetch
 # ---------------------------------------------------------------------------
 
+def _clip_policy_cache_tag(config: WinnerModelConfig) -> str:
+    """Return the cache-key tag describing the active clip-window/padding policy.
+
+    Combining both versioned policy names means a raw-frame cache entry produced
+    under one geometry can never be reused once the windowing or padding policy
+    changes, even if the clamped time range happened to coincide (Phase 4).
+
+    Args:
+        config: WinnerModelConfig carrying ``clip_window_policy`` and
+            ``padding_policy``.
+
+    Returns:
+        Opaque ``"<window_policy>+<padding_policy>"`` tag for ``extract_clip``.
+    """
+    return f"{config.clip_window_policy}+{config.padding_policy}"
+
+
+def clamp_to_rally_start_v1(
+    raw_start_seconds: float,
+    end_seconds: float,
+    effective_clip_duration_s: float,
+) -> float:
+    """Return the clamped clip-window start for the ``clamp_to_rally_start_v1`` policy.
+
+    Implements the Phase-4 clip-window policy::
+
+        clip_end   = end_seconds
+        clip_start = max(raw_start_seconds, end_seconds - effective_clip_duration_s)
+
+    Clamping to ``raw_start_seconds`` guarantees a clip never begins before the
+    rally it belongs to, so long (e.g. 5s) windows on a short rally cannot pull
+    in frames from the previous point.  The result is additionally floored at
+    ``0.0`` so it is always a valid seek offset even for rallies whose recorded
+    start is negative.
+
+    Args:
+        raw_start_seconds: Rally start timestamp in seconds.
+        end_seconds: Rally end timestamp in seconds (the clip anchor).
+        effective_clip_duration_s: Active clip duration (ablation-aware).
+
+    Returns:
+        The clamped clip-window start time in seconds, never less than ``0.0``
+        and never less than ``raw_start_seconds``.
+    """
+    desired_start = end_seconds - effective_clip_duration_s
+    clamped = max(raw_start_seconds, desired_start)
+    return max(0.0, clamped)
+
+
+def _pad_repeat_first_frame_v1(
+    frames: np.ndarray,
+    target_len: int,
+) -> np.ndarray:
+    """Left-pad *frames* to *target_len* by repeating the first frame.
+
+    Implements the ``repeat_first_frame_v1`` padding policy: when the clamped
+    clip yields fewer frames than requested, the earliest available frame is
+    duplicated at the front of the clip so the temporal head always receives a
+    fixed-length sequence.  Repeating the *first* frame (rather than padding
+    with black) keeps the padded region visually consistent with the clip and
+    avoids injecting a constant black signal that a model could latch onto.
+
+    No-op (returns *frames* unchanged) when the clip already has at least
+    *target_len* frames or when *frames* is empty.
+
+    Args:
+        frames: Clip array with shape ``(T, H, W, 3)``, dtype uint8.
+        target_len: Desired number of frames.
+
+    Returns:
+        Array of shape ``(max(T, target_len), H, W, 3)``, dtype uint8.
+    """
+    current_len = len(frames)
+    if current_len == 0 or current_len >= target_len:
+        return frames
+
+    pad_count = target_len - current_len
+    first_frame = frames[0:1]  # (1, H, W, 3) — preserves dtype and shape
+    padding = np.repeat(first_frame, pad_count, axis=0)
+    return np.ascontiguousarray(np.concatenate([padding, frames], axis=0))
+
+
 def _fetch_clip_tensor(
     record: _RallyRecord,
     config: WinnerModelConfig,
@@ -231,18 +328,20 @@ def _fetch_clip_tensor(
     than by shifting the extraction window — keeping the ``hash_clip_key`` used
     by ``extract_clip`` stable across all augmented calls for a given rally.
 
-    Extended window definition::
+    Extended window definition (Phase-4 ``clamp_to_rally_start_v1`` policy)::
 
         J        = max(1, round(_TEMPORAL_JITTER_S * config.fps_out))
         pad_s    = J / config.fps_out
-        start_s  = max(0, end_seconds - effective_clip_duration - pad_s)
+        base     = clamp_to_rally_start_v1(raw_start, end, effective_duration)
+        start_s  = max(base - pad_s, raw_start_seconds, 0)
         end_s    = end_seconds + pad_s
 
-    The returned array nominally contains ``T + 2*J`` frames, where
-    ``T = round(effective_clip_duration * fps_out)``.  When the rally is near
-    the start of the video, video-start clamping may shorten the array; the
-    caller handles this gracefully via the short-video fallback in
-    ``__getitem__``.
+    Clamping ``start_s`` to ``raw_start_seconds`` (in addition to the previous
+    ``0.0`` video-start floor) prevents a long clip on a short rally from
+    pulling in frames from the previous point.  When the clamped window is
+    shorter than the requested frame count the ``repeat_first_frame_v1``
+    padding policy left-pads the extended array by repeating its first frame so
+    the caller's slice logic still receives a full ``T + 2*J`` sequence.
 
     Previously cached non-extended clips (produced by the previous
     random-jitter-at-extraction approach) become orphaned cache entries; they
@@ -254,15 +353,21 @@ def _fetch_clip_tensor(
 
     Returns:
         Numpy array of shape (T_ext, H_canon, W_canon, 3), dtype uint8.
-        T_ext equals T + 2*J in the unclamped case, potentially shorter when
-        the rally falls near the start of the video.
+        T_ext equals T + 2*J in the unclamped case; padding restores this count
+        when the clamped window is too short to fill it.
     """
     canonical_size = (config.canonical_width, config.canonical_height)
     effective_duration = config.effective_clip_duration_s
     J = max(1, round(_TEMPORAL_JITTER_S * config.fps_out))
     pad_s = J / config.fps_out
 
-    start_s = max(0.0, record.end_seconds - effective_duration - pad_s)
+    # Phase-4 clamp: never start before the rally's own raw_start_seconds.  The
+    # jitter pad is applied around the clamped base, then re-clamped so the
+    # leading jitter pad cannot reach back into the previous point either.
+    base_start = clamp_to_rally_start_v1(
+        record.raw_start_seconds, record.end_seconds, effective_duration
+    )
+    start_s = max(base_start - pad_s, record.raw_start_seconds, 0.0)
     end_s = record.end_seconds + pad_s
 
     extract_size, scaled_corners = resolve_extract_geometry(
@@ -278,9 +383,17 @@ def _fetch_clip_tensor(
         end_s,
         config.fps_out,
         extract_size,
+        _clip_policy_cache_tag(config),
     )
     homography = compute_homography(scaled_corners, canonical_size)
     warped = warp_clip_to_canonical(frames, homography, canonical_size)
+
+    # Phase-4 padding policy: if the clamped window produced fewer frames than
+    # the requested extended count (T + 2*J), repeat the first frame so the
+    # downstream slice always sees a full-length sequence.
+    T = round(effective_duration * config.fps_out)
+    target_len = T + 2 * J
+    warped = _pad_repeat_first_frame_v1(warped, target_len)
     return warped  # (T_ext, H_canon, W_canon, 3) uint8
 
 
@@ -389,6 +502,13 @@ class WinnerDataset(Dataset):
                     continue
 
                 end_seconds = float(raw["end_seconds"])
+                # raw["start_seconds"] anchors the Phase-4 clip-window clamp.
+                # Default to 0.0 when absent so the clamp falls back to the
+                # video-start floor rather than crashing on legacy files.
+                raw_start_value = raw.get("start_seconds")
+                raw_start_seconds = (
+                    float(raw_start_value) if raw_start_value is not None else 0.0
+                )
 
                 rallies_by_video[video_key].append(
                     _RallyRecord(
@@ -396,6 +516,7 @@ class WinnerDataset(Dataset):
                         end_seconds=end_seconds,
                         corners=corners,
                         winning_team=int(winning_team),
+                        raw_start_seconds=raw_start_seconds,
                     )
                 )
 
@@ -494,6 +615,7 @@ class WinnerDataset(Dataset):
                 end_seconds=float(ex.raw_end),
                 corners=list(ex.court_corners),
                 winning_team=int(ex.winning_team),
+                raw_start_seconds=float(ex.raw_start),
             )
             for ex in records
         ]
@@ -598,6 +720,7 @@ class WinnerDataset(Dataset):
                     end_seconds=ex.raw_end,
                     corners=corners,
                     winning_team=int(ex.winning_team),
+                    raw_start_seconds=float(ex.raw_start),
                 )
             )
 

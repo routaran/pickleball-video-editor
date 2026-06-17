@@ -103,6 +103,7 @@ def hash_clip_key(
     end_s: float,
     fps_out: int,
     size: tuple[int, int],
+    policy_tag: str | None = None,
 ) -> str:
     """Return a stable hex cache key for the given clip parameters.
 
@@ -115,11 +116,19 @@ def hash_clip_key(
         end_s: Clip end time in seconds.
         fps_out: Target output frame rate.
         size: Output frame dimensions as (width, height).
+        policy_tag: Optional opaque string identifying the clip-window/padding
+            policy that produced this geometry (Phase 4).  When ``None`` (the
+            default) the key is byte-for-byte identical to the historical key,
+            so existing cache entries and callers are unaffected.  When set, the
+            tag is folded into the hash so clips produced under a different
+            window/padding policy never collide with caches from an older one.
 
     Returns:
         32-character lowercase hex string.
     """
     key_str = f"{video_path!s}|{start_s}|{end_s}|{fps_out}|{size[0]}x{size[1]}"
+    if policy_tag is not None:
+        key_str = f"{key_str}|{policy_tag}"
     return hashlib.md5(key_str.encode()).hexdigest()
 
 
@@ -325,6 +334,7 @@ def extract_clip(
     end_s: float,
     fps_out: int,
     size: tuple[int, int],  # (width, height)
+    policy_tag: str | None = None,
 ) -> np.ndarray:
     """Extract a clip as a (T, H, W, 3) uint8 array. Cached under ml/cache/clips/.
 
@@ -341,12 +351,15 @@ def extract_clip(
         end_s: Clip end time in seconds.
         fps_out: Target output frame rate (frames per second).
         size: Output frame dimensions as (width, height).
+        policy_tag: Optional clip-window/padding policy tag (Phase 4) folded
+            into the cache key.  When ``None`` (default) the key matches the
+            historical one, so legacy cache entries still hit.
 
     Returns:
         Numpy array of shape (T, height, width, 3), dtype uint8.
     """
     cache_dir = _get_cache_dir()
-    cache_key = hash_clip_key(video_path, start_s, end_s, fps_out, size)
+    cache_key = hash_clip_key(video_path, start_s, end_s, fps_out, size, policy_tag)
     cache_path = cache_dir / f"{cache_key}.npy"
 
     if cache_path.exists():

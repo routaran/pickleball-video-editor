@@ -543,6 +543,7 @@ class TestGetItemAugmentationSemantics:
                 end_seconds=12.5,
                 corners=list(_CORNERS_TUPLE),
                 winning_team=winning_team,
+                raw_start_seconds=10.0,
             )
         ]
         return ds
@@ -622,6 +623,7 @@ class TestGetItemTemporalJitter:
                 end_seconds=12.5,
                 corners=list(_CORNERS_TUPLE),
                 winning_team=winning_team,
+                raw_start_seconds=10.0,
             )
         ]
         return ds
@@ -640,7 +642,7 @@ class TestGetItemTemporalJitter:
         ds = self._make_augmenting_dataset()
         recorded_calls: list[tuple[float, float]] = []
 
-        def fake_extract(path, start_s, end_s, fps, size):
+        def fake_extract(path, start_s, end_s, fps, size, policy_tag=None):
             recorded_calls.append((start_s, end_s))
             # Return a 4-frame (T+2J) dummy array that passes the slicing path.
             return np.zeros((4, 128, 256, 3), dtype=np.uint8)
@@ -718,6 +720,7 @@ class TestGetItemTemporalJitter:
                 end_seconds=12.5,
                 corners=list(_CORNERS_TUPLE),
                 winning_team=1,
+                raw_start_seconds=10.0,
             )
         ]
 
