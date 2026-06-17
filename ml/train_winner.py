@@ -19,6 +19,7 @@ so that loaders can detect config mismatches.  See :func:`_config_to_dict`.
 
 import argparse
 import dataclasses
+import random
 import sys
 from pathlib import Path
 
@@ -346,6 +347,82 @@ def _train_one_epoch(
     return total_loss / n_samples if n_samples > 0 else 0.0
 
 
+def _train_one_epoch_accum(
+    model: WinnerClassifier,
+    loader: DataLoader,
+    criterion: nn.CrossEntropyLoss,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    grad_accum_steps: int = 1,
+    scaler: "torch.cuda.amp.GradScaler | None" = None,
+    log_batch_sanity: bool = False,
+) -> float:
+    """Run one full training pass with optional gradient accumulation and AMP.
+
+    When *grad_accum_steps* > 1, the optimizer step is called only after every
+    ``grad_accum_steps`` micro-batches (or at the end of the epoch).  The loss
+    is divided by *grad_accum_steps* so accumulated gradients match the mean
+    over the effective batch.
+
+    Note: ResNet-18 BatchNorm stats are computed per micro-batch, so gradient
+    accumulation does not fully replicate true large-batch BatchNorm training.
+
+    Args:
+        model: WinnerClassifier in train mode (set by caller).
+        loader: DataLoader yielding (clip_tensor, winning_team) pairs.
+        criterion: CrossEntropyLoss (with class weights already embedded).
+        optimizer: Optimizer with one or more parameter groups.
+        device: Target compute device.
+        grad_accum_steps: Accumulate gradients over this many micro-batches.
+        scaler: GradScaler for AMP, or None for standard (FP32) training.
+        log_batch_sanity: If True, print statistics for the first batch only.
+
+    Returns:
+        Average cross-entropy loss over all batches in the epoch.
+    """
+    model.train()
+    total_loss = 0.0
+    n_samples = 0
+    accum_steps = max(grad_accum_steps, 1)
+
+    optimizer.zero_grad()
+
+    for batch_idx, (clips, labels) in enumerate(loader):
+        clips = clips.to(device)
+        labels = labels.to(device)
+
+        if log_batch_sanity and batch_idx == 0:
+            _print_batch_sanity(clips, labels)
+
+        if scaler is not None:
+            with torch.cuda.amp.autocast():
+                logits = model(clips)
+                loss = criterion(logits, labels) / accum_steps
+            scaler.scale(loss).backward()
+        else:
+            logits = model(clips)
+            loss = criterion(logits, labels) / accum_steps
+            loss.backward()
+
+        # Undo the division for loss tracking so reported loss reflects
+        # the actual per-sample cross-entropy, not the scaled value.
+        total_loss += loss.item() * accum_steps * len(labels)
+        n_samples += len(labels)
+
+        is_last_batch = (batch_idx + 1) == len(loader)
+        should_step = ((batch_idx + 1) % accum_steps == 0) or is_last_batch
+
+        if should_step:
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad()
+
+    return total_loss / n_samples if n_samples > 0 else 0.0
+
+
 @torch.no_grad()
 def _validate(
     model: WinnerClassifier,
@@ -422,11 +499,39 @@ def _validate(
 # ---------------------------------------------------------------------------
 
 
+def _seed_everything(seed: int) -> None:
+    """Seed Python random, NumPy, and PyTorch for reproducibility.
+
+    Does not guarantee perfect determinism: CUDA/cuDNN may remain
+    nondeterministic depending on operations and hardware settings.
+
+    Args:
+        seed: Integer seed value.
+    """
+    random.seed(seed)
+    try:
+        import numpy as np  # noqa: PLC0415
+
+        np.random.seed(seed)
+    except ModuleNotFoundError:
+        pass
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def train_winner(
     root_dir: Path,
     epochs: int = 50,
     batch_size: int = 8,
     device_str: str = "cuda",
+    *,
+    model_config: WinnerModelConfig | None = None,
+    checkpoint_out: Path | None = None,
+    seed: int | None = None,
+    grad_accum_steps: int = 1,
+    num_workers: int = 4,
+    amp: bool = False,
 ) -> None:
     """Train WinnerClassifier and save the best checkpoint.
 
@@ -439,7 +544,28 @@ def train_winner(
         epochs: Maximum number of training epochs.
         batch_size: Mini-batch size for both DataLoaders.
         device_str: PyTorch device string (e.g. "cuda", "cpu").
+        model_config: WinnerModelConfig controlling clip geometry, fps, and
+            extraction resolution.  When ``None`` the default config is used,
+            preserving existing behaviour.
+        checkpoint_out: Where to write the best checkpoint.  When ``None``
+            the default ``PathConfig().checkpoints_dir / "best_winner.pt"``
+            is used.  Parent directories are created as needed.
+        seed: When not ``None``, seed Python random, NumPy, and PyTorch
+            before training begins for reproducibility.
+        grad_accum_steps: Accumulate gradients over this many micro-batches
+            before calling optimizer.step().  Default 1 = standard training.
+            Note: ResNet BatchNorm stats are computed per micro-batch, so
+            gradient accumulation does not fully replicate true large-batch
+            training.
+        num_workers: Number of DataLoader worker processes.  Default 4.
+        amp: Enable automatic mixed precision (AMP) with gradient scaling.
+            Only active when the resolved device is CUDA; silently ignored on
+            CPU with a warning.
     """
+    # ---- Seed ----
+    if seed is not None:
+        _seed_everything(seed)
+
     # ---- Device ----
     if device_str.startswith("cuda") and not torch.cuda.is_available():
         print(f"Warning: CUDA requested but unavailable. Falling back to CPU.")
@@ -447,15 +573,27 @@ def train_winner(
     device = torch.device(device_str)
     print(f"Device: {device}")
 
+    # ---- AMP setup ----
+    use_amp = amp and device.type == "cuda"
+    if amp and not use_amp:
+        print("Warning: --amp requested but device is CPU; AMP disabled.")
+    scaler: torch.cuda.amp.GradScaler | None = (
+        torch.cuda.amp.GradScaler() if use_amp else None
+    )
+
     # ---- Paths ----
     paths = PathConfig()
-    checkpoint_path = paths.checkpoints_dir / "best_winner.pt"
+    if checkpoint_out is not None:
+        checkpoint_path = checkpoint_out.expanduser().resolve()
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        checkpoint_path = paths.checkpoints_dir / "best_winner.pt"
 
-    # ---- Data ----
+    # ---- Config ----
     # E3: WinnerModelConfig.effective_clip_duration_s honours clip_duration_override_s
     # so ablation experiments automatically propagate to the dataset pipeline and
     # to the metadata saved in the checkpoint.
-    model_cfg = WinnerModelConfig()
+    model_cfg = model_config if model_config is not None else WinnerModelConfig()
     print("\n=== Loading datasets ===")
     print(
         f"Clip window: {model_cfg.effective_clip_duration_s:.2f}s "
@@ -492,14 +630,14 @@ def train_winner(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=4,
+        num_workers=num_workers,
         pin_memory=(device.type == "cuda"),
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=num_workers,
         pin_memory=(device.type == "cuda"),
     )
 
@@ -527,6 +665,16 @@ def train_winner(
     patience_counter = 0
     early_stop_patience = 5
 
+    effective_batch = batch_size * max(grad_accum_steps, 1)
+    print(f"\nTraining settings:")
+    print(f"  seed            : {seed}")
+    print(f"  batch_size      : {batch_size}")
+    print(f"  grad_accum_steps: {grad_accum_steps}")
+    print(f"  effective_batch : {effective_batch}")
+    print(f"  num_workers     : {num_workers}")
+    print(f"  amp             : {use_amp}")
+    print(f"  checkpoint_out  : {checkpoint_path}")
+
     print("\n=== Training ===")
     header = (
         f"{'Epoch':>5} | {'Train Loss':>10} | "
@@ -537,12 +685,14 @@ def train_winner(
     print("-" * len(header))
 
     for epoch in range(1, epochs + 1):
-        train_loss = _train_one_epoch(
+        train_loss = _train_one_epoch_accum(
             model,
             train_loader,
             loss_fn,
             optimizer,
             device,
+            grad_accum_steps=grad_accum_steps,
+            scaler=scaler,
             log_batch_sanity=(epoch == 1),
         )
         val_acc, precision, recall, conf_matrix = _validate(model, val_loader, device)
@@ -661,12 +811,15 @@ def train_winner(
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    """Parse CLI arguments and invoke train_winner()."""
-    parser = argparse.ArgumentParser(
-        prog="python -m ml.train_winner",
-        description="Train the rally winner classifier (WinnerClassifier).",
-    )
+def _add_train_winner_args(parser: argparse.ArgumentParser) -> None:
+    """Register all train-winner CLI arguments on *parser*.
+
+    Shared between the standalone ``python -m ml.train_winner`` entry point and
+    the ``python -m ml train-winner`` subcommand so both surfaces stay in sync.
+
+    Args:
+        parser: ArgumentParser (or sub-parser) to add arguments to.
+    """
     parser.add_argument(
         "--root",
         type=str,
@@ -691,6 +844,191 @@ def main() -> None:
         default="cuda",
         help='Compute device, e.g. "cuda", "cuda:1", "cpu" (default: cuda)',
     )
+    # ---- Clip geometry ----
+    parser.add_argument(
+        "--canonical-width",
+        type=int,
+        default=None,
+        help="Model input width in pixels after court homography warp (default: 256)",
+    )
+    parser.add_argument(
+        "--canonical-height",
+        type=int,
+        default=None,
+        help="Model input height in pixels after court homography warp (default: 128)",
+    )
+    parser.add_argument(
+        "--clip-duration-s",
+        type=float,
+        default=None,
+        help="Duration of the video clip fed to the model, in seconds (default: 2.5)",
+    )
+    parser.add_argument(
+        "--fps-out",
+        type=int,
+        default=None,
+        help="Frame sampling rate fed to the model in fps (default: 8)",
+    )
+    parser.add_argument(
+        "--clip-extract-max-dim",
+        type=int,
+        default=None,
+        help=(
+            "Maximum long-side dimension for source frame extraction before warp "
+            "(default: 640). Increasing this retains more far-side detail."
+        ),
+    )
+    # ---- Checkpoint output ----
+    parser.add_argument(
+        "--checkpoint-out",
+        type=str,
+        default=None,
+        help=(
+            "Path to write the best checkpoint. ~ and relative paths are expanded. "
+            "Parent directories are created as needed. "
+            "Default: ml/checkpoints/best_winner.pt"
+        ),
+    )
+    # ---- Reproducibility ----
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Integer seed for Python random, NumPy, and PyTorch. "
+            "CUDA/cuDNN may remain nondeterministic. (default: no seeding)"
+        ),
+    )
+    # ---- Optimization ----
+    parser.add_argument(
+        "--grad-accum-steps",
+        type=int,
+        default=1,
+        help=(
+            "Accumulate gradients over this many micro-batches before stepping the "
+            "optimizer. Effective batch = batch-size * grad-accum-steps. "
+            "ResNet BatchNorm caveats apply. (default: 1)"
+        ),
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=4,
+        help="DataLoader worker processes (default: 4)",
+    )
+    parser.add_argument(
+        "--amp",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable automatic mixed precision (AMP) with gradient scaling. "
+            "Only active on CUDA; silently ignored on CPU."
+        ),
+    )
+    # ---- Manifest placeholders (accepted but not yet used — Phase 3 owns these) ----
+    parser.add_argument(
+        "--train-manifest",
+        type=str,
+        default=None,
+        help="Path to pinned train-split manifest JSON (Phase 3, not yet active).",
+    )
+    parser.add_argument(
+        "--val-manifest",
+        type=str,
+        default=None,
+        help="Path to pinned val-split manifest JSON (Phase 3, not yet active).",
+    )
+    parser.add_argument(
+        "--test-manifest",
+        type=str,
+        default=None,
+        help="Path to pinned test-split manifest JSON (Phase 3, not yet active).",
+    )
+
+
+def _build_model_config_from_args(args: argparse.Namespace) -> WinnerModelConfig:
+    """Construct a WinnerModelConfig from parsed CLI args.
+
+    Only fields that were explicitly provided (non-None) override the defaults
+    so omitting a flag preserves current behaviour exactly.
+
+    Args:
+        args: Parsed namespace from a parser that used :func:`_add_train_winner_args`.
+
+    Returns:
+        WinnerModelConfig with caller-supplied overrides applied.
+    """
+    cfg = WinnerModelConfig()
+    if args.canonical_width is not None:
+        cfg = WinnerModelConfig(
+            checkpoint_path=cfg.checkpoint_path,
+            confidence_threshold=cfg.confidence_threshold,
+            fps_out=cfg.fps_out,
+            clip_duration_s=cfg.clip_duration_s,
+            canonical_width=args.canonical_width,
+            canonical_height=cfg.canonical_height,
+            device=cfg.device,
+            clip_duration_override_s=cfg.clip_duration_override_s,
+            clip_extract_max_dim=cfg.clip_extract_max_dim,
+        )
+    if args.canonical_height is not None:
+        cfg = WinnerModelConfig(
+            checkpoint_path=cfg.checkpoint_path,
+            confidence_threshold=cfg.confidence_threshold,
+            fps_out=cfg.fps_out,
+            clip_duration_s=cfg.clip_duration_s,
+            canonical_width=cfg.canonical_width,
+            canonical_height=args.canonical_height,
+            device=cfg.device,
+            clip_duration_override_s=cfg.clip_duration_override_s,
+            clip_extract_max_dim=cfg.clip_extract_max_dim,
+        )
+    if args.clip_duration_s is not None:
+        cfg = WinnerModelConfig(
+            checkpoint_path=cfg.checkpoint_path,
+            confidence_threshold=cfg.confidence_threshold,
+            fps_out=cfg.fps_out,
+            clip_duration_s=args.clip_duration_s,
+            canonical_width=cfg.canonical_width,
+            canonical_height=cfg.canonical_height,
+            device=cfg.device,
+            clip_duration_override_s=cfg.clip_duration_override_s,
+            clip_extract_max_dim=cfg.clip_extract_max_dim,
+        )
+    if args.fps_out is not None:
+        cfg = WinnerModelConfig(
+            checkpoint_path=cfg.checkpoint_path,
+            confidence_threshold=cfg.confidence_threshold,
+            fps_out=args.fps_out,
+            clip_duration_s=cfg.clip_duration_s,
+            canonical_width=cfg.canonical_width,
+            canonical_height=cfg.canonical_height,
+            device=cfg.device,
+            clip_duration_override_s=cfg.clip_duration_override_s,
+            clip_extract_max_dim=cfg.clip_extract_max_dim,
+        )
+    if args.clip_extract_max_dim is not None:
+        cfg = WinnerModelConfig(
+            checkpoint_path=cfg.checkpoint_path,
+            confidence_threshold=cfg.confidence_threshold,
+            fps_out=cfg.fps_out,
+            clip_duration_s=cfg.clip_duration_s,
+            canonical_width=cfg.canonical_width,
+            canonical_height=cfg.canonical_height,
+            device=cfg.device,
+            clip_duration_override_s=cfg.clip_duration_override_s,
+            clip_extract_max_dim=args.clip_extract_max_dim,
+        )
+    return cfg
+
+
+def main() -> None:
+    """Parse CLI arguments and invoke train_winner()."""
+    parser = argparse.ArgumentParser(
+        prog="python -m ml.train_winner",
+        description="Train the rally winner classifier (WinnerClassifier).",
+    )
+    _add_train_winner_args(parser)
     args = parser.parse_args()
 
     root_dir = Path(args.root).expanduser().resolve()
@@ -698,11 +1036,23 @@ def main() -> None:
         print(f"Error: root directory does not exist: {root_dir}")
         sys.exit(1)
 
+    model_cfg = _build_model_config_from_args(args)
+
+    checkpoint_out: Path | None = None
+    if args.checkpoint_out is not None:
+        checkpoint_out = Path(args.checkpoint_out)
+
     train_winner(
         root_dir=root_dir,
         epochs=args.epochs,
         batch_size=args.batch_size,
         device_str=args.device,
+        model_config=model_cfg,
+        checkpoint_out=checkpoint_out,
+        seed=args.seed,
+        grad_accum_steps=args.grad_accum_steps,
+        num_workers=args.num_workers,
+        amp=args.amp,
     )
 
 
