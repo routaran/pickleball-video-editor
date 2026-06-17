@@ -508,13 +508,10 @@ def _seed_everything(seed: int) -> None:
     Args:
         seed: Integer seed value.
     """
-    random.seed(seed)
-    try:
-        import numpy as np  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
 
-        np.random.seed(seed)
-    except ModuleNotFoundError:
-        pass
+    random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -959,66 +956,19 @@ def _build_model_config_from_args(args: argparse.Namespace) -> WinnerModelConfig
         WinnerModelConfig with caller-supplied overrides applied.
     """
     cfg = WinnerModelConfig()
+    overrides: dict[str, object] = {}
     if args.canonical_width is not None:
-        cfg = WinnerModelConfig(
-            checkpoint_path=cfg.checkpoint_path,
-            confidence_threshold=cfg.confidence_threshold,
-            fps_out=cfg.fps_out,
-            clip_duration_s=cfg.clip_duration_s,
-            canonical_width=args.canonical_width,
-            canonical_height=cfg.canonical_height,
-            device=cfg.device,
-            clip_duration_override_s=cfg.clip_duration_override_s,
-            clip_extract_max_dim=cfg.clip_extract_max_dim,
-        )
+        overrides["canonical_width"] = args.canonical_width
     if args.canonical_height is not None:
-        cfg = WinnerModelConfig(
-            checkpoint_path=cfg.checkpoint_path,
-            confidence_threshold=cfg.confidence_threshold,
-            fps_out=cfg.fps_out,
-            clip_duration_s=cfg.clip_duration_s,
-            canonical_width=cfg.canonical_width,
-            canonical_height=args.canonical_height,
-            device=cfg.device,
-            clip_duration_override_s=cfg.clip_duration_override_s,
-            clip_extract_max_dim=cfg.clip_extract_max_dim,
-        )
+        overrides["canonical_height"] = args.canonical_height
     if args.clip_duration_s is not None:
-        cfg = WinnerModelConfig(
-            checkpoint_path=cfg.checkpoint_path,
-            confidence_threshold=cfg.confidence_threshold,
-            fps_out=cfg.fps_out,
-            clip_duration_s=args.clip_duration_s,
-            canonical_width=cfg.canonical_width,
-            canonical_height=cfg.canonical_height,
-            device=cfg.device,
-            clip_duration_override_s=cfg.clip_duration_override_s,
-            clip_extract_max_dim=cfg.clip_extract_max_dim,
-        )
+        overrides["clip_duration_s"] = args.clip_duration_s
     if args.fps_out is not None:
-        cfg = WinnerModelConfig(
-            checkpoint_path=cfg.checkpoint_path,
-            confidence_threshold=cfg.confidence_threshold,
-            fps_out=args.fps_out,
-            clip_duration_s=cfg.clip_duration_s,
-            canonical_width=cfg.canonical_width,
-            canonical_height=cfg.canonical_height,
-            device=cfg.device,
-            clip_duration_override_s=cfg.clip_duration_override_s,
-            clip_extract_max_dim=cfg.clip_extract_max_dim,
-        )
+        overrides["fps_out"] = args.fps_out
     if args.clip_extract_max_dim is not None:
-        cfg = WinnerModelConfig(
-            checkpoint_path=cfg.checkpoint_path,
-            confidence_threshold=cfg.confidence_threshold,
-            fps_out=cfg.fps_out,
-            clip_duration_s=cfg.clip_duration_s,
-            canonical_width=cfg.canonical_width,
-            canonical_height=cfg.canonical_height,
-            device=cfg.device,
-            clip_duration_override_s=cfg.clip_duration_override_s,
-            clip_extract_max_dim=args.clip_extract_max_dim,
-        )
+        overrides["clip_extract_max_dim"] = args.clip_extract_max_dim
+    if overrides:
+        cfg = dataclasses.replace(cfg, **overrides)
     return cfg
 
 

@@ -208,6 +208,10 @@ def main() -> None:
             print("Error: --val-dir contains no usable training files", file=sys.stderr)
             sys.exit(1)
 
+        if len(spectrograms) == 0:
+            print("Error: --data-dir contains no usable training files", file=sys.stderr)
+            sys.exit(1)
+
         train_specs = spectrograms
         train_labels = labels_list
         train_video_ids = video_ids

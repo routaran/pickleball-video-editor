@@ -105,8 +105,8 @@ def _load_ground_truth_intervals(
 
 def _predict_intervals(
     video_path: Path,
-    model_path: "Path | None" = None,
-    inference_config: "object | None" = None,
+    model_path: Path | None = None,
+    inference_config: object | None = None,
 ) -> list[tuple[float, float]]:
     """Run the Stage-1 model and return predicted rally intervals.
 
@@ -144,8 +144,8 @@ def _predict_intervals(
 def _evaluate_file(
     json_path: Path,
     iou_threshold: float,
-    model_path: "Path | None" = None,
-    inference_config: "object | None" = None,
+    model_path: Path | None = None,
+    inference_config: object | None = None,
 ) -> dict[str, Any] | None:
     """Evaluate one ``.training.json`` file.
 
@@ -207,8 +207,8 @@ def run_boundary_evaluation(
     paths: list[Path],
     dirs: list[Path],
     iou_threshold: float = 0.5,
-    model_path: "Path | None" = None,
-    inference_config: "object | None" = None,
+    model_path: Path | None = None,
+    inference_config: object | None = None,
 ) -> dict[str, Any]:
     """Run boundary evaluation and return a structured result.
 
