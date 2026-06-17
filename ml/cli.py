@@ -263,30 +263,8 @@ def main() -> None:
         "train-winner",
         help="Train the rally winner classifier",
     )
-    train_winner_parser.add_argument(
-        "--root",
-        type=str,
-        required=True,
-        help="Root directory containing .training.json files (searched recursively)",
-    )
-    train_winner_parser.add_argument(
-        "--epochs",
-        type=int,
-        default=50,
-        help="Maximum number of training epochs (default: 50)",
-    )
-    train_winner_parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=8,
-        help="Mini-batch size (default: 8)",
-    )
-    train_winner_parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        help='Compute device (default: cuda)',
-    )
+    from ml.train_winner import _add_train_winner_args  # noqa: PLC0415
+    _add_train_winner_args(train_winner_parser)
 
     # --- predict subcommand ---
     predict_parser = subparsers.add_parser(
@@ -402,18 +380,30 @@ def main() -> None:
         train_main()
 
     elif args.command == "train-winner":
-        from ml.train_winner import train_winner
+        from ml.train_winner import _build_model_config_from_args, train_winner
 
         root_dir = Path(args.root).expanduser().resolve()
         if not root_dir.exists():
             print(f"Error: root directory does not exist: {root_dir}")
             sys.exit(1)
 
+        model_cfg = _build_model_config_from_args(args)
+
+        checkpoint_out: Path | None = None
+        if args.checkpoint_out is not None:
+            checkpoint_out = Path(args.checkpoint_out)
+
         train_winner(
             root_dir=root_dir,
             epochs=args.epochs,
             batch_size=args.batch_size,
             device_str=args.device,
+            model_config=model_cfg,
+            checkpoint_out=checkpoint_out,
+            seed=args.seed,
+            grad_accum_steps=args.grad_accum_steps,
+            num_workers=args.num_workers,
+            amp=args.amp,
         )
 
     elif args.command == "predict":
