@@ -281,6 +281,100 @@ class TestCheckpointConfig:
 
         assert config == WinnerModelConfig()
 
+    def test_load_checkpoint_config_delegates_to_shared_loader(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The CLI wrapper reuses ml.config.load_winner_config_from_checkpoint."""
+        import ml.config
+        from ml.tools.evaluate_winner import _load_checkpoint_config
+
+        ckpt_dict = {"config": {"canonical_width": 512}}
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = lambda *args, **kwargs: ckpt_dict
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        captured: dict[str, Any] = {}
+
+        def fake_shared_loader(checkpoint: Any, **kwargs: Any) -> Any:
+            captured["checkpoint"] = checkpoint
+            captured["kwargs"] = kwargs
+            return ml.config.WinnerModelConfig(canonical_width=512)
+
+        monkeypatch.setattr(
+            ml.config, "load_winner_config_from_checkpoint", fake_shared_loader
+        )
+
+        config = _load_checkpoint_config(tmp_path / "winner.pt")
+
+        assert captured["checkpoint"] is ckpt_dict
+        assert config.canonical_width == 512
+
+    def test_load_checkpoint_config_legacy_fallback_warns(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A checkpoint without a config block warns and returns defaults."""
+        from ml.config import WinnerModelConfig
+        from ml.tools.evaluate_winner import _load_checkpoint_config
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = lambda *args, **kwargs: {"model_state_dict": {}}
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        with pytest.warns(UserWarning, match="config block"):
+            config = _load_checkpoint_config(tmp_path / "winner.pt")
+
+        assert config == WinnerModelConfig()
+
+
+class TestCheckpointSchemaVersion:
+    def test_reads_schema_version_from_checkpoint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.tools.evaluate_winner import _load_checkpoint_schema_version
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = lambda *args, **kwargs: {
+            "checkpoint_schema_version": "2.0"
+        }
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        assert _load_checkpoint_schema_version(tmp_path / "winner.pt") == "2.0"
+
+    def test_returns_legacy_when_version_absent(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.tools.evaluate_winner import _load_checkpoint_schema_version
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = lambda *args, **kwargs: {"model_state_dict": {}}
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        assert _load_checkpoint_schema_version(tmp_path / "winner.pt") == "legacy"
+
+    def test_returns_legacy_on_load_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ml.tools.evaluate_winner import _load_checkpoint_schema_version
+
+        def _raise(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("corrupt")
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.load = _raise
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        assert _load_checkpoint_schema_version(tmp_path / "winner.pt") == "legacy"
+
 
 class TestCheckpointTemperature:
     """Tests for _load_checkpoint_temperature and temperature application."""

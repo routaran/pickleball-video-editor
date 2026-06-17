@@ -1,8 +1,22 @@
 """Configuration and hyperparameters for the rally detection model."""
 
+import dataclasses
+import logging
 import sys
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+
+logger = logging.getLogger(__name__)
+
+# Winner-model checkpoint metadata schema version.  Bumped to "2.0" when the
+# full WinnerModelConfig (including ``effective_clip_duration_s`` and clip/
+# padding policy keys) was formalised in the checkpoint's ``"config"`` block.
+# Checkpoints written without this key are treated as legacy (see
+# :func:`load_winner_config_from_checkpoint`).
+CHECKPOINT_SCHEMA_VERSION: str = "2.0"
 
 
 @dataclass
@@ -120,6 +134,98 @@ class WinnerModelConfig:
         if self.clip_duration_override_s is not None:
             return self.clip_duration_override_s
         return self.clip_duration_s
+
+
+def load_winner_config_from_checkpoint(
+    checkpoint: dict[str, Any],
+    *,
+    checkpoint_path: Path | str | None = None,
+    warn_on_legacy: bool = True,
+) -> WinnerModelConfig:
+    """Reconstruct a :class:`WinnerModelConfig` from a checkpoint dict.
+
+    This is the single shared loader used by prediction, evaluation, and
+    auto-edit so that the geometry recorded at training time (canonical size,
+    fps, clip duration, extraction size, and especially
+    ``effective_clip_duration_s``) is honoured at inference time instead of
+    silently falling back to source defaults.
+
+    Schema handling (LBYL — presence is checked with ``in`` / ``isinstance``,
+    never via exception control flow):
+
+    1. **v2.0 config block** — when ``checkpoint["config"]`` is a dict, every
+       :class:`WinnerModelConfig` dataclass field present there is copied into
+       a fresh config.  ``checkpoint_path`` strings are rehydrated to
+       :class:`~pathlib.Path`.  When the block records
+       ``effective_clip_duration_s`` but no explicit override, that value is
+       applied as ``clip_duration_override_s`` so the active window matches
+       training exactly.
+    2. **Legacy checkpoint** — when no usable ``"config"`` block is present the
+       current default :class:`WinnerModelConfig` is returned and (unless
+       *warn_on_legacy* is ``False``) a single ``UserWarning`` is emitted so
+       the operator knows default geometry is being assumed.
+
+    Args:
+        checkpoint: Already-loaded checkpoint dict (e.g. from
+            ``torch.load(..., weights_only=True)``).  Passing the dict rather
+            than a path lets callers that have already loaded the file reuse it
+            without a second read.
+        checkpoint_path: Optional source path, used only for the legacy
+            warning message.
+        warn_on_legacy: When ``True`` (default), emit a ``UserWarning`` for
+            legacy checkpoints lacking a v2.0 config block.
+
+    Returns:
+        A :class:`WinnerModelConfig` reconstructed from the checkpoint, or the
+        default config for legacy checkpoints.
+    """
+    raw_config = checkpoint.get("config") if isinstance(checkpoint, dict) else None
+
+    if not isinstance(raw_config, dict):
+        if warn_on_legacy:
+            location = f" at {checkpoint_path}" if checkpoint_path is not None else ""
+            warnings.warn(
+                f"Winner checkpoint{location} has no v{CHECKPOINT_SCHEMA_VERSION} "
+                "config block; falling back to default WinnerModelConfig geometry. "
+                "Retrain or backfill the checkpoint to record its actual clip "
+                "geometry.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return WinnerModelConfig()
+
+    # Copy only recognised dataclass fields — extra keys (schema version,
+    # effective_clip_duration_s) are handled explicitly below.
+    config_data: dict[str, Any] = {
+        f.name: raw_config[f.name]
+        for f in dataclasses.fields(WinnerModelConfig)
+        if f.name in raw_config
+    }
+
+    checkpoint_path_value = config_data.get("checkpoint_path")
+    if isinstance(checkpoint_path_value, str):
+        config_data["checkpoint_path"] = Path(checkpoint_path_value)
+
+    # The persisted effective duration is the actual window used at training
+    # time.  When no explicit override is recorded, treat it as the override so
+    # effective_clip_duration_s reproduces training geometry.
+    if (
+        config_data.get("clip_duration_override_s") is None
+        and "effective_clip_duration_s" in raw_config
+    ):
+        effective_clip_duration = raw_config["effective_clip_duration_s"]
+        if isinstance(effective_clip_duration, (int, float)):
+            config_data["clip_duration_override_s"] = float(effective_clip_duration)
+
+    valid_field_names = {f.name for f in dataclasses.fields(WinnerModelConfig)}
+    unknown = set(config_data) - valid_field_names
+    if unknown:
+        # Defensive: drop any key that is not a constructor argument so a
+        # forward-compatible checkpoint never breaks an older reader.
+        logger.debug("Ignoring unknown checkpoint config keys: %s", sorted(unknown))
+        config_data = {k: v for k, v in config_data.items() if k in valid_field_names}
+
+    return WinnerModelConfig(**config_data)
 
 
 @dataclass

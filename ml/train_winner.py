@@ -12,9 +12,12 @@ accuracy improves.  Early-stopping patience is 5 epochs.
 
 Checkpoint metadata
 -------------------
-The saved ``.pt`` dict now includes a ``"config"`` sub-dict containing the
-serialised ``WinnerModelConfig`` fields (including ``effective_clip_duration_s``)
-so that loaders can detect config mismatches.  See :func:`_config_to_dict`.
+The saved ``.pt`` dict carries ``"checkpoint_schema_version"`` (currently
+``"2.0"``) plus a ``"config"`` sub-dict containing the serialised
+``WinnerModelConfig`` fields (including ``effective_clip_duration_s``) so that
+inference loaders reconstruct the exact clip geometry used at training time.
+See :func:`_config_to_dict` and
+:func:`ml.config.load_winner_config_from_checkpoint`.
 """
 
 import argparse
@@ -28,7 +31,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
-from ml.config import PathConfig, WinnerModelConfig
+from ml.config import CHECKPOINT_SCHEMA_VERSION, PathConfig, WinnerModelConfig
 from ml.winner_dataset import WinnerDataset, load_winner_dataset
 from ml.winner_model import WinnerClassifier
 
@@ -710,6 +713,7 @@ def train_winner(
             # old-format checkpoints (without "config") remain distinguishable.
             torch.save(
                 {
+                    "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
                     "model_state_dict": model.state_dict(),
                     "epoch": epoch,
                     "val_accuracy": best_val_acc,

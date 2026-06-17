@@ -42,7 +42,6 @@ CLI flags
 from __future__ import annotations
 
 import argparse
-import dataclasses
 from pathlib import Path
 import json
 import sys
@@ -240,14 +239,17 @@ def _compute_game_level_metrics(
 
 
 def _load_checkpoint_config(checkpoint_path: Path) -> "WinnerModelConfig":
-    """Load persisted WinnerModelConfig metadata from a checkpoint.
+    """Load persisted WinnerModelConfig metadata from a checkpoint file.
 
-    Falls back to the default ``WinnerModelConfig`` when the checkpoint lacks
-    a ``"config"`` key or when the metadata cannot be parsed.
+    Thin wrapper that reads the ``.pt`` file and delegates reconstruction to
+    the single shared loader :func:`ml.config.load_winner_config_from_checkpoint`
+    so prediction, evaluation, and auto-edit all use identical geometry/legacy
+    handling.  Falls back to the default ``WinnerModelConfig`` when the file
+    cannot be loaded at all.
     """
     import torch as _torch
 
-    from ml.config import WinnerModelConfig
+    from ml.config import WinnerModelConfig, load_winner_config_from_checkpoint
 
     try:
         checkpoint = _torch.load(checkpoint_path, map_location="cpu", weights_only=True)
@@ -257,34 +259,58 @@ def _load_checkpoint_config(checkpoint_path: Path) -> "WinnerModelConfig":
     if not isinstance(checkpoint, dict):
         return WinnerModelConfig()
 
-    raw_config = checkpoint.get("config")
-    if not isinstance(raw_config, dict):
-        return WinnerModelConfig()
+    return load_winner_config_from_checkpoint(
+        checkpoint, checkpoint_path=checkpoint_path
+    )
 
-    config_data: dict[str, Any] = {
-        f.name: raw_config[f.name]
-        for f in dataclasses.fields(WinnerModelConfig)
-        if f.name in raw_config
-    }
 
-    checkpoint_path_value = config_data.get("checkpoint_path")
-    if isinstance(checkpoint_path_value, str):
-        config_data["checkpoint_path"] = Path(checkpoint_path_value)
+def _load_checkpoint_schema_version(checkpoint_path: Path) -> str:
+    """Read the checkpoint schema version string, or ``"legacy"`` when absent.
 
-    # If only the persisted effective duration is available, treat it as an
-    # override on top of the saved base duration.
-    if (
-        config_data.get("clip_duration_override_s") is None
-        and "effective_clip_duration_s" in raw_config
-    ):
-        effective_clip_duration = raw_config["effective_clip_duration_s"]
-        if isinstance(effective_clip_duration, (int, float)):
-            config_data["clip_duration_override_s"] = effective_clip_duration
+    Args:
+        checkpoint_path: Path to the ``.pt`` checkpoint file.
+
+    Returns:
+        The stored ``"checkpoint_schema_version"`` string, or ``"legacy"`` for
+        checkpoints written before the v2.0 schema (or that cannot be loaded).
+    """
+    import torch as _torch
 
     try:
-        return WinnerModelConfig(**config_data)
-    except TypeError:
-        return WinnerModelConfig()
+        checkpoint = _torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    except Exception:
+        return "legacy"
+
+    if isinstance(checkpoint, dict):
+        version = checkpoint.get("checkpoint_schema_version")
+        if isinstance(version, str):
+            return version
+    return "legacy"
+
+
+def _config_summary(config: "WinnerModelConfig") -> dict[str, Any]:
+    """Build a JSON-serialisable summary of the geometry a model evaluated with.
+
+    Reports the effective clip window (not just the stored default) so the
+    output makes clip geometry mismatches obvious.
+
+    Args:
+        config: The :class:`~ml.config.WinnerModelConfig` reconstructed from the
+            checkpoint.
+
+    Returns:
+        Dict of the geometry/timing fields that affect clip extraction.
+    """
+    return {
+        "canonical_width": config.canonical_width,
+        "canonical_height": config.canonical_height,
+        "fps_out": config.fps_out,
+        "clip_duration_s": config.clip_duration_s,
+        "effective_clip_duration_s": config.effective_clip_duration_s,
+        "clip_extract_max_dim": config.clip_extract_max_dim,
+        "confidence_threshold": config.confidence_threshold,
+        "device": config.device,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +464,8 @@ def _run_model(
     result: dict[str, Any] = {
         "name": "winner_classifier",
         "checkpoint": str(checkpoint_path),
+        "checkpoint_schema_version": _load_checkpoint_schema_version(checkpoint_path),
+        "config": _config_summary(checkpoint_config),
         "temperature": round(temperature, 4),
         "n_total": n_total,
         "n_correct": n_correct,
@@ -614,6 +642,23 @@ def _render_table(result: dict[str, Any]) -> str:
     if model is not None:
         lines.append("  " + "-" * (col_name + col_n + col_n + col_n + col_acc))
         lines.append(_row(model))
+        schema_version = model.get("checkpoint_schema_version")
+        cfg = model.get("config")
+        if cfg is not None:
+            lines.append("")
+            lines.append("  --- Checkpoint config ---")
+            if schema_version is not None:
+                lines.append(f"  Schema version    : {schema_version}")
+            lines.append(
+                f"  Canonical size    : {cfg['canonical_width']}x{cfg['canonical_height']}"
+            )
+            lines.append(f"  FPS out           : {cfg['fps_out']}")
+            lines.append(
+                f"  Eff. clip dur.    : {cfg['effective_clip_duration_s']:.2f} s"
+                f"  (stored {cfg['clip_duration_s']:.2f} s)"
+            )
+            lines.append(f"  Extract max dim   : {cfg['clip_extract_max_dim']}")
+            lines.append("")
         temp = model.get("temperature")
         if temp is not None:
             lines.append(

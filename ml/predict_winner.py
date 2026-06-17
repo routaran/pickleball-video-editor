@@ -27,7 +27,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ml.config import WinnerModelConfig
+from ml.config import WinnerModelConfig, load_winner_config_from_checkpoint
 from ml.video_features import (
     compute_homography,
     extract_clip,
@@ -64,7 +64,11 @@ def predict_winners(
         rally_intervals: Sequence of (start_s, end_s) tuples defining each
             rally's time range in seconds.
         checkpoint_path: Path to the WinnerClassifier ``.pt`` checkpoint.
-        config: WinnerModelConfig instance; uses defaults when None.
+        config: WinnerModelConfig instance.  When None, the config is loaded
+            from the checkpoint's v2.0 metadata so inference uses the exact
+            clip geometry the model was trained with; legacy checkpoints
+            without that metadata fall back to defaults with a one-time
+            warning.
 
     Returns:
         A list of (winning_team, confidence) tuples in the same order as
@@ -84,9 +88,26 @@ def predict_winners(
             f"Train the model first or provide a valid checkpoint path."
         )
 
-    # Resolve config and device.
+    # Load checkpoint once for model weights, calibration temperature, and
+    # (when the caller did not pass an explicit config) the clip geometry the
+    # model was trained with.  A single torch.load avoids reading the file
+    # multiple times.  map_location="cpu" here keeps the load device-agnostic;
+    # the model is moved to the resolved device below.
+    checkpoint: dict = torch.load(
+        checkpoint_path,
+        map_location="cpu",
+        weights_only=True,
+    )
+
+    # Resolve config: derive it from the checkpoint metadata when the caller
+    # passes None so inference reproduces the training-time geometry (including
+    # effective_clip_duration_s) instead of source defaults.  Legacy
+    # checkpoints without a v2.0 config block fall back to defaults with a
+    # single warning inside the shared loader.
     if config is None:
-        config = WinnerModelConfig()
+        config = load_winner_config_from_checkpoint(
+            checkpoint, checkpoint_path=checkpoint_path
+        )
 
     resolved_device = config.device
     if config.device.startswith("cuda") and not torch.cuda.is_available():
@@ -113,14 +134,7 @@ def predict_winners(
         config.canonical_height,
     )
 
-    # Load checkpoint once for both model weights and the calibration temperature.
-    # Using a single torch.load avoids reading the file twice.
     device = torch.device(resolved_device)
-    checkpoint: dict = torch.load(
-        checkpoint_path,
-        map_location=resolved_device,
-        weights_only=True,
-    )
 
     # Temperature scalar fitted on the validation set during training.
     # Defaults to 1.0 (no-op) for checkpoints produced before temperature
@@ -142,7 +156,11 @@ def predict_winners(
     results: list[tuple[int, float]] = []
 
     for idx, (start_s, end_s) in enumerate(rally_intervals):
-        clip_start = max(0.0, end_s - config.clip_duration_s)
+        # Use the effective (ablation-aware) clip duration so prediction
+        # extracts the SAME window length the model was trained on.  Reading
+        # config.clip_duration_s here would ignore any clip_duration_override_s
+        # recorded in the checkpoint and silently mismatch training geometry.
+        clip_start = max(0.0, end_s - config.effective_clip_duration_s)
         clip_end = end_s
 
         logger.debug(
