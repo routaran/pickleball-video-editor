@@ -242,6 +242,21 @@ def main() -> None:
     train_parser.add_argument(
         "--lr", type=float, default=None, help="Override learning rate"
     )
+    train_parser.add_argument(
+        "--val-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory of .training.json files to use as a fixed validation set "
+            "instead of the internal train_test_split."
+        ),
+    )
+    train_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility (seeds torch, numpy, and train_test_split).",
+    )
 
     # --- train-winner subcommand ---
     train_winner_parser = subparsers.add_parser(
@@ -379,6 +394,10 @@ def main() -> None:
             argv += ["--batch-size", str(args.batch_size)]
         if args.lr is not None:
             argv += ["--lr", str(args.lr)]
+        if args.val_dir is not None:
+            argv += ["--val-dir", args.val_dir]
+        if args.seed is not None:
+            argv += ["--seed", str(args.seed)]
         sys.argv = argv
         train_main()
 

@@ -132,6 +132,26 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=None, help="Override number of epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
     parser.add_argument("--lr", type=float, default=None, help="Override learning rate")
+    parser.add_argument(
+        "--val-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory containing .training.json files to use as a fixed validation "
+            "set instead of the internal train_test_split. When given, all files "
+            "found under --data-dir are used for training."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Random seed for Python/NumPy/PyTorch and train_test_split. "
+            "When omitted, the default seed of 42 is used for train_test_split "
+            "but torch/numpy are not explicitly seeded."
+        ),
+    )
     args = parser.parse_args()
 
     audio_cfg = AudioConfig()
@@ -145,34 +165,79 @@ def main() -> None:
     if args.lr is not None:
         train_cfg.learning_rate = args.lr
 
+    # ------------------------------------------------------------------
+    # Seed setup — must happen before any random operations.
+    # ------------------------------------------------------------------
+    _seed = args.seed if args.seed is not None else 42
+    if args.seed is not None:
+        import random as _random  # noqa: PLC0415 — intentional local import
+        _random.seed(_seed)
+        np.random.seed(_seed)
+        torch.manual_seed(_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(_seed)
+        print(f"Seed: {_seed} (explicit --seed)")
+    else:
+        print(f"Seed: {_seed} (default, torch/numpy not explicitly seeded)")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
+    # ------------------------------------------------------------------
     # Prepare data
+    # ------------------------------------------------------------------
     print("\n=== Preparing data ===")
     spectrograms, labels_list, video_ids = prepare_all(
         args.data_dir, audio_cfg, paths
     )
 
-    if len(spectrograms) < 2:
-        print("Need at least 2 videos to create train/val split")
-        sys.exit(1)
+    # ------------------------------------------------------------------
+    # Train/val split
+    # ------------------------------------------------------------------
+    if args.val_dir is not None:
+        # Fixed external validation set — use all of --data-dir for training.
+        val_dir_path = Path(args.val_dir).expanduser().resolve()
+        if not val_dir_path.exists():
+            print(f"Error: --val-dir directory not found: {val_dir_path}", file=sys.stderr)
+            sys.exit(1)
 
-    # Split by video index (no data leakage between train and val)
-    indices = list(range(len(spectrograms)))
-    train_idx, val_idx = train_test_split(
-        indices,
-        test_size=train_cfg.val_fraction,
-        random_state=42,
-    )
+        print(f"\n=== Preparing fixed val set from {val_dir_path} ===")
+        val_specs, val_labels, val_video_ids = prepare_all(val_dir_path, audio_cfg, paths)
 
-    print(f"\nTrain videos ({len(train_idx)}): {[video_ids[i] for i in train_idx]}")
-    print(f"Val videos ({len(val_idx)}): {[video_ids[i] for i in val_idx]}")
+        if len(val_specs) == 0:
+            print("Error: --val-dir contains no usable training files", file=sys.stderr)
+            sys.exit(1)
 
-    train_specs = [spectrograms[i] for i in train_idx]
-    train_labels = [labels_list[i] for i in train_idx]
-    val_specs = [spectrograms[i] for i in val_idx]
-    val_labels = [labels_list[i] for i in val_idx]
+        train_specs = spectrograms
+        train_labels = labels_list
+        train_video_ids = video_ids
+
+        print(f"\nVal source   : {val_dir_path}  (fixed, --val-dir)")
+        print(f"Train videos ({len(train_video_ids)}): {train_video_ids}")
+        print(f"Val videos   ({len(val_video_ids)}): {val_video_ids}")
+    else:
+        if len(spectrograms) < 2:
+            print("Need at least 2 videos to create train/val split")
+            sys.exit(1)
+
+        # Split by video index (no data leakage between train and val)
+        indices = list(range(len(spectrograms)))
+        train_idx, val_idx = train_test_split(
+            indices,
+            test_size=train_cfg.val_fraction,
+            random_state=_seed,
+        )
+
+        train_video_ids = [video_ids[i] for i in train_idx]
+        val_video_ids = [video_ids[i] for i in val_idx]
+        print(f"\nVal source   : internal train_test_split (seed={_seed})")
+        print(f"Train videos ({len(train_idx)}): {train_video_ids}")
+        print(f"Val videos   ({len(val_idx)}): {val_video_ids}")
+
+        train_specs = [spectrograms[i] for i in train_idx]
+        train_labels = [labels_list[i] for i in train_idx]
+        val_specs = [spectrograms[i] for i in val_idx]
+        val_labels = [labels_list[i] for i in val_idx]
 
     # Create datasets
     train_dataset = RallyDataset(train_specs, train_labels, audio_cfg)
