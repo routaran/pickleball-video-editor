@@ -495,12 +495,43 @@ def _run_model(
 # Public entry point (importable)
 # ---------------------------------------------------------------------------
 
+def _manifest_examples(manifest_path: Path) -> list:
+    """Load the eligible :class:`~ml.examples.RallyExample` records for a manifest.
+
+    Each manifest entry's ``training_json_path`` is scanned with the same
+    eligibility rules as the positional path, so manifest evaluation and
+    positional evaluation agree on which rallies are usable.
+
+    Args:
+        manifest_path: Path to a split-manifest JSON file.
+
+    Returns:
+        Eligible RallyExample records pinned by the manifest.
+    """
+    from ml.examples import RallyExampleIndex
+    from ml.evaluation.split_manifest import load_split_manifest
+
+    manifest = load_split_manifest(manifest_path)
+    json_paths = sorted(
+        {
+            entry.training_json_path
+            for entry in manifest.entries
+            if entry.training_json_path is not None
+        },
+        key=str,
+    )
+    return RallyExampleIndex(files=json_paths).examples
+
+
 def run_evaluation(
     dirs: list[Path],
     val_fraction: float = 0.2,
     checkpoint: Path | None = None,
     device: str = "cpu",
     include_calibration: bool = False,
+    train_manifest: Path | None = None,
+    val_manifest: Path | None = None,
+    test_manifest: Path | None = None,
 ) -> dict[str, Any]:
     """Run the full evaluation and return a result dictionary.
 
@@ -508,14 +539,26 @@ def run_evaluation(
     :class:`~ml.examples.RallyExampleIndex`, splits examples, runs baselines,
     and optionally evaluates the model.
 
+    Split source (Phase 3): when a ``val_manifest`` or ``test_manifest`` is
+    supplied, the evaluation set is pinned to the matches in that manifest (test
+    takes precedence over val) instead of the positional video-wise split, and a
+    cross-split leakage check rejects any match shared across the supplied
+    manifests.  Baselines that fit on a training set use the ``train_manifest``
+    when supplied, else the complement of the positional split.
+
     Args:
         dirs:                Directory paths to scan for ``.training.json`` files.
-        val_fraction:        Fraction of videos held out for validation.
+        val_fraction:        Fraction of videos held out for validation (only
+                             used when no evaluation manifest is supplied).
         checkpoint:          Path to a winner classifier checkpoint, or None to
                              skip model evaluation.
         device:              PyTorch device string for model inference.
         include_calibration: Whether to include ECE calibration in the model
                              result dict.
+        train_manifest:      Optional pinned train-split manifest (baseline fit).
+        val_manifest:        Optional pinned val-split manifest (evaluation set).
+        test_manifest:       Optional pinned test-split manifest (evaluation set;
+                             takes precedence over val_manifest).
 
     Returns:
         Dictionary with keys:
@@ -524,19 +567,41 @@ def run_evaluation(
         - ``"n_train"``       — training set size.
         - ``"n_val"``         — validation set size.
         - ``"val_fraction"``  — the val_fraction used.
+        - ``"split_source"``  — ``"manifest"`` or ``"positional"``.
         - ``"baselines"``     — list of baseline result dicts.
         - ``"model"``         — model result dict or None.
         - ``"skip_counts"``   — skip reason tallies from the index.
     """
     from ml.examples import RallyExampleIndex
     from ml.evaluation.splits import video_wise_split
+    from ml.evaluation.split_manifest import load_split_manifests
 
     index = RallyExampleIndex(dirs=dirs)
     all_examples = index.examples
 
-    train_examples, val_examples = video_wise_split(
-        all_examples, val_fraction=val_fraction
-    )
+    eval_manifest = test_manifest if test_manifest is not None else val_manifest
+    use_manifest = eval_manifest is not None
+
+    if use_manifest:
+        # Validate provenance across whichever manifests were supplied (raises
+        # SplitLeakageError on overlap), then pin the evaluation/train examples.
+        load_split_manifests(
+            train=train_manifest, val=val_manifest, test=test_manifest
+        )
+        val_examples = _manifest_examples(eval_manifest)
+        if train_manifest is not None:
+            train_examples = _manifest_examples(train_manifest)
+        else:
+            # No train manifest: fit baselines on every eligible example not in
+            # the pinned evaluation set (keyed by video to avoid leakage).
+            eval_videos = {str(ex.video_path) for ex in val_examples}
+            train_examples = [
+                ex for ex in all_examples if str(ex.video_path) not in eval_videos
+            ]
+    else:
+        train_examples, val_examples = video_wise_split(
+            all_examples, val_fraction=val_fraction
+        )
 
     baseline_results = _run_baselines(train_examples, val_examples)
 
@@ -568,6 +633,9 @@ def run_evaluation(
         "n_train": len(train_examples),
         "n_val": len(val_examples),
         "val_fraction": val_fraction,
+        "split_source": "manifest" if use_manifest else "positional",
+        "eval_manifest": str(eval_manifest) if eval_manifest is not None else None,
+        "train_manifest": str(train_manifest) if train_manifest is not None else None,
         "baselines": baseline_results,
         "model": model_result,
         "skip_counts": index.skip_counts,
@@ -600,6 +668,12 @@ def _render_table(result: dict[str, Any]) -> str:
         f"  Train / Val       : {result['n_train']} / {result['n_val']}"
         f"  (val_fraction={result['val_fraction']:.2f})"
     )
+    split_source = result.get("split_source")
+    if split_source is not None:
+        lines.append(f"  Split source      : {split_source}")
+        eval_manifest = result.get("eval_manifest")
+        if eval_manifest is not None:
+            lines.append(f"  Eval manifest     : {eval_manifest}")
     skip = result.get("skip_counts") or {}
     if skip:
         skip_str = ", ".join(f"{k}={v}" for k, v in sorted(skip.items()))
@@ -764,6 +838,37 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         metavar="DEVICE",
         help="PyTorch device string for model inference (default: cpu).",
     )
+    # ---- Pinned split manifests (Phase 3) ----
+    parser.add_argument(
+        "--train-manifest",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Pinned train-split manifest JSON. Used to fit fittable baselines "
+            "when an evaluation manifest is supplied."
+        ),
+    )
+    parser.add_argument(
+        "--val-manifest",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Pinned val-split manifest JSON. When supplied, the evaluation set "
+            "is pinned to its matches instead of the positional split."
+        ),
+    )
+    parser.add_argument(
+        "--test-manifest",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Pinned test-split manifest JSON for final reporting. Takes "
+            "precedence over --val-manifest as the evaluation set."
+        ),
+    )
     return parser
 
 
@@ -792,6 +897,9 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint=args.checkpoint,
         device=args.device,
         include_calibration=args.calibration,
+        train_manifest=args.train_manifest,
+        val_manifest=args.val_manifest,
+        test_manifest=args.test_manifest,
     )
 
     if args.emit_json:

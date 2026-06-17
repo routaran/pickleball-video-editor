@@ -9,6 +9,15 @@ from ml.evaluation.game_metrics import (
     aggregate_game_metrics,
     game_score_sequence_metrics,
 )
+from ml.evaluation.split_manifest import (
+    SplitLeakageError,
+    SplitManifest,
+    SplitManifestEntry,
+    SplitManifestError,
+    detect_split_leakage,
+    load_split_manifest,
+    load_split_manifests,
+)
 
 __all__ = [
     # event_metrics
@@ -18,4 +27,12 @@ __all__ = [
     # game_metrics
     "game_score_sequence_metrics",
     "aggregate_game_metrics",
+    # split_manifest
+    "SplitManifest",
+    "SplitManifestEntry",
+    "SplitManifestError",
+    "SplitLeakageError",
+    "load_split_manifest",
+    "detect_split_leakage",
+    "load_split_manifests",
 ]

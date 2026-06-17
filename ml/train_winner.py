@@ -32,6 +32,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from ml.config import CHECKPOINT_SCHEMA_VERSION, PathConfig, WinnerModelConfig
+from ml.evaluation.split_manifest import SplitManifest, load_split_manifests
 from ml.winner_dataset import WinnerDataset, load_winner_dataset
 from ml.winner_model import WinnerClassifier
 
@@ -66,6 +67,74 @@ def _config_to_dict(cfg: WinnerModelConfig) -> dict:
     # Store the ablation-aware value explicitly so loaders see the actual window.
     raw["effective_clip_duration_s"] = cfg.effective_clip_duration_s
     return raw
+
+
+# ---------------------------------------------------------------------------
+# Pinned split-manifest dataset construction (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def _manifest_training_json_paths(manifest: SplitManifest) -> list[Path]:
+    """Resolve the ``.training.json`` paths a manifest pins, in deterministic order.
+
+    Each entry contributes its explicit ``training_json_path`` when present.
+    Entries that only carry a ``video_path`` are skipped with no error here —
+    they cannot supply rally labels, and an empty resulting dataset is surfaced
+    by the caller's emptiness check.
+
+    Args:
+        manifest: A parsed :class:`SplitManifest`.
+
+    Returns:
+        Sorted, de-duplicated list of training JSON paths.
+    """
+    seen: set[str] = set()
+    paths: list[Path] = []
+    for entry in manifest.entries:
+        if entry.training_json_path is None:
+            continue
+        key = str(entry.training_json_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(entry.training_json_path)
+    return sorted(paths, key=str)
+
+
+def _dataset_from_manifest(
+    manifest: SplitManifest,
+    config: WinnerModelConfig,
+    *,
+    split: str,
+    augment: bool,
+) -> WinnerDataset:
+    """Build a :class:`WinnerDataset` pinned to the matches in *manifest*.
+
+    The manifest's ``training_json_path`` files are scanned via
+    :class:`~ml.examples.RallyExampleIndex` (same eligibility rules as the
+    positional path) and fed to :meth:`WinnerDataset._from_rally_examples_no_split`
+    so that **no** internal video-wise split runs.  Every eligible rally in the
+    manifest's files is therefore used exactly as the manifest dictates.
+
+    Args:
+        manifest: Parsed split manifest (train, val, or test).
+        config: WinnerModelConfig controlling clip geometry.
+        split: ``"train"`` or ``"val"`` (controls augmentation eligibility).
+        augment: Whether augmentation may be applied (train split only).
+
+    Returns:
+        A WinnerDataset exposing exactly the manifest's eligible rallies.
+    """
+    from ml.examples import RallyExampleIndex  # noqa: PLC0415 (deferred, torch-free)
+
+    json_paths = _manifest_training_json_paths(manifest)
+    index = RallyExampleIndex(files=json_paths)
+    return WinnerDataset._from_rally_examples_no_split(
+        records=index.examples,
+        config=config,
+        split=split,
+        augment=augment,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +601,9 @@ def train_winner(
     grad_accum_steps: int = 1,
     num_workers: int = 4,
     amp: bool = False,
+    train_manifest: Path | None = None,
+    val_manifest: Path | None = None,
+    test_manifest: Path | None = None,
 ) -> None:
     """Train WinnerClassifier and save the best checkpoint.
 
@@ -561,6 +633,14 @@ def train_winner(
         amp: Enable automatic mixed precision (AMP) with gradient scaling.
             Only active when the resolved device is CUDA; silently ignored on
             CPU with a warning.
+        train_manifest: Optional pinned train-split manifest.  When supplied
+            together with *val_manifest*, the positional video-wise split is
+            bypassed entirely and the train/val partition is taken from the
+            manifests.  A leakage check rejects any match shared across splits.
+        val_manifest: Optional pinned val-split manifest (used for checkpoint
+            selection when manifest training is active).
+        test_manifest: Optional pinned test-split manifest.  Loaded only to run
+            the cross-split leakage check; the test split is never trained on.
     """
     # ---- Seed ----
     if seed is not None:
@@ -605,8 +685,45 @@ def train_winner(
         )
         + ")"
     )
-    train_dataset = load_winner_dataset(root_dir, model_cfg, split="train")
-    val_dataset = load_winner_dataset(root_dir, model_cfg, split="val")
+    # ---- Split source: pinned manifests vs positional video-wise split ----
+    # When both train and val manifests are supplied the partition is taken
+    # entirely from the manifests (a leakage check rejects overlapping matches),
+    # making runs comparable over time regardless of files added under the root.
+    use_manifest_split = train_manifest is not None and val_manifest is not None
+    if (train_manifest is not None) != (val_manifest is not None):
+        print(
+            "Error: --train-manifest and --val-manifest must be supplied "
+            "together to pin the split."
+        )
+        sys.exit(1)
+
+    if use_manifest_split:
+        manifests = load_split_manifests(
+            train=train_manifest, val=val_manifest, test=test_manifest
+        )
+        print(
+            f"Pinned split manifests: train='{train_manifest}', "
+            f"val='{val_manifest}'"
+            + (f", test='{test_manifest}'" if test_manifest is not None else "")
+        )
+        train_dataset = _dataset_from_manifest(
+            manifests["train"], model_cfg, split="train", augment=True
+        )
+        val_dataset = _dataset_from_manifest(
+            manifests["val"], model_cfg, split="val", augment=False
+        )
+    else:
+        train_dataset = load_winner_dataset(root_dir, model_cfg, split="train")
+        val_dataset = load_winner_dataset(root_dir, model_cfg, split="val")
+
+    # Split provenance is stamped into the checkpoint so an evaluator can see
+    # whether a model was trained on a pinned partition or the positional split.
+    split_provenance: dict = {
+        "split_source": "manifest" if use_manifest_split else "positional",
+        "train_manifest": str(train_manifest) if train_manifest is not None else None,
+        "val_manifest": str(val_manifest) if val_manifest is not None else None,
+        "test_manifest": str(test_manifest) if test_manifest is not None else None,
+    }
 
     if len(train_dataset) == 0:
         print("No training samples found. Verify .training.json files meet schema 1.1 requirements.")
@@ -721,6 +838,7 @@ def train_winner(
                     "val_per_class_recall": recall,
                     "confusion_matrix": conf_matrix,
                     "config": _config_to_dict(model_cfg),
+                    "split": split_provenance,
                 },
                 checkpoint_path,
             )
@@ -926,24 +1044,33 @@ def _add_train_winner_args(parser: argparse.ArgumentParser) -> None:
             "Only active on CUDA; silently ignored on CPU."
         ),
     )
-    # ---- Manifest placeholders (accepted but not yet used — Phase 3 owns these) ----
+    # ---- Pinned split manifests (Phase 3) ----
     parser.add_argument(
         "--train-manifest",
         type=str,
         default=None,
-        help="Path to pinned train-split manifest JSON (Phase 3, not yet active).",
+        help=(
+            "Path to pinned train-split manifest JSON. Supply together with "
+            "--val-manifest to bypass the positional video-wise split."
+        ),
     )
     parser.add_argument(
         "--val-manifest",
         type=str,
         default=None,
-        help="Path to pinned val-split manifest JSON (Phase 3, not yet active).",
+        help=(
+            "Path to pinned val-split manifest JSON. Used for checkpoint "
+            "selection when manifest training is active."
+        ),
     )
     parser.add_argument(
         "--test-manifest",
         type=str,
         default=None,
-        help="Path to pinned test-split manifest JSON (Phase 3, not yet active).",
+        help=(
+            "Path to pinned test-split manifest JSON. Loaded only for the "
+            "cross-split leakage check; never trained on."
+        ),
     )
 
 
@@ -996,6 +1123,10 @@ def main() -> None:
     if args.checkpoint_out is not None:
         checkpoint_out = Path(args.checkpoint_out)
 
+    train_manifest = Path(args.train_manifest) if args.train_manifest is not None else None
+    val_manifest = Path(args.val_manifest) if args.val_manifest is not None else None
+    test_manifest = Path(args.test_manifest) if args.test_manifest is not None else None
+
     train_winner(
         root_dir=root_dir,
         epochs=args.epochs,
@@ -1007,6 +1138,9 @@ def main() -> None:
         grad_accum_steps=args.grad_accum_steps,
         num_workers=args.num_workers,
         amp=args.amp,
+        train_manifest=train_manifest,
+        val_manifest=val_manifest,
+        test_manifest=test_manifest,
     )
 
 

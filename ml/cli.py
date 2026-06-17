@@ -393,6 +393,14 @@ def main() -> None:
         if args.checkpoint_out is not None:
             checkpoint_out = Path(args.checkpoint_out)
 
+        train_manifest = (
+            Path(args.train_manifest) if args.train_manifest is not None else None
+        )
+        val_manifest = Path(args.val_manifest) if args.val_manifest is not None else None
+        test_manifest = (
+            Path(args.test_manifest) if args.test_manifest is not None else None
+        )
+
         train_winner(
             root_dir=root_dir,
             epochs=args.epochs,
@@ -404,6 +412,9 @@ def main() -> None:
             grad_accum_steps=args.grad_accum_steps,
             num_workers=args.num_workers,
             amp=args.amp,
+            train_manifest=train_manifest,
+            val_manifest=val_manifest,
+            test_manifest=test_manifest,
         )
 
     elif args.command == "predict":
