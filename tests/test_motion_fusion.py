@@ -39,6 +39,31 @@ def test_veto_flips_sustained_low_motion_rally():
     assert not out.any()  # all vetoed to dead time
 
 
+def test_veto_default_ignores_displacement():
+    # Locked-in default: gate OFF, so a low-count rally is vetoed on the
+    # detection count alone even when centroid motion is high (noisy disp).
+    w = 5
+    audio = np.ones(w, dtype=bool)
+    feats = _feats(n=[0] * w, disp=[0.5] * w, sym=[0.0] * w)  # high displacement
+    valid = np.ones(w, dtype=bool)
+    out = fuse_binary(audio, feats, valid, FusionConfig(hysteresis=3))
+    assert not out.any()  # vetoed despite high displacement (gate off)
+
+
+def test_displacement_gate_blocks_veto_when_re_enabled():
+    # Opt back into the gate (the future per-track-displacement path): high
+    # motion now blocks the veto, leaving the audio decision untouched.
+    w = 5
+    audio = np.ones(w, dtype=bool)
+    feats = _feats(n=[0] * w, disp=[0.5] * w, sym=[0.0] * w)
+    valid = np.ones(w, dtype=bool)
+    cfg = FusionConfig(
+        hysteresis=3, enable_displacement_gate=True, veto_max_displacement=0.01
+    )
+    out = fuse_binary(audio, feats, valid, cfg)
+    np.testing.assert_array_equal(out, audio)  # high motion -> no veto
+
+
 def test_veto_blocked_when_too_short_for_hysteresis():
     # Veto condition holds for only 2 consecutive windows (idx 1,2); hysteresis=3.
     audio = np.ones(5, dtype=bool)

@@ -261,7 +261,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.veto_max_detections is not None:
         fus_cfg.veto_max_detections = args.veto_max_detections
     if args.veto_max_displacement is not None:
+        # The displacement gate is OFF by default; passing a threshold explicitly
+        # opts back into it (otherwise the flag would be silently inert).
         fus_cfg.veto_max_displacement = args.veto_max_displacement
+        fus_cfg.enable_displacement_gate = True
     if args.sustain_min_detections is not None:
         fus_cfg.sustain_min_detections = args.sustain_min_detections
     if args.sustain_min_symmetry is not None:

@@ -4,10 +4,12 @@ The audio detector is the primary trigger (the serve sound is acoustically
 sharp, so audio has the better rally-*start* precision).  Motion holds two
 override powers, applied per audio window:
 
-* **Veto** — audio says "rally" but on-court motion shows no active play (few
-  on-court detections *and* near-zero movement) -> force the window to dead time.
-  This attacks the audio model's measured weak point: low precision /
-  ``fp_active_seconds`` from neighbouring-court audio bleed.
+* **Veto** — audio says "rally" but the court is essentially empty (too few
+  on-court detections) -> force the window to dead time.  This attacks the audio
+  model's measured weak point: low precision / ``fp_active_seconds`` from
+  neighbouring-court audio bleed.  An optional second gate also requires
+  near-zero centroid movement, but it is OFF by default — see
+  :attr:`FusionConfig.enable_displacement_gate`.
 * **Sustain** — audio says "dead time" but on-court detections still show a full,
   distributed two-and-two -> force the window to rally, bridging an audio split.
 
@@ -32,13 +34,22 @@ class FusionConfig:
     """Thresholds for the veto/sustain rules.
 
     Detection counts are on-court person counts; displacement and spread are in
-    normalised court-plane units (``[0, 1]`` across the court).  Defaults are
-    deliberately conservative starting points — tune against held-out ground
-    truth (see ``ml/tools/evaluate_fused.py``).
+    normalised court-plane units (``[0, 1]`` across the court).  Defaults are the
+    configuration locked in after the val-split sweep
+    (``ml/cache/fusion_sweep_val_2026-06-20.md``): a count-only veto at ``< 1.5``
+    on-court detections with hysteresis 3 and the displacement gate OFF.  Re-tune
+    against held-out ground truth (see ``ml/tools/sweep_fusion.py``) if the
+    feature pipeline changes.
     """
 
-    # Veto: audio rally with too few players AND too little motion.
+    # Veto: audio rally but too few on-court players.
     veto_max_detections: float = 1.5
+    # Optional second veto gate: also require low centroid motion.  OFF by
+    # default — without identity tracking the anonymous-centroid displacement is
+    # noise (it spikes on detection flicker during exactly the low-count dead
+    # time we want to veto), so on the val sweep the gate suppressed more good
+    # vetoes than it enabled.  Re-enable once per-track displacement exists.
+    enable_displacement_gate: bool = False
     veto_max_displacement: float = 0.01
     # Sustain: audio dead-time with a full, balanced court.
     sustain_min_detections: float = 3.5
@@ -106,12 +117,9 @@ def fuse_binary(
     out = audio_binary.copy()
 
     if cfg.enable_veto:
-        veto_cond = (
-            audio_binary
-            & valid
-            & (n < cfg.veto_max_detections)
-            & (disp < cfg.veto_max_displacement)
-        )
+        veto_cond = audio_binary & valid & (n < cfg.veto_max_detections)
+        if cfg.enable_displacement_gate:
+            veto_cond = veto_cond & (disp < cfg.veto_max_displacement)
         out[runs_at_least(veto_cond, cfg.hysteresis)] = False
 
     if cfg.enable_sustain:

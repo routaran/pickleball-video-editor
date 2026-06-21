@@ -247,6 +247,10 @@ def run_sweep(
     for veto_det, hyst, veto_disp in configs:
         fus_cfg = FusionConfig(
             veto_max_detections=veto_det,
+            # The gate is OFF by default in FusionConfig; the sweep explicitly
+            # enables it so the displacement grid is actually exercised (a grid
+            # value of 1.0 ~= gate disabled, since observed displacement < 1.0).
+            enable_displacement_gate=True,
             veto_max_displacement=veto_disp,
             hysteresis=hyst,
             enable_veto=True,
