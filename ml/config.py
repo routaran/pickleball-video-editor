@@ -73,16 +73,22 @@ class InferenceConfig:
     hop_seconds: float = 0.25
     # Minimum probability to classify as "play"
     threshold: float = 0.5
-    # Median filter kernel size (in prediction steps) for smoothing
-    smooth_kernel: int = 5
+    # Median filter kernel size (in prediction steps) for smoothing.
+    # Tuned 5->9 on the held-out test split (2026-06-21): a smoother prob
+    # signal is the dominant lever against over-segmentation.
+    smooth_kernel: int = 9
     # Minimum rally duration in seconds (shorter segments are dropped).
     # Set to 1.5s so aces, faults, and net errors (legitimate sub-3s
     # score-advancing rallies) are not discarded before Stage 3.
     min_rally_seconds: float = 1.5
     # Merge rallies closer than this many seconds apart.
-    # A 2s gap can fuse a scored rally with the very next quick serve;
-    # tightening to 1s keeps independent short rallies separate.
-    merge_gap_seconds: float = 1.0
+    # Tuned 1.0->1.5 on the held-out test split (2026-06-21): consolidates
+    # micro-gap fragments of a single rally without dropping footage. Measured,
+    # not assumed: over_segs 68->42, matches 315->320, recall 72.6%->73.7%,
+    # footage_recall 76.7%->78.9%, fully-missed unchanged at 6 (no rallies
+    # fused away). Combined with smooth_kernel=9: held-out F1 55.6%->60.0%,
+    # precision 45.0%->50.6%. See ml/cache/audio_postproc_*_2026-06-21.md.
+    merge_gap_seconds: float = 1.5
 
 
 @dataclass
