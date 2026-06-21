@@ -1,7 +1,22 @@
 # Spec — Court-Polygon Dilation & Identity Tracking
 
-_Status: proposed (not yet implemented). Branch: `motion-fusion`._
+_Status: **Change 0 + Change 2 implemented** (code + cv2-free unit tests landed on
+`motion-fusion`), pending the one-time GPU re-extraction that rewrites the cache to
+the v2 schema. Change 1 (dilation tuning) + the fusion re-sweep remain open and are
+now cheap offline knobs (`--dilation` on `evaluate_fused`/`sweep_fusion`)._
 _Author context: follow-on to the displacement-gate fix (commit `089b08e`)._
+
+> **Implemented (Change 0 + Change 2).** `detector.detect_video()` now returns raw
+> foot-points (extracted-frame pixels) + per-detection ByteTrack `track_id` via
+> `track(persist=True, tracker="bytetrack.yaml")`, processed as a sequential stream
+> with a per-video tracker reset for deterministic ids; the court filter/projection
+> moved to the cheap path (`ml/motion/court_apply.py`). The `.npz` cache is v2
+> (`schema_version=2`): flat `foot_x/foot_y/frame_offsets/track_id` + `scaled_corners`,
+> `extract_size`, `t`, `fps_out`, `video_path`; legacy caches (no `schema_version`)
+> are rejected with a re-extract message. `displacement` is now **per-track** mean
+> frame-to-frame court-plane motion. **Required next step:** re-run the GPU
+> extraction in `.venv-motion` to replace the 15-video v1 cache:
+> `.venv-motion/bin/python -m ml.tools.extract_motion_features --dir ~/Videos/pickleball --overwrite`
 
 Two upgrades to the motion-perception layer, plus the one **enabling refactor**
 that makes the first cheaply tunable. Together they (a) make the on-court count
