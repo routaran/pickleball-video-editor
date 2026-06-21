@@ -208,6 +208,14 @@ def build_labels_from_rallies(
         start_sec = timestamps["start_seconds"]
         end_sec = timestamps["end_seconds"]
 
+        # Defensive: skip inverted / zero-length intervals.  At least one label
+        # file has a corrupt rally with end <= start (e.g.
+        # 2026-06-01_G6_SamsherJoel_vs_RaviRandy index 16: 352.05 -> 340.6);
+        # without this guard numpy's reversed slice silently writes nothing,
+        # masking the data bug.  Skipping explicitly keeps labels well-defined.
+        if end_sec <= start_sec:
+            continue
+
         start_sample = int(start_sec * audio_config.sample_rate)
         end_sample = int(end_sec * audio_config.sample_rate)
 

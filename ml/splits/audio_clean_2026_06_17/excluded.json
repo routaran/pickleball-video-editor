@@ -1,0 +1,42 @@
+[
+  {
+    "training_json": "2026-05-04_G1_MattRavi_vs_TedThanh.training.json",
+    "video_path": "/home/rkalluri/Videos/pickleball/20260504_210035_compressed.mp4",
+    "reason": "shared_video_leakage"
+  },
+  {
+    "training_json": "2026-05-04_G2_ThanhTed_vs_MattRavi.training.json",
+    "video_path": "/home/rkalluri/Videos/pickleball/20260504_210035_compressed.mp4",
+    "reason": "shared_video_leakage"
+  },
+  {
+    "training_json": "2026-05-04_G3_MattThanh_vs_TedRavi.training.json",
+    "video_path": "/home/rkalluri/Videos/pickleball/20260504_210035_compressed.mp4",
+    "reason": "shared_video_leakage"
+  },
+  {
+    "training_json": "2026-05-04_G4_TedRavi_vs_WalkerThanh.training.json",
+    "video_path": "/home/rkalluri/Videos/pickleball/20260504_210035_compressed.mp4",
+    "reason": "shared_video_leakage"
+  },
+  {
+    "training_json": "2026-05-04_G5_ThanhWalker_vs_TedRavi.training.json",
+    "video_path": "/home/rkalluri/Videos/pickleball/20260504_210035_compressed.mp4",
+    "reason": "shared_video_leakage"
+  },
+  {
+    "training_json": "2026-05-04_G6_ThanhRavi_vs_WalkerTed.training.json",
+    "video_path": "/home/rkalluri/Videos/pickleball/20260504_210035_compressed.mp4",
+    "reason": "shared_video_leakage"
+  },
+  {
+    "training_json": "2026-05-04_G7_WalkerTed_vs_ThanhRavi.training.json",
+    "video_path": "/home/rkalluri/Videos/pickleball/20260504_210035_compressed.mp4",
+    "reason": "shared_video_leakage"
+  },
+  {
+    "training_json": "20260615_200237_compressed_1_auto.training.json",
+    "video_path": "/home/rkalluri/Videos/pickleball/20260615_200237_compressed_1.mp4",
+    "reason": "auto_edit"
+  }
+]

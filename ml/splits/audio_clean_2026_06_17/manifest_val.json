@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "split_name": "audio_clean_2026_06_17",
+  "unit": "match",
+  "split": "val",
+  "entries": [
+    {
+      "id": "2026-05-28_G1_RommelTracy_vs_WalkerRavi",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260528_210715_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-05-28_G1_RommelTracy_vs_WalkerRavi.training.json"
+    },
+    {
+      "id": "2026-05-28_G2_AdamColin_vs_WalkerRavi",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260528_212143_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-05-28_G2_AdamColin_vs_WalkerRavi.training.json"
+    },
+    {
+      "id": "2026-05-28_G8_WalkerRavi_vs_TracyCorey",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260528_223736_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-05-28_G8_WalkerRavi_vs_TracyCorey.training.json"
+    },
+    {
+      "id": "2026-04-20_G4_RaviJoby_vs_JoelCorey",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260420_215159_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-04-20_G4_RaviJoby_vs_JoelCorey.training.json"
+    },
+    {
+      "id": "2026-06-08_G1_RaviAntony_vs_HusseinGareth",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260608_190843_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-06-08_G1_RaviAntony_vs_HusseinGareth.training.json"
+    },
+    {
+      "id": "2026-04-30_G7 MattRavi_vs_LynetteTracy",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260430_223302_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-04-30_G7 MattRavi_vs_LynetteTracy.training.json"
+    },
+    {
+      "id": "2026-06-01_G7_SteveGeorgio_vs_RahmanRavi",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260601_224312_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-06-01_G7_SteveGeorgio_vs_RahmanRavi.training.json"
+    },
+    {
+      "id": "2026-06-11_NatalyaAdhil_vs_WalkerRavi",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260611_222326_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-06-11_NatalyaAdhil_vs_WalkerRavi.training.json"
+    },
+    {
+      "id": "2026-06-08_G6_RaviAntony_vs_HusseinGareth",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260608_203716_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-06-08_G6_RaviAntony_vs_HusseinGareth.training.json"
+    },
+    {
+      "id": "2026-06-01_G4_RaviGeorgio_vs_SteveShamsher",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260601_215214_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-06-01_G4_RaviGeorgio_vs_SteveShamsher.training.json"
+    },
+    {
+      "id": "2026-06-11_TracySearl_vs_WalkerRavi",
+      "video_path": "/home/rkalluri/Videos/pickleball/20260611_221103_compressed.mp4",
+      "training_json_path": "/home/rkalluri/Videos/pickleball/2026-06-11_TracySearl_vs_WalkerRavi.training.json"
+    }
+  ]
+}

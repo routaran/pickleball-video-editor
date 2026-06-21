@@ -1,0 +1,26 @@
+# Dependencies for the OFFLINE YOLOv8n motion-detection batch step only
+# (ml/tools/extract_motion_features.py, ml/tools/validate_detector.py).
+#
+# Install these in a SEPARATE virtualenv from the GUI/.venv — NOT the GUI venv.
+# Reason: ultralytics hard-depends on opencv-python (the Qt/GL build).  The GUI
+# venv deliberately pins opencv-python-headless because the non-headless build's
+# bundled Qt/GL/ffmpeg libs interpose on the system libs that the GUI's mpv
+# video output needs, segfaulting review mode (see the project's
+# no-in-process-video-libs constraint).  Keeping these here, in their own env,
+# means the detector can use whatever OpenCV ultralytics wants while the GUI
+# stays headless.
+#
+# The detector writes per-video motion features to ml/cache/motion/*.npz.  The
+# fusion + evaluation path (predict_fused, evaluate_fused) reads those .npz files
+# and needs ONLY ml/requirements.txt — it never imports ultralytics or cv2.
+#
+# Setup:
+#   python -m venv .venv-motion
+#   .venv-motion/bin/pip install torch torchvision  # match your CUDA build
+#   .venv-motion/bin/pip install -r ml/requirements-motion.txt
+#   # Pre-download weights to ml/cache/weights/ (deterministic; otherwise
+#   # ultralytics drops them in the current working directory):
+#   .venv-motion/bin/python -m ml.tools.fetch_weights yolov8n.pt
+#   .venv-motion/bin/python -m ml.tools.extract_motion_features --dir ~/Videos/pickleball
+
+ultralytics>=8.0.0   # AGPL-3.0 — fine for local, non-distributed personal use

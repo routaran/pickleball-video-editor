@@ -6,3 +6,10 @@ scikit-learn>=1.3.0
 decord>=0.6.0
 opencv-python-headless>=4.8.0
 soundfile>=0.12.0
+# Motion-fusion rally segmentation (ml/motion/): the fusion + evaluation path
+# (predict_fused, evaluate_fused) needs only numpy + the audio model + cached
+# motion features, so it installs cleanly here.  The YOLOv8n DETECTION step does
+# NOT belong in this file — ultralytics hard-depends on opencv-python (the Qt/GL
+# variant), which would interpose on the GUI's mpv video output and reintroduce
+# the very segfault this project avoids by pinning opencv-python-headless.
+# Install the detector in a SEPARATE venv: see ml/requirements-motion.txt.
