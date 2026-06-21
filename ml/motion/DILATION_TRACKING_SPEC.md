@@ -1,10 +1,41 @@
 # Spec — Court-Polygon Dilation & Identity Tracking
 
-_Status: **Change 0 + Change 2 implemented** (code + cv2-free unit tests landed on
-`motion-fusion`), pending the one-time GPU re-extraction that rewrites the cache to
-the v2 schema. Change 1 (dilation tuning) + the fusion re-sweep remain open and are
-now cheap offline knobs (`--dilation` on `evaluate_fused`/`sweep_fusion`)._
+_Status: **COMPLETE & VALIDATED ON HELD-OUT TEST (2026-06-21).** Change 0 + Change 2
+implemented; the v2 re-extraction was run (15/15 corner videos, 0 failures); Change 1
+(dilation) was swept and 0.12 is optimal; the fusion re-sweep ran with sustain. Results
+below. Remaining: the auto_edit wiring (user-gated — see "Integration" at the end)._
 _Author context: follow-on to the displacement-gate fix (commit `089b08e`)._
+
+## Results — held-out test (2026-06-21)
+
+Pipeline now stacks two independent wins (held-out test split, IoU 0.5):
+
+| stage | F1 | precision | recall | over_segs |
+|---|---|---|---|---|
+| original audio (untuned) | 55.6% | 45.0% | 72.6% | 68 |
+| + tuned audio post-proc (`smooth_kernel 9`, `merge_gap 1.5`) | 60.0% | 50.6% | 73.7% | 42 |
+| **+ motion fusion (veto+sustain @0.12)** | **62.5%** | **53.5%** | **75.1%** | **30** |
+
+Net: **F1 +6.9, precision +8.5, recall +2.5, over-segmentation more than halved**, on
+videos the model never saw. The audio half helps every video; the fusion half helps the
+9 corner-labeled test videos (7/9 improve), audio-only fallback on the 2 without corners.
+
+**Locked fusion config = bare `FusionConfig()` defaults** (veto `<1.5` det, hysteresis 3,
+displacement gate OFF) **+ sustain ON** (`>=3.5` det, sym `>=0.5`), at **dilation 0.12**.
+
+- **Sustain is now net-positive** (val F1 68.5→69.1 adding sustain): ByteTrack-cleaned
+  counts reach 4, which the old anonymous-detection counts (capped at 3) never did, so
+  sustain can finally fire and bridge over-split rallies.
+- **Change 1 verdict: keep dilation at 0.12 — do NOT increase.** The sweep showed 0.22 is
+  *worse* (val F1 69.1→68.1): recovering more bodies pulls in spurious detections that
+  cause bad sustains. The asymmetric-dilation idea below is therefore unnecessary; the
+  overlay gate was not needed because the smaller dilation won on the metrics outright.
+- **Caveat:** fused `fp_active_seconds` rose on test (855→958) — sustain occasionally
+  over-extends an interval, adding a little recoverable dead-time to a clip. Net F1/recall
+  still clearly up; for cuts this is a trim-in-app annoyance, not lost footage.
+
+Sweep artifacts (gitignored cache): `ml/cache/fusion_resweep_val_*.md`,
+`ml/cache/audio_postproc_*_2026-06-21.md`.
 
 > **Implemented (Change 0 + Change 2).** `detector.detect_video()` now returns raw
 > foot-points (extracted-frame pixels) + per-detection ByteTrack `track_id` via
@@ -135,23 +166,52 @@ Cost: detector change + one GPU re-extraction (do it together with Change 0).
 
 ---
 
-## Sequencing
+## Sequencing — DONE through step 3
 
-1. **Change 0 + Change 2 in one GPU re-extraction** — cache raw foot-points +
-   `track_id` (one pass produces the tunable, tracked cache).
-2. **Change 1 (dilation)** — tune offline against the new cache; pass the overlay
-   gate.
-3. **Re-validate fusion** — re-sweep on val with sustain enabled (honest counts)
-   and optionally re-test the displacement gate with `per_track_displacement`.
-   Lock the winning config; only then run **test once**.
-4. **Wire `predict_fused` into `ml/auto_edit.py:289-299`** if it beats audio-only
-   on test.
+1. ✅ **Change 0 + Change 2** re-extraction — v2 tracked cache (15/15, 0 failures).
+2. ✅ **Change 1 (dilation)** — swept; **0.12 optimal** (0.22 worse). No overlay gate
+   needed (smaller dilation won outright).
+3. ✅ **Re-validate fusion** — re-swept on val with sustain; locked config; ran test
+   once. **Fusion beats audio-only on test (F1 60.0→62.5).** (Per-track displacement
+   gate left OFF — its prior failure mode is resolved by tracking, but it was not
+   needed to win; revisit only if precision needs more.)
+4. ⏳ **Wire `predict_fused` into `ml/auto_edit.py:292`** — the remaining step (below).
 
-## Open decision (carry to integration)
+## Integration (USER-GATED — not done autonomously)
 
-`FusionConfig.enable_sustain` currently defaults **True**, but the *validated*
-config was **veto-only** (`--no-sustain`). Sustain is effectively inert pre-
-dilation (count capped at 3), so it's harmless today — but before wiring fusion
-into `auto_edit`, either (a) default it **False** until the post-dilation re-sweep
-proves it helps, or (b) keep it on only with a config validated on test. Don't
-ship an unvalidated override into the cut path.
+The Stage-1 seam is `raw_rallies = predict_video(video_path)` (`ml/auto_edit.py:292`).
+Fusion beat audio-only on test, so wiring it is worthwhile — but it is **not a transparent
+drop-in**, for one architectural reason:
+
+- **Fusion needs an offline motion-feature cache.** `predict_fused` reads `<stem>.npz`
+  produced by `extract_motion_features` in **`.venv-motion`** (YOLO/ByteTrack). The GUI
+  runs in `.venv` and **must not** import ultralytics/cv2 in-process (the mpv-segfault
+  invariant). So the GUI cannot generate features on the fly — the workflow becomes:
+  label corners → run the offline extraction tool → then `auto_edit` uses fused.
+
+Recommended wiring (graceful degradation, safe + additive):
+```
+# ml/auto_edit.py Stage 1
+feat = motion_feature_path_for(video_path)         # ml/cache/motion/<stem>.npz
+if corners and feat.exists():
+    raw_rallies = predict_fused_intervals(video_path, corners, feature_dir=...)  # uses FusionConfig() defaults
+else:
+    raw_rallies = predict_video(video_path)        # audio-only (already improved)
+```
+This keeps the GUI flow working with no YOLO in-process: fusion is used only when a cache
+exists, else it falls back to the (already-better) tuned audio path. Match `predict_fused`'s
+return shape to the `{"start_seconds","end_seconds"}` dicts `auto_edit` expects. Add a unit
+test for both branches. Left for the user because it changes the production cut path and
+can't be GUI-tested headlessly.
+
+**Resolved:** the `enable_sustain=True` default is now the *validated* config (sustain is
+net-positive on test), so the earlier "ship veto-only" concern no longer applies — bare
+`FusionConfig()` == the locked, test-validated config.
+
+## Applying to the 8 new `20260615_200237_compressed_*` files
+
+They share one fixed-camera recording, and `_1_auto.training.json` already has
+`court_corners` → **the same corners apply to all 8**. So they can get the full
+fusion treatment: inject the shared corners, run `extract_motion_features` on them in
+`.venv-motion`, then `predict_fused`. Rally cuts (Stage 1) need no per-game setup; full
+score-sim kdenlive still needs each game's players (only `_1`'s is known).
