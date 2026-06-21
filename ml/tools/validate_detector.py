@@ -57,6 +57,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weights-dir", type=Path, default=None,
                         help="Cache dir for YOLO weights (default: ml/cache/weights/).")
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--dilation", type=float, default=None,
+                        help="Court-polygon dilation for the on-court test "
+                             "(default: CourtModel's built-in 0.12). Raise to "
+                             "recover wide/baseline players; eyeball that the "
+                             "adjacent court is still rejected.")
     args = parser.parse_args(argv)
 
     json_path = args.json_path.expanduser().resolve()
@@ -88,7 +93,11 @@ def main(argv: list[str] | None = None) -> int:
     extract_size, scaled_corners = resolve_extract_geometry(
         native, corners, CANONICAL_SIZE, args.max_extract_dim
     )
-    court = CourtModel(scaled_corners, CANONICAL_SIZE)
+    court = (
+        CourtModel(scaled_corners, CANONICAL_SIZE, dilation=args.dilation)
+        if args.dilation is not None
+        else CourtModel(scaled_corners, CANONICAL_SIZE)
+    )
     poly = court.polygon.astype(np.int32).reshape(-1, 1, 2)
 
     detector = MotionDetector(
