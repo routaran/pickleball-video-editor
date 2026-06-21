@@ -1,12 +1,17 @@
-"""Tests for ml.motion.features (per-frame feature computation + resampling)."""
+"""Tests for ml.motion.features (per-frame feature computation, raw cache I/O)."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
+import pytest
 
 from ml.motion.features import (
     FEATURE_KEYS,
+    RAW_SCHEMA_VERSION,
     compute_frame_features,
+    flatten_detections,
     load_feature_series,
     resample_features,
     save_feature_series,
@@ -15,6 +20,19 @@ from ml.motion.features import (
 
 def _pts(coords):
     return np.array(coords, dtype=np.float64).reshape(-1, 2)
+
+
+def _ids(values):
+    return np.array(values, dtype=np.int64).reshape(-1)
+
+
+@dataclass
+class _Frame:
+    """Minimal stand-in for detector.FrameDetections for flatten/save tests."""
+
+    time_s: float
+    foot_points: np.ndarray
+    track_ids: np.ndarray
 
 
 def test_empty_frame_yields_zeros_and_resets_displacement():
@@ -58,6 +76,38 @@ def test_displacement_tracks_centroid_motion():
     assert feat["displacement"][2] == np.float64(expected)
 
 
+def test_per_track_displacement_uses_matched_ids():
+    times = np.arange(3.0)
+    # Track 7 moves +0.05 in x between frames 1 and 2; a *new* track 9 appears in
+    # frame 2 and must not contribute (no prior position to compare against).
+    pts = [_pts([[0.20, 0.20]]), _pts([[0.20, 0.20]]),
+           _pts([[0.25, 0.20], [0.90, 0.90]])]
+    ids = [_ids([7]), _ids([7]), _ids([7, 9])]
+    feat = compute_frame_features(times, pts, track_ids_per_frame=ids)
+    assert feat["displacement"][0] == 0.0  # first frame has no reference
+    assert feat["displacement"][1] == 0.0  # track 7 did not move
+    assert feat["displacement"][2] == pytest.approx(0.05)  # only track 7 counts
+
+
+def test_per_track_displacement_ignores_id_switch():
+    # An id switch between frames (1 -> 2) means no track is common, so the
+    # per-track displacement is 0 even though *something* moved a long way.
+    times = np.arange(2.0)
+    pts = [_pts([[0.2, 0.2]]), _pts([[0.9, 0.9]])]
+    ids = [_ids([1]), _ids([2])]
+    feat = compute_frame_features(times, pts, track_ids_per_frame=ids)
+    assert feat["displacement"][1] == 0.0
+
+
+def test_per_track_displacement_skips_untracked():
+    # An untracked detection (id -1) is excluded from the per-track signal.
+    times = np.arange(2.0)
+    pts = [_pts([[0.2, 0.2]]), _pts([[0.5, 0.5]])]
+    ids = [_ids([-1]), _ids([-1])]
+    feat = compute_frame_features(times, pts, track_ids_per_frame=ids)
+    assert feat["displacement"][1] == 0.0
+
+
 def test_resample_windowed_mean_and_validity():
     times = np.array([0.0, 1.0, 2.0, 3.0])
     points = [
@@ -77,12 +127,54 @@ def test_resample_windowed_mean_and_validity():
         assert resampled[key][1] == 0.0
 
 
-def test_save_load_roundtrip(tmp_path):
-    times = np.arange(3.0)
-    points = [_pts([[0.2, 0.2]]), _pts([[0.5, 0.5]]), _pts([])]
-    feat = compute_frame_features(times, points)
+def test_flatten_detections_ragged_offsets():
+    frames = [
+        _Frame(0.0, _pts([[10, 20]]), _ids([1])),
+        _Frame(0.2, _pts([]), _ids([])),  # empty frame
+        _Frame(0.4, _pts([[30, 40], [50, 60]]), _ids([1, 2])),
+    ]
+    raw = flatten_detections(
+        frames,
+        scaled_corners=[[0, 0], [100, 0], [100, 50], [0, 50]],
+        extract_size=(100, 50),
+        fps_out=5.0,
+        video_path="/x/vid.mp4",
+    )
+    np.testing.assert_array_equal(raw["frame_offsets"], [0, 1, 1, 3])
+    np.testing.assert_allclose(raw["foot_x"], [10, 30, 50])
+    np.testing.assert_allclose(raw["foot_y"], [20, 40, 60])
+    np.testing.assert_array_equal(raw["track_id"], [1, 1, 2])
+    np.testing.assert_allclose(raw["t"], [0.0, 0.2, 0.4])
+    assert raw["scaled_corners"].shape == (4, 2)
+    assert int(raw["schema_version"]) == RAW_SCHEMA_VERSION
+
+
+def test_save_load_raw_roundtrip(tmp_path):
+    frames = [
+        _Frame(0.0, _pts([[10, 20]]), _ids([1])),
+        _Frame(0.2, _pts([]), _ids([])),
+        _Frame(0.4, _pts([[30, 40], [50, 60]]), _ids([1, 2])),
+    ]
+    raw = flatten_detections(
+        frames,
+        scaled_corners=[[0, 0], [100, 0], [100, 50], [0, 50]],
+        extract_size=(100, 50),
+        fps_out=5.0,
+        video_path="/x/vid.mp4",
+    )
     out = tmp_path / "vid.npz"
-    save_feature_series(out, feat, fps_out=5.0, video_path="/x/vid.mp4")
+    save_feature_series(out, raw)
     loaded = load_feature_series(out)
-    for key in ("t", *FEATURE_KEYS):
-        np.testing.assert_allclose(loaded[key], feat[key])
+    for key in ("foot_x", "foot_y", "frame_offsets", "track_id", "t"):
+        np.testing.assert_allclose(loaded[key], raw[key])
+    np.testing.assert_allclose(loaded["scaled_corners"], raw["scaled_corners"])
+    assert int(loaded["schema_version"]) == RAW_SCHEMA_VERSION
+    assert str(loaded["video_path"]) == "/x/vid.mp4"
+
+
+def test_load_rejects_legacy_schema(tmp_path):
+    # A v1-style cache (no schema_version) must raise, never be misread.
+    out = tmp_path / "legacy.npz"
+    np.savez(out, t=np.arange(3.0), n_detections=np.zeros(3), displacement=np.zeros(3))
+    with pytest.raises(ValueError, match="re-extract|schema_version"):
+        load_feature_series(out)
