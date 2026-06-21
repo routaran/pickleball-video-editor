@@ -49,13 +49,14 @@ def run_fused_evaluation(
     inference_config: Any | None,
     fusion_config: Any | None,
     half_window_s: float,
+    dilation: float,
 ) -> dict[str, Any]:
     """Evaluate baseline and fused predictions; return a structured result."""
     from ml.evaluation.event_metrics import (  # noqa: PLC0415
         aggregate_video_metrics,
         interval_detection_metrics,
     )
-    from ml.motion.features import load_feature_series  # noqa: PLC0415
+    from ml.motion.court_apply import load_features  # noqa: PLC0415
     from ml.motion.predict_fused import audio_window_probs, fuse_to_intervals  # noqa: PLC0415
     from ml.predict import predictions_to_rallies  # noqa: PLC0415
     from ml.tools.evaluate_boundaries import _load_ground_truth_intervals  # noqa: PLC0415
@@ -109,7 +110,7 @@ def run_fused_evaluation(
         baseline = [(r["start_seconds"], r["end_seconds"]) for r in base_rallies]
 
         feat_path = _feature_path_for(feature_dir, video_path)
-        features = load_feature_series(feat_path) if feat_path.exists() else None
+        features = load_features(feat_path, dilation) if feat_path.exists() else None
         if features is None:
             n_no_motion += 1
         fused = fuse_to_intervals(
@@ -225,6 +226,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--model-path", type=Path, default=None)
     p.add_argument("--half-window", type=float, default=0.5,
                    help="Half-width (s) for resampling motion onto audio windows.")
+    p.add_argument("--dilation", type=float, default=None,
+                   help="Court-polygon dilation for the cheap-path filter "
+                        "(default: ml.motion.court_apply.DEFAULT_DILATION = 0.12).")
     # Audio post-processing overrides (mirror evaluate_boundaries).
     p.add_argument("--threshold", type=float, default=None)
     p.add_argument("--merge-gap", type=float, default=None)
@@ -245,7 +249,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
 
     from ml.config import InferenceConfig  # noqa: PLC0415
+    from ml.motion.court_apply import DEFAULT_DILATION  # noqa: PLC0415
     from ml.motion.fusion import FusionConfig  # noqa: PLC0415
+
+    dilation = args.dilation if args.dilation is not None else DEFAULT_DILATION
 
     inf_cfg = InferenceConfig()
     if args.threshold is not None:
@@ -299,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
         inference_config=inf_cfg,
         fusion_config=fus_cfg,
         half_window_s=args.half_window,
+        dilation=dilation,
     )
 
     if not result["per_video"]:

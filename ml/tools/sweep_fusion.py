@@ -82,6 +82,7 @@ def run_sweep(
     grid_veto_max_displacement: list[float],
     enable_sustain: bool,
     half_window_s: float = 0.5,
+    dilation: float | None = None,
 ) -> tuple[list[SweepRow], list[dict]]:
     """Run the sweep; return (rows, per_video_raw).
 
@@ -98,6 +99,9 @@ def run_sweep(
         enable_sustain: Whether the sustain override is active (usually ``False``
             during the veto-only sweep).
         half_window_s: Half-width (s) for resampling motion onto audio windows.
+        dilation: Court-polygon dilation for the cheap-path filter (``None`` →
+            :data:`ml.motion.court_apply.DEFAULT_DILATION`).  Fixed per sweep run;
+            re-run the sweep per dilation value (all offline-cheap now).
 
     Returns:
         ``(rows, per_video_raw)`` where ``rows`` is the sorted sweep table and
@@ -108,8 +112,11 @@ def run_sweep(
         aggregate_video_metrics,
         interval_detection_metrics,
     )
-    from ml.motion.features import load_feature_series  # noqa: PLC0415
+    from ml.motion.court_apply import DEFAULT_DILATION, load_features  # noqa: PLC0415
     from ml.motion.fusion import FusionConfig  # noqa: PLC0415
+
+    if dilation is None:
+        dilation = DEFAULT_DILATION
     from ml.motion.predict_fused import audio_window_probs, fuse_to_intervals  # noqa: PLC0415
     from ml.predict import predictions_to_rallies  # noqa: PLC0415
     from ml.tools.evaluate_boundaries import _load_ground_truth_intervals  # noqa: PLC0415
@@ -176,7 +183,7 @@ def run_sweep(
         baseline = [(r["start_seconds"], r["end_seconds"]) for r in base_rallies]
 
         feat_path = feature_dir / f"{stem}.npz"
-        features = load_feature_series(feat_path) if feat_path.exists() else None
+        features = load_features(feat_path, dilation) if feat_path.exists() else None
         if features is None:
             n_no_motion += 1
 
@@ -392,6 +399,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--iou", type=float, default=0.5)
     p.add_argument("--model-path", type=Path, default=None)
     p.add_argument("--half-window", type=float, default=0.5)
+    p.add_argument("--dilation", type=float, default=None,
+                   help="Court-polygon dilation for the cheap-path filter "
+                        "(default: ml.motion.court_apply.DEFAULT_DILATION = 0.12). "
+                        "Re-run the sweep per value to tune it (offline-cheap).")
     # Audio post-processing overrides.
     p.add_argument("--threshold", type=float, default=None)
     p.add_argument("--merge-gap", type=float, default=None)
@@ -464,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
         grid_veto_max_displacement=args.veto_max_displacement,
         enable_sustain=not args.no_sustain,
         half_window_s=args.half_window,
+        dilation=args.dilation,
     )
 
     if not rows:

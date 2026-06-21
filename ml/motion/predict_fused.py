@@ -20,11 +20,8 @@ from pathlib import Path
 import numpy as np
 
 from ml.config import InferenceConfig, PathConfig
-from ml.motion.features import (
-    compute_frame_features,
-    load_feature_series,
-    resample_features,
-)
+from ml.motion.court_apply import DEFAULT_DILATION, features_from_raw, load_features
+from ml.motion.features import flatten_detections, resample_features
 from ml.motion.fusion import FusionConfig, fuse_binary
 
 __all__ = [
@@ -112,16 +109,26 @@ def _resolve_feature_series(
     feature_path: str | Path | None,
     detector,
     detect_fps: float,
+    dilation: float = DEFAULT_DILATION,
 ) -> dict[str, np.ndarray] | None:
-    """Load cached motion features, or compute them when a detector is given."""
+    """Load cached raw detections (or compute them) and build the feature series.
+
+    The court filter + projection + feature compute (with the ``dilation`` knob)
+    run here, in the cheap path — see :mod:`ml.motion.court_apply`.
+    """
     if feature_path is not None and Path(feature_path).exists():
-        return load_feature_series(feature_path)
+        return load_features(feature_path, dilation)
 
     if detector is not None and corners is not None and len(corners) == 4:
-        frames = detector.detect_video(video_path, corners, fps_out=detect_fps)
-        times = np.array([fd.time_s for fd in frames], dtype=np.float64)
-        pts = [fd.court_points for fd in frames]
-        return compute_frame_features(times, pts)
+        vd = detector.detect_video(video_path, corners, fps_out=detect_fps)
+        raw = flatten_detections(
+            vd.frames,
+            scaled_corners=vd.scaled_corners,
+            extract_size=vd.extract_size,
+            fps_out=detect_fps,
+            video_path=video_path,
+        )
+        return features_from_raw(raw, dilation)
 
     return None
 
@@ -137,6 +144,7 @@ def predict_fused_intervals(
     half_window_s: float = 0.5,
     detector=None,
     detect_fps: float = 5.0,
+    dilation: float = DEFAULT_DILATION,
     device=None,
 ) -> list[tuple[float, float]]:
     """Predict rally intervals with motion fusion applied.
@@ -145,7 +153,7 @@ def predict_fused_intervals(
         video_path: Source video path.
         corners: Four native-pixel court corners; required only when computing
             motion features on demand (ignored when ``feature_path`` is given).
-        feature_path: Path to a cached ``.npz`` motion feature series (preferred).
+        feature_path: Path to a cached ``.npz`` raw-detection series (preferred).
         model_path: Audio model checkpoint (default checkpoint when ``None``).
         inference_config: Audio post-processing config (defaults when ``None``).
         fusion_config: Veto/sustain thresholds (defaults when ``None``).
@@ -153,6 +161,7 @@ def predict_fused_intervals(
         detector: Optional :class:`ml.motion.detector.MotionDetector` used to
             compute features when no cache is supplied.
         detect_fps: Detection sample rate when computing on demand.
+        dilation: Court-polygon dilation applied in the cheap path.
         device: Torch device for the audio model.
 
     Returns:
@@ -167,7 +176,7 @@ def predict_fused_intervals(
     )
 
     features = _resolve_feature_series(
-        video_path, corners, feature_path, detector, detect_fps
+        video_path, corners, feature_path, detector, detect_fps, dilation
     )
 
     return fuse_to_intervals(

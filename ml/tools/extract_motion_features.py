@@ -1,10 +1,12 @@
-"""Batch-extract cached motion features for fused rally segmentation.
+"""Batch-extract the cached raw-detection series for fused rally segmentation.
 
-Runs pre-trained YOLOv8n over each labelled video (filtered to its court),
-collapses the detections into the per-frame feature series, and caches the
-result as ``<out-dir>/<video-stem>.npz``.  This is the heavy GPU pass; it is run
-once so that fusion threshold tuning (``ml/tools/evaluate_fused.py``) re-runs
-only the cheap fusion step.
+Runs pre-trained YOLOv8n + ByteTrack over each labelled video and caches the
+**raw, pre-court-filter** geometry — every detection's foot-point (in
+extracted-frame pixel space) and its track id, plus the court corners — as
+``<out-dir>/<video-stem>.npz`` (v2 schema, see
+:func:`ml.motion.features.save_feature_series`).  This is the heavy GPU pass; it
+is run once so the cheap path (court filter + projection + features, plus the
+court-dilation knob and fusion tuning) re-runs with no GPU.
 
 Videos whose ``.training.json`` has no ``court_corners`` are skipped and listed
 in the summary — fusion falls back to audio-only for those (see the deferred
@@ -117,8 +119,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Heavy imports only now that we know there is work to do.
     from ml.motion.detector import MotionDetector  # noqa: PLC0415
-    from ml.motion.features import compute_frame_features, save_feature_series  # noqa: PLC0415
-    import numpy as np  # noqa: PLC0415
+    from ml.motion.features import flatten_detections, save_feature_series  # noqa: PLC0415
 
     detector = MotionDetector(
         model_name=args.model,
@@ -155,13 +156,17 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             print(f"[detect] {video_path.name} @ {args.fps} fps ...", file=sys.stderr)
-            frames = detector.detect_video(video_path, corners, fps_out=args.fps)
-            times = np.array([fd.time_s for fd in frames], dtype=np.float64)
-            pts = [fd.court_points for fd in frames]
-            features = compute_frame_features(times, pts)
-            save_feature_series(out_path, features, args.fps, video_path)
+            vd = detector.detect_video(video_path, corners, fps_out=args.fps)
+            raw = flatten_detections(
+                vd.frames,
+                scaled_corners=vd.scaled_corners,
+                extract_size=vd.extract_size,
+                fps_out=args.fps,
+                video_path=video_path,
+            )
+            save_feature_series(out_path, raw)
             n_done += 1
-            print(f"[ok] {out_path.name} ({len(frames)} frames)", file=sys.stderr)
+            print(f"[ok] {out_path.name} ({len(vd.frames)} frames)", file=sys.stderr)
         except Exception as exc:  # noqa: BLE001 — batch tool keeps going on failures
             failed.append(f"{json_path.name}: {exc}")
             print(f"[FAIL] {json_path.name}: {exc}", file=sys.stderr)
