@@ -29,6 +29,7 @@ __all__ = [
     "match_intervals",
     "interval_detection_metrics",
     "aggregate_video_metrics",
+    "footage_confusion",
 ]
 
 
@@ -336,3 +337,212 @@ def aggregate_video_metrics(per_video: list[dict]) -> dict:
         "n_over_segs": total_over_segs,
         "fp_active_seconds": total_fp_active,
     }
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers for footage-seconds arithmetic
+# ---------------------------------------------------------------------------
+
+
+def _merge_intervals(
+    intervals: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Return a sorted, non-overlapping union of *intervals*.
+
+    Touching intervals (sharing an endpoint) are merged.  Invalid intervals
+    where ``start > end`` are silently dropped.  Zero-length intervals
+    (``start == end``) are kept; they contribute 0 to any sum.
+
+    Args:
+        intervals: Unsorted, possibly-overlapping list of ``(start_s, end_s)``.
+
+    Returns:
+        Sorted, non-overlapping list of ``(start_s, end_s)`` tuples.
+    """
+    valid = [(s, e) for s, e in intervals if s <= e]
+    if not valid:
+        return []
+    valid.sort(key=lambda x: x[0])
+    merged: list[tuple[float, float]] = [valid[0]]
+    for s, e in valid[1:]:
+        ms, me = merged[-1]
+        if s <= me:  # overlapping or touching — extend the current segment
+            merged[-1] = (ms, max(me, e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def _total_seconds(intervals: list[tuple[float, float]]) -> float:
+    """Sum of durations of a pre-merged interval list."""
+    return sum(e - s for s, e in intervals)
+
+
+def _intersect_intervals(
+    a: list[tuple[float, float]],
+    b: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Intersection of two pre-merged (sorted, non-overlapping) interval lists.
+
+    Both inputs must already be the output of :func:`_merge_intervals`.
+
+    Args:
+        a: First merged interval list.
+        b: Second merged interval list.
+
+    Returns:
+        Sorted, non-overlapping list of intervals present in both *a* and *b*.
+    """
+    result: list[tuple[float, float]] = []
+    i = j = 0
+    while i < len(a) and j < len(b):
+        lo = max(a[i][0], b[j][0])
+        hi = min(a[i][1], b[j][1])
+        if lo < hi:
+            result.append((lo, hi))
+        # Advance the pointer that ends first; break ties by advancing both.
+        if a[i][1] < b[j][1]:
+            i += 1
+        elif b[j][1] < a[i][1]:
+            j += 1
+        else:
+            i += 1
+            j += 1
+    return result
+
+
+# ---------------------------------------------------------------------------
+# footage_confusion — public API
+# ---------------------------------------------------------------------------
+
+
+def footage_confusion(
+    pred: list[tuple[float, float]],
+    gt: list[tuple[float, float]],
+    total_seconds: float | None = None,
+) -> dict:
+    """Measure edit quality in footage-seconds rather than interval-count.
+
+    Unlike :func:`interval_detection_metrics`, which counts matched rallies,
+    this function answers the question a producer cares about: *how many seconds
+    of rally did we keep, and how many seconds of dead time slipped into the
+    cut?*
+
+    Inputs are first union-merged so overlapping or touching intervals are
+    handled correctly.  The result is independent of how individual intervals
+    are partitioned.
+
+    Args:
+        pred: Predicted rally intervals as ``list[(start_s, end_s)]``.  May be
+            unsorted and may contain overlapping segments.
+        gt: Ground-truth rally intervals in the same format.
+        total_seconds: Optional total video length in seconds.  When supplied it
+            is stored verbatim in the result as ``"total_seconds"`` for
+            downstream use (e.g. computing dead-time ratios); it is *not* used
+            in any metric computation.
+
+    Returns:
+        dict with the following keys:
+
+        ``"true_rally_seconds"``
+            Total GT rally coverage after merging.
+
+        ``"pred_rally_seconds"``
+            Total predicted rally coverage after merging.
+
+        ``"kept_rally_seconds"``
+            Seconds of true rally that were kept — the intersection of pred and
+            GT.
+
+        ``"missed_rally_seconds"``
+            Seconds of true rally that were dropped (GT minus pred).  Always
+            equals ``true_rally_seconds − kept_rally_seconds``.
+
+        ``"footage_recall"``
+            ``kept_rally_seconds / true_rally_seconds``; 1.0 when GT is empty
+            (vacuously perfect — nothing to miss).  *This is the primary quality
+            number*: 0 % means no rally was kept; 100 % means all rally was
+            kept.
+
+        ``"junk_seconds"``
+            Seconds of predicted footage that are actually dead time (pred minus
+            GT).  These are clips the editor must delete.
+
+        ``"junk_fraction"``
+            ``junk_seconds / pred_rally_seconds``; 0.0 when pred is empty.
+            Fraction of the output cut that is garbage.
+
+        ``"net_added_seconds"``
+            ``pred_rally_seconds − true_rally_seconds`` (signed).  Positive =
+            the system predicted more rally time than actually exists.
+
+        ``"net_dropped_seconds"``
+            ``true_rally_seconds − pred_rally_seconds`` (signed).  Positive =
+            the system under-predicted rally time.  Always equals
+            ``−net_added_seconds``.
+
+        ``"n_fully_missed_rallies"``
+            Number of GT intervals (post-merge) whose overlap with *any*
+            predicted interval is less than 1 ms.  These are irreversible
+            failures: the editor must manually find and re-cut them.
+
+        ``"total_seconds"``
+            Present only when *total_seconds* is supplied to the call.
+
+    Error asymmetry note:
+        ``missed_rally_seconds`` (and ``n_fully_missed_rallies``) measure the
+        *worst* failure mode — lost footage the editor may never notice.
+        ``junk_seconds`` is the *recoverable* failure — extra clips the editor
+        deletes.  Optimise for ``footage_recall`` first.
+    """
+    pred_m = _merge_intervals(pred)
+    gt_m = _merge_intervals(gt)
+
+    true_rally_seconds = _total_seconds(gt_m)
+    pred_rally_seconds = _total_seconds(pred_m)
+
+    # kept = |pred ∩ gt|
+    kept_rally_seconds = _total_seconds(_intersect_intervals(pred_m, gt_m))
+
+    # By set identity (non-overlapping merged sets):
+    #   missed = |gt − pred| = |gt| − |pred ∩ gt|
+    #   junk   = |pred − gt| = |pred| − |pred ∩ gt|
+    missed_rally_seconds = true_rally_seconds - kept_rally_seconds
+    junk_seconds = pred_rally_seconds - kept_rally_seconds
+
+    # Guard divisions: follow sensible conventions for degenerate inputs.
+    footage_recall = (
+        kept_rally_seconds / true_rally_seconds if true_rally_seconds > 0.0 else 1.0
+    )
+    junk_fraction = (
+        junk_seconds / pred_rally_seconds if pred_rally_seconds > 0.0 else 0.0
+    )
+
+    net_added_seconds = pred_rally_seconds - true_rally_seconds
+    net_dropped_seconds = true_rally_seconds - pred_rally_seconds
+
+    # Count GT intervals (post-merge) with < 1 ms overlap with *any* pred interval.
+    _FULLY_MISSED_EPS: float = 1e-3
+    n_fully_missed = 0
+    for gs, ge in gt_m:
+        overlap = sum(
+            max(0.0, min(ge, pe) - max(gs, ps)) for ps, pe in pred_m
+        )
+        if overlap < _FULLY_MISSED_EPS:
+            n_fully_missed += 1
+
+    result: dict = {
+        "true_rally_seconds": true_rally_seconds,
+        "pred_rally_seconds": pred_rally_seconds,
+        "kept_rally_seconds": kept_rally_seconds,
+        "missed_rally_seconds": missed_rally_seconds,
+        "footage_recall": footage_recall,
+        "junk_seconds": junk_seconds,
+        "junk_fraction": junk_fraction,
+        "net_added_seconds": net_added_seconds,
+        "net_dropped_seconds": net_dropped_seconds,
+        "n_fully_missed_rallies": n_fully_missed,
+    }
+    if total_seconds is not None:
+        result["total_seconds"] = total_seconds
+    return result
