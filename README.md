@@ -296,6 +296,52 @@ make lint                # Run linters
 make help                # Show all targets
 ```
 
+### Rebuild & reinstall to `~/.local/bin`
+
+After pulling new code or making local changes, rebuild the binary and refresh
+your user-profile install with **one command** — `install` re-runs the
+PyInstaller build first, then updates the `~/.local/bin/pickleball-editor`
+symlink (no `sudo` needed for a `~/.local` prefix):
+
+```bash
+make install PREFIX=~/.local            # rebuild + reinstall the editor to ~/.local/bin
+```
+
+Force a fully clean rebuild (wipes `build/` and `dist/` first):
+
+```bash
+make clean install PREFIX=~/.local
+```
+
+Same pattern for the ML rally-trainer binary:
+
+```bash
+make install-ml PREFIX=~/.local         # installs ~/.local/bin/rally-trainer
+```
+
+> Re-run with the **same `PREFIX`** you first installed with, or you'll end up
+> with a second copy elsewhere. Ensure `~/.local/bin` is on your `PATH`.
+
+### Motion fusion from the installed binary
+
+Auto Process can sharpen rally cuts with an on-court motion signal (YOLOv8n +
+ByteTrack). That heavy detector runs **out-of-process** in a separate
+`.venv-motion` environment — never inside the GUI — so the installed binary
+needs to be told where that venv lives (it can't infer it from inside its
+PyInstaller bundle). Set `PICKLEBALL_MOTION_VENV` before launching:
+
+```bash
+# point at the .venv-motion directory (or its bin/python directly)
+export PICKLEBALL_MOTION_VENV=/path/to/pickleball-video-editor/.venv-motion
+pickleball-editor
+```
+
+Add the `export` to your shell profile (e.g. `~/.bashrc`) to make it persistent.
+Without it — or on a machine with no `.venv-motion` / no usable GPU — Auto
+Process falls back to audio-only rally detection and shows a one-time notice.
+(When running from the source tree via `make run`, the venv is found
+automatically; the variable is only needed for the installed binary.)
+
 ### Configure Options
 
 | Option | Description |
