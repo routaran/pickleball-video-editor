@@ -1248,8 +1248,8 @@ class TestThresholdUnification:
 #
 # Fusion is applied only when an offline-extracted feature cache exists for the
 # video; otherwise Stage 1 degrades to the tuned audio-only ``predict_video``.
-# ``predict_fused`` is imported lazily inside ``auto_edit`` from
-# ``ml.motion.predict_fused``, so it is patched at its source module.
+# ``predict_joint`` (audio+visual learned combiner) is imported lazily inside
+# ``auto_edit`` from ``ml.motion.joint_fusion``, so it is patched at its source.
 # ``_motion_feature_path`` is patched so the branch is exercised deterministically
 # without touching the real ml/cache/motion directory.
 # ---------------------------------------------------------------------------
@@ -1274,7 +1274,7 @@ class TestStage1MotionFusion:
 
         with (
             patch("ml.auto_edit._motion_feature_path", return_value=cache),
-            patch("ml.motion.predict_fused.predict_fused", fused),
+            patch("ml.motion.joint_fusion.predict_joint", fused),
             patch("ml.auto_edit.predict_video", audio),
             patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
             patch("ml.auto_edit.probe_video", return_value=fake_info),
@@ -1315,7 +1315,7 @@ class TestStage1MotionFusion:
         extract = MagicMock()
         with (
             patch("ml.auto_edit._motion_feature_path", return_value=cache),
-            patch("ml.motion.predict_fused.predict_fused", return_value=_FAKE_INTERVALS_5),
+            patch("ml.motion.joint_fusion.predict_joint", return_value=_FAKE_INTERVALS_5),
             patch("ml.motion.extract_runner.extract_features_subprocess", extract),
             patch("ml.auto_edit.predict_video", return_value=_FAKE_INTERVALS_5),
             patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
@@ -1362,7 +1362,7 @@ class TestStage1MotionFusion:
             patch("ml.auto_edit._motion_feature_path", return_value=cache),
             patch("ml.motion.extract_runner.motion_venv_python", return_value=Path("/fake/py")),
             patch("ml.motion.extract_runner.extract_features_subprocess", extract),
-            patch("ml.motion.predict_fused.predict_fused", fused),
+            patch("ml.motion.joint_fusion.predict_joint", fused),
             patch("ml.auto_edit.predict_video", audio),
             patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
             patch("ml.auto_edit.probe_video", return_value=fake_info),
@@ -1408,7 +1408,7 @@ class TestStage1MotionFusion:
             patch("ml.auto_edit._motion_feature_path", return_value=cache),
             patch("ml.motion.extract_runner.motion_venv_python", return_value=None),
             patch("ml.motion.extract_runner.extract_features_subprocess", extract),
-            patch("ml.motion.predict_fused.predict_fused", fused),
+            patch("ml.motion.joint_fusion.predict_joint", fused),
             patch("ml.auto_edit.predict_video", audio),
             patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
             patch("ml.auto_edit.probe_video", return_value=fake_info),
@@ -1451,7 +1451,7 @@ class TestStage1MotionFusion:
             patch("ml.auto_edit._motion_feature_path", return_value=cache),
             patch("ml.motion.extract_runner.motion_venv_python", return_value=Path("/fake/py")),
             patch("ml.motion.extract_runner.extract_features_subprocess", extract),
-            patch("ml.motion.predict_fused.predict_fused", fused),
+            patch("ml.motion.joint_fusion.predict_joint", fused),
             patch("ml.auto_edit.predict_video", audio),
             patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
             patch("ml.auto_edit.probe_video", return_value=fake_info),

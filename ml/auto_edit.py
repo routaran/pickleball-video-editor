@@ -358,13 +358,15 @@ def auto_edit(
     raw_rallies: list[dict[str, float]]
     if corners and feature_path.exists():
         # Local import: pulls in only headless cv2 + numpy (ultralytics stays
-        # offline), keeping the heavy detector out of the GUI process.
-        from ml.motion.predict_fused import predict_fused
+        # offline), keeping the heavy detector out of the GUI process.  The
+        # learned audio+visual combiner degrades to audio-only internally if its
+        # checkpoint is missing, so this stays safe even without joint_combiner.json.
+        from ml.motion.joint_fusion import predict_joint
 
-        raw_rallies = predict_fused(
+        raw_rallies = predict_joint(
             video_path, corners=corners, feature_path=feature_path
         )
-        logger.info("Stage 1: motion fusion applied (cache: %s)", feature_path.name)
+        logger.info("Stage 1: audio+visual fusion applied (cache: %s)", feature_path.name)
     else:
         raw_rallies = predict_video(video_path)
     rally_intervals: list[tuple[float, float]] = [

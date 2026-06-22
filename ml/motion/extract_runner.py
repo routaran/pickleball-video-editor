@@ -176,6 +176,11 @@ def extract_features_subprocess(
         json.dumps([[int(x), int(y)] for x, y in corners]),
         "--out-dir",
         str(out_dir),
+        # 10 fps to match the cache the joint combiner was trained on; the robust
+        # visual features are baseline-in-seconds so the choice is mostly about
+        # matching n-sample counts, but keep it consistent end to end.
+        "--fps",
+        "10",
     ]
     logger.info("Launching motion extraction (cwd=%s): %s", source_root, " ".join(cmd))
 

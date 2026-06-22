@@ -33,6 +33,9 @@ _datas = [
         if (_ckpt_dir / 'best_winner.pt').exists() else None,
     (str(_ckpt_dir / 'best_model.pt'), 'ml/checkpoints')
         if (_ckpt_dir / 'best_model.pt').exists() else None,
+    # Audio+visual rally combiner (predict_joint); absent -> audio-only fallback.
+    (str(_ckpt_dir / 'joint_combiner.json'), 'ml/checkpoints')
+        if (_ckpt_dir / 'joint_combiner.json').exists() else None,
 ]
 datas_list = [item for item in _datas if item is not None]
 
