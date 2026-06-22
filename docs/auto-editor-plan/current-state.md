@@ -121,6 +121,11 @@ Additional ML pieces now present:
   — winner-classifier data loading, model, inference, and training.
 - `auto_edit.py` and `cli.py` — end-to-end auto-edit orchestration and unified
   CLI entry points.
+- `motion/` — offline YOLOv8n + ByteTrack motion-feature extraction (runs in a
+  separate `.venv-motion`; writes `ml/cache/motion/*.npz`) plus a court-polygon-
+  dilation fusion path (`predict_fused`) that augments the Stage-1 audio rally
+  boundaries. `auto_edit.py` Stage 1 uses fusion when a motion cache exists, else
+  falls back to tuned audio-only.
 
 ## Training data volume
 
