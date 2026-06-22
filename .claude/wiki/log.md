@@ -14,6 +14,75 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-06-21] ingest | staleness-driven (tech-stack source edit)
+
+- Pages checked: 11
+- Pages stale (genuine): 1 — `architecture/tech-stack.md`. Source `docs/TECH_STACK.md` changed @ `bb14454` (2026-06-21 21:29, "docs(tech-stack): add offline motion-fusion detector stack"), strictly newer than the page's prior same-day compile (which was driven by `README.md` @ `a336a82`). Only source change since the previous 2026-06-21 ingest.
+- Recompiled (DAG: single architecture page; no domain/gotcha pages stale):
+  - `architecture/tech-stack.md` — folded in `TECH_STACK.md` §2.3's offline motion detector. Core Stack row now notes the AGPL ultralytics dep + own `.venv-motion` (`ml/requirements-motion.txt`); expanded the motion-fusion note with the **isolation rationale** (ultralytics hard-deps the full Qt/GL `opencv-python`, which would interpose on the GUI's mpv, so the GUI venv stays `opencv-python-headless`) and the **out-of-process flow** (`extract_motion_features` via `extract_runner` → `ml/cache/motion/*.npz`; cheap `predict_fused`/`evaluate_fused` reads `.npz` and needs only `ml/requirements.txt`). 124 → 131 lines (≤ hard_max 200). Cross-refs verified resolving. `last_compiled` stays 2026-06-21 (same-day recompile).
+- Skipped (up-to-date): 10 — `domains/{core,ui,video,output,ml,tests}`, `architecture/{auto-edit-pipeline,session-lifecycle}`, `gotchas/{pickleball-scoring,auto-edit-pitfalls}`. No domain sources changed since the prior ingest; `README.md` (`a336a82`) was already absorbed by that ingest.
+- Note: wiki content pages are gitignored (disk-only); only `log.md` is tracked. No commit performed (wiki-build flow does not commit); `tech-stack.md` + `log.md` left modified on disk. `index.md`/`source-map.md` unchanged (dates already 2026-06-21; `tech-stack` `compiled_via` already `ingest`).
+- Status: complete
+
+## [2026-06-21] ingest | staleness-driven (1 stale architecture page)
+
+- Pages checked: 11
+- Pages stale (git-log detected, genuine): 1 — `architecture/tech-stack.md`. Source `README.md` changed @ `a336a82` (2026-06-21, "PICKLEBALL_MOTION_VENV override / installed-binary motion fusion"), strictly newer than the page's 2026-06-14 `last_compiled`. This is the only source change since the prior 2026-06-21 ingest.
+- Recompiled (DAG: single architecture page; no domain/gotcha pages stale):
+  - `architecture/tech-stack.md` — incorporated the two README sections `a336a82` added: (1) "Motion fusion from the installed binary" → new Core Stack row "Motion fusion (optional): YOLOv8n + ByteTrack (ultralytics), out-of-process in a separate `.venv-motion`" + a deployment note (set `PICKLEBALL_MOTION_VENV` to the venv dir or its `bin/python` for the frozen binary; `make run` finds it automatically; audio-only fallback + one-time notice when absent/no GPU); (2) "Rebuild & reinstall to ~/.local/bin" → added `make install-ml` (rally-trainer binary) to Build & Test and the same-`PREFIX` reinstall guidance. `last_compiled` 2026-06-14 → 2026-06-21. 124 lines (≤ hard_max 200; at target 125). Cross-refs verified resolving.
+- Skipped (up-to-date): 10 — `domains/{core,ui,video,output,ml,tests}`, `architecture/{auto-edit-pipeline,session-lifecycle}`, `gotchas/{pickleball-scoring,auto-edit-pitfalls}`.
+- Same-day-boundary false positives ruled out: a `--since` sweep using bare `last_compiled` dates initially flagged `output` / `auto-edit-pipeline` / `auto-edit-pitfalls`, but every flagged commit is dated exactly on their 2026-06-14 compile day (OUTPUT_* aligns 1a1700c/13e337d/14849e8/03d39be; auto-editor-plan docs 19387d0); a strict `--since=2026-06-15` check returned empty for all three, and the prior 2026-06-21 ingest already cleared them. Not recompiled. `ml`/`tests`/`ui`/`core` were recompiled by the prior 2026-06-21 ingest for the exact same commits and have no newer source changes.
+- Note: wiki content pages are gitignored (disk-only); only `log.md` is tracked. No commit performed (wiki-build flow does not commit); `tech-stack.md` + `log.md` left modified on disk. `index.md`/`source-map.md` dates already 2026-06-21 (unchanged); `tech-stack` `compiled_via` already `ingest`.
+- Status: complete
+
+## [2026-06-21] source-update | align (scope: all docs)
+
+- Trigger: new commit `a336a82` ("motion: PICKLEBALL_MOTION_VENV override so installed binary finds .venv-motion") — the only code commit since the prior 2026-06-21 align (fd0a37c/02a26d1/fb6b801). Touches `ml/motion/extract_runner.py`, `README.md`, `tests/test_motion_extract_runner.py`; adds NO new files.
+- Drift items: 4 (factual: 0, structural: 0, editorial: 3, candidate-new: 1) — all surfaced; none auto-applicable.
+- Applied: 0  Skipped: 4  Edited inline: 0
+- Source docs touched: [] (no edits, no per-doc commits)
+- Key assessment — `a336a82` / PICKLEBALL_MOTION_VENV / installed-binary fusion:
+  - `README.md` is CLEAN: `a336a82` itself added the "Motion fusion from the installed binary" section (set `PICKLEBALL_MOTION_VENV` to the `.venv-motion` dir or its `bin/python`; out-of-process detector; audio-only fallback + one-time notice) plus the earlier "Rebuild & reinstall to `~/.local/bin`" build note. The doc's own commit reset its anchor, so these are not drift. README is the canonical home for this install/deployment concern; the env var is documented there, so no other doc needs a candidate-new entry for it.
+  - `docs/auto-editor-plan/current-state.md` (anchor fd0a37c): motion section (L124-128, "runs in a separate `.venv-motion`") remains factually accurate; the env-var override is an installed-binary deployment detail covered by README → not-drift.
+  - `docs/TECH_STACK.md`: still no motion/venv mention — the offline motion dependency stack (ultralytics/YOLOv8n in `.venv-motion`, `ml/requirements-motion.txt`) remains uncovered. RECURRING candidate-new (also surfaced 2026-06-14 + 2026-06-21, deliberately deferred). Not written (candidate-new never auto-applies; README covers the env var; consistent with prior runs).
+  - tests docs (`TESTING.md`/`TEST_SUITE_SUMMARY.md`): CLEAN — `test_motion_extract_runner.py` first landed in da26a74 (already counted in the 2026-06-21 align); test-file count 63 unchanged.
+- Re-surfaced editorial (from prior align, still deferred — author's call): stale "14 games" planning figure (current-state.md/training-data.md/architecture.md/decisions.md/README.md); Stage-1-now-fuses-motion narrative vs audio-only framing (architecture.md/README.md); decisions.md "NOT building player tracking/pose" partially contradicted by ByteTrack identity tracking.
+- Followed by: ingest WITHHELD (no source edits to ingest; wiki-build invocation also withheld per orchestrator instruction — the separate `/wiki-build ingest` step handles staleness).
+- Status: complete (no source-doc edits required; a336a82 already self-documents via README).
+
+## [2026-06-21] ingest | staleness-driven (4 stale domain pages)
+
+- Pages checked: 11
+- Pages stale (git-log detected): 4 — `domains/ml`, `domains/tests`, `domains/ui`, `domains/core`. Picked up the 2026-06-21 align (current-state.md, TESTING.md, TEST_SUITE_SUMMARY.md) PLUS three 2026-06-16 source-updates that were never ingested (REVIEW_MODE_USAGE.md @231fc32, REVIEW_MODE_IMPLEMENTATION.md @ee80572, DETAILED_DESIGN.md @97a61aa).
+- Recompiled (DAG: all four are domains; no architecture/gotcha pages stale):
+  - `domains/ml.md` — added the `ml/motion/` offline layer (YOLOv8n+ByteTrack feature extraction in `.venv-motion` → `ml/cache/motion/*.npz`; `predict_fused` court-dilation fusion augments Stage-1 audio boundaries, `auto_edit.py` uses fusion when a motion cache exists else falls back to tuned audio-only). Updated Purpose (Stage 1) + current-state.md Sources line. Source: `current-state.md` @fd0a37c. 101 lines.
+  - `domains/tests.md` — test-file count 49 → 63 (Purpose + Sources). Sources: `TESTING.md` @02a26d1/da7918b, `TEST_SUITE_SUMMARY.md` @fb6b801/16a1bf9. 73 lines.
+  - `domains/ui.md` — review-mode rewrite: `ScoreEditWidget`+"Flip Winner" replaced by `WinnerControlWidget` (winner_selected "server"/"receiver") + `StateAnchorWidget` (serving-team toggle + score; ALWAYS cascades, cascade checkbox gone); `TimingControlWidget` gained a configurable step combo (0.1/0.25/0.5/1.0s) + direct start/end/duration entry (`timing_set`) alongside nudge (`timing_adjusted`); full `ReviewModeWidget` signal set (timing_set/winner_set/state_anchor_set, delete/insert, generate/export_ffmpeg, game_completed_toggled); runtime FPS via `set_rallies`; tall/wide frozen splitter + mpv-never-in-QScrollArea contract; Kdenlive GENERATE + FFmpeg EXPORT MP4 + Mark Game Completed. Updated Patterns wiring, ml Coordinates, gotcha ref, Sources. Sources: `REVIEW_MODE_IMPLEMENTATION.md` @ee80572, `REVIEW_MODE_USAGE.md` @231fc32. 105 lines.
+  - `domains/core.md` — added `ScoreState.set_serving_team(int)` (review-mode state anchor) and `RallyManager.set_rally_timing(index, start, end) -> Rally` (absolute raw-time set vs delta-based `update_rally_timing`). Source: `DETAILED_DESIGN.md` @97a61aa (methods landed in 5113ab7). 91 lines.
+- Skipped (up-to-date by git log): 7 — `domains/video`, `domains/output`, `architecture/{tech-stack,auto-edit-pipeline,session-lifecycle}`, `gotchas/{pickleball-scoring,auto-edit-pitfalls}`.
+- Out of scope: commit 0bdd345 (2026-06-14) added many new `docs/auto-editor-plan/` files (WINNER_DETECTION_*, audit/*, collab/*, winner-ball-tracking-plan.md, winner-detection-consensus-plan.md) but none are in any page's `source_paths` per source-map, so they triggered no recompilation (candidate-new for `wiki-source-update`, not ingest).
+- `compiled_via` for `domains/ml` set `update` → `ingest`; `index.md` / `source-map.md` dates bumped to 2026-06-21.
+- All four pages ≤ hard_max 200 (max 105). Cross-references verified resolving.
+- Note: wiki content pages are gitignored (disk-only); only `log.md` is tracked. No commit performed (wiki-build flow does not commit); `log.md` left modified.
+- Status: complete
+
+## [2026-06-21] source-update | align (scope: all docs)
+
+- Drift items: 8 (factual: 0, structural: 3, editorial: 3, candidate-new: 2)
+- Applied: 3  Skipped: 5  Edited inline: 0  (autonomous run: applied factual/structural only; editorial + candidate-new surfaced for human review, not written)
+- Source docs touched (committed, one commit each):
+  - `docs/auto-editor-plan/current-state.md` (anchor 19387d0) — structural: added `ml/motion/` (offline YOLOv8n+ByteTrack feature extraction + `predict_fused` court-dilation fusion, wired into `auto_edit.py` Stage 1) to the ml-module inventory. Commit fd0a37c. Prompted by 57d2754, 2909754, da26a74, 100f86c, fad7fae.
+  - `docs/TESTING.md` (anchor da7918b) — structural: test-file count 50 → 63. Commit 02a26d1. Prompted by cf4a7e3, 57d2754, 74ef636, 2909754, da26a74, 4a50349.
+  - `docs/TEST_SUITE_SUMMARY.md` (anchor 16a1bf9) — structural: overall-suite test-file count 50 → 63 (~116 core-suite figure unchanged). Commit fb6b801. Same prompting commits.
+- Surfaced, NOT edited (need human decision):
+  - editorial — "14 games" planning figure is stale in current-state.md, training-data.md, architecture.md, README.md, decisions.md; TRAINING_GUIDE.md already says ~20 games and the pinned split `ml/splits/audio_clean_2026_06_17/` holds 72 `.training.json`. Correct value is ambiguous and the figure lives inside design rationale, so left for the author.
+  - editorial — Stage 1 now fuses motion (predict_fused) when a cache exists (2909754, da26a74); architecture.md data-flow diagram and README.md "two-stage pipeline" framing describe audio-only Stage 1. Narrative extension, not a single-line contradiction.
+  - editorial — decisions.md "What we're NOT building: player tracking / pose" is partially contradicted by the ByteTrack identity tracking in the motion-perception layer (100f86c, fad7fae); design evolved — author's call.
+  - candidate-new — new offline motion-detection dependency stack (ultralytics/YOLOv8n in a separate `.venv-motion`, `ml/requirements-motion.txt`, 57d2754) is uncovered by tech-stack docs (README.md / docs/TECH_STACK.md).
+  - candidate-new — src/main.py one-time "fusion unavailable → audio-only" session notice + auto_edit progress motion-extraction phase (da26a74) is uncovered by ui docs (low significance).
+- Followed by: ingest DEFERRED — wiki-build invocation withheld per orchestrator instruction; run `/wiki-build ingest` separately to refresh `domains/ml` (from current-state.md) and `domains/tests` (from TESTING.md + TEST_SUITE_SUMMARY.md).
+- Status: complete
+
 ## [2026-06-14] ingest | staleness-driven (1 stale gotcha page)
 
 - Pages checked: 11
