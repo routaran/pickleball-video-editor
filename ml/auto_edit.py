@@ -111,6 +111,12 @@ class AutoEditResult:
         n_detected: Total rally intervals output by Stage 1 (audio model).
         n_scored: Rallies that advanced the score (pre-game-over).
         n_post_game: Rallies appended after game-over with frozen score.
+        fusion_unavailable_reason: Human-readable explanation set only when
+            motion fusion was expected (court corners present) but could not be
+            applied — e.g. the ``.venv-motion`` environment was missing or the
+            GPU extraction failed — so Stage 1 fell back to audio-only.  ``None``
+            when fusion was applied or was never applicable.  The GUI surfaces
+            this once as an informational notice.
     """
 
     kdenlive_path: Path
@@ -123,6 +129,7 @@ class AutoEditResult:
     n_detected: int = 0
     n_scored: int = 0
     n_post_game: int = 0
+    fusion_unavailable_reason: str | None = None
 
 
 def _build_player_names(setup: AutoEditSetup) -> dict[str, list[str]]:
@@ -206,6 +213,7 @@ def auto_edit(
     confidence_threshold: float | None = None,
     winner_config: WinnerModelConfig | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> AutoEditResult:
     """Run the full auto-edit pipeline on a pickleball video.
 
@@ -241,6 +249,10 @@ def auto_edit(
             the caller wants to abort the pipeline.  Checked after Stage 1,
             after Stage 2, and before Stage 4 file writes.  Raises
             AutoEditCancelled (no files written) when True is returned.
+        progress_callback: Optional callable taking a human-readable phase
+            string.  Invoked for sub-stages auto_edit drives internally (notably
+            the on-demand motion-feature extraction in Stage 1a) so a GUI can
+            update its progress label.  When None, progress is logged only.
 
     Returns:
         AutoEditResult with paths to all generated files and pipeline metadata.
@@ -300,12 +312,49 @@ def auto_edit(
     # ------------------------------------------------------------------
     logger.info("Stage 1: detecting rallies in %s", video_path.name)
 
-    # Motion fusion is used only when an offline-extracted feature cache exists
-    # for this video; otherwise we degrade gracefully to the tuned audio-only
-    # path.  The cache is produced out-of-process in .venv-motion (YOLO/
-    # ByteTrack) — the GUI must never run that detector in-process (mpv
-    # invariant).  See ml/motion/DILATION_TRACKING_SPEC.md (Integration).
+    # Motion fusion is used when a feature cache exists for this video; otherwise
+    # we degrade gracefully to the tuned audio-only path.
     feature_path = _motion_feature_path(video_path)
+    fusion_unavailable_reason: str | None = None
+
+    # Stage 1a: build the motion-feature cache on demand (first run per video).
+    # The detector (YOLO/ByteTrack + full OpenCV) MUST run out-of-process — the
+    # GUI process can't import it without segfaulting mpv — so we shell out to
+    # the isolated .venv-motion.  Any unavailability degrades to audio-only.
+    if corners and not feature_path.exists():
+        from ml.motion.extract_runner import (
+            extract_features_subprocess,
+            motion_venv_python,
+        )
+
+        if motion_venv_python() is None:
+            fusion_unavailable_reason = (
+                "Motion fusion was skipped because the .venv-motion environment "
+                "was not found on this machine; rallies were detected from audio "
+                "only."
+            )
+            logger.warning("Stage 1a: %s", fusion_unavailable_reason)
+        else:
+            logger.info("Stage 1a: extracting motion features for %s", video_path.name)
+            if progress_callback is not None:
+                progress_callback("Extracting motion features (GPU — first run for this video)…")
+            extracted = extract_features_subprocess(
+                video_path,
+                corners,
+                feature_path.parent,
+                cancel_check=cancel_check,
+                progress_cb=progress_callback,
+            )
+            if cancel_check is not None and cancel_check():
+                raise AutoEditCancelled("Pipeline cancelled during motion extraction")
+            if not extracted or not feature_path.exists():
+                fusion_unavailable_reason = (
+                    "Motion fusion was skipped because feature extraction did not "
+                    "complete (no usable GPU or an extraction error); rallies were "
+                    "detected from audio only."
+                )
+                logger.warning("Stage 1a: %s", fusion_unavailable_reason)
+
     raw_rallies: list[dict[str, float]]
     if corners and feature_path.exists():
         # Local import: pulls in only headless cv2 + numpy (ultralytics stays
@@ -581,4 +630,5 @@ def auto_edit(
         n_detected=n_detected,
         n_scored=n_scored,
         n_post_game=n_post_game,
+        fusion_unavailable_reason=fusion_unavailable_reason,
     )

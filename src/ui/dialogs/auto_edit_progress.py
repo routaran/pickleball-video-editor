@@ -189,6 +189,11 @@ class AutoEditWorker(QThread):
                 checkpoint_path=self._checkpoint_path,
                 confidence_threshold=self._confidence_threshold,
                 cancel_check=self._cancel_event.is_set,
+                # Let auto_edit drive the phase label for sub-stages it runs
+                # internally (notably the on-demand motion-feature extraction).
+                # Emitting a Qt signal from this worker thread is safe — it is
+                # delivered to the GUI thread via a queued connection.
+                progress_callback=self.phase_changed.emit,
             )
         except AutoEditCancelled:
             # auto_edit() detected the cancel flag and aborted cleanly before

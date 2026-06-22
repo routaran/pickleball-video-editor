@@ -1300,7 +1300,7 @@ class TestStage1MotionFusion:
         assert fused.call_args.kwargs["feature_path"] == cache
         assert result.predicted_rally_count == 5
 
-    def test_falls_back_to_audio_when_no_cache(
+    def test_fusion_used_when_cache_present_skips_extraction(
         self,
         tmp_path: Path,
         video_path: Path,
@@ -1308,13 +1308,60 @@ class TestStage1MotionFusion:
         corners: list[tuple[int, int]],
         doubles_setup: AutoEditSetup,
     ) -> None:
+        # Insurance: when a cache already exists, Stage 1a must NOT shell out.
         fake_info = _make_video_info(video_path)
-        cache = tmp_path / "absent.npz"  # never created -> audio fallback
+        cache = tmp_path / "game.npz"
+        cache.touch()
+        extract = MagicMock()
+        with (
+            patch("ml.auto_edit._motion_feature_path", return_value=cache),
+            patch("ml.motion.predict_fused.predict_fused", return_value=_FAKE_INTERVALS_5),
+            patch("ml.motion.extract_runner.extract_features_subprocess", extract),
+            patch("ml.auto_edit.predict_video", return_value=_FAKE_INTERVALS_5),
+            patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
+            patch("ml.auto_edit.probe_video", return_value=fake_info),
+            patch("src.output.kdenlive_generator.probe_video", return_value=fake_info),
+            patch("ml.auto_edit.torch.load", return_value=_VALID_CHECKPOINT_DICT),
+            patch(
+                "ml.auto_edit.PathConfig.best_model_path",
+                new_callable=lambda: property(lambda self: checkpoint_path),
+            ),
+        ):
+            result = auto_edit(
+                video_path=video_path,
+                setup=doubles_setup,
+                corners=corners,
+                output_dir=tmp_path,
+                checkpoint_path=checkpoint_path,
+            )
+        extract.assert_not_called()
+        assert result.fusion_unavailable_reason is None
+
+    def test_extraction_triggered_then_fusion_when_no_cache(
+        self,
+        tmp_path: Path,
+        video_path: Path,
+        checkpoint_path: Path,
+        corners: list[tuple[int, int]],
+        doubles_setup: AutoEditSetup,
+    ) -> None:
+        # No cache + motion venv present -> Stage 1a extracts (creating the
+        # cache), then fusion runs against it.
+        fake_info = _make_video_info(video_path)
+        cache = tmp_path / "game.npz"  # created by the fake extractor below
         fused = MagicMock(return_value=_FAKE_INTERVALS_5)
         audio = MagicMock(return_value=_FAKE_INTERVALS_5)
 
+        def fake_extract(vp, crn, out_dir, **kwargs):
+            cache.touch()  # simulate the .npz appearing
+            return True
+
+        extract = MagicMock(side_effect=fake_extract)
+
         with (
             patch("ml.auto_edit._motion_feature_path", return_value=cache),
+            patch("ml.motion.extract_runner.motion_venv_python", return_value=Path("/fake/py")),
+            patch("ml.motion.extract_runner.extract_features_subprocess", extract),
             patch("ml.motion.predict_fused.predict_fused", fused),
             patch("ml.auto_edit.predict_video", audio),
             patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
@@ -1334,6 +1381,130 @@ class TestStage1MotionFusion:
                 checkpoint_path=checkpoint_path,
             )
 
+        extract.assert_called_once()
+        # Positional contract: (video_path, corners, out_dir == cache.parent).
+        assert extract.call_args.args[0] == video_path
+        assert extract.call_args.args[1] == corners
+        assert extract.call_args.args[2] == cache.parent
+        fused.assert_called_once()
+        audio.assert_not_called()
+        assert result.fusion_unavailable_reason is None
+
+    def test_no_motion_venv_sets_reason_and_uses_audio(
+        self,
+        tmp_path: Path,
+        video_path: Path,
+        checkpoint_path: Path,
+        corners: list[tuple[int, int]],
+        doubles_setup: AutoEditSetup,
+    ) -> None:
+        fake_info = _make_video_info(video_path)
+        cache = tmp_path / "absent.npz"  # stays absent
+        fused = MagicMock(return_value=_FAKE_INTERVALS_5)
+        audio = MagicMock(return_value=_FAKE_INTERVALS_5)
+        extract = MagicMock()
+
+        with (
+            patch("ml.auto_edit._motion_feature_path", return_value=cache),
+            patch("ml.motion.extract_runner.motion_venv_python", return_value=None),
+            patch("ml.motion.extract_runner.extract_features_subprocess", extract),
+            patch("ml.motion.predict_fused.predict_fused", fused),
+            patch("ml.auto_edit.predict_video", audio),
+            patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
+            patch("ml.auto_edit.probe_video", return_value=fake_info),
+            patch("src.output.kdenlive_generator.probe_video", return_value=fake_info),
+            patch("ml.auto_edit.torch.load", return_value=_VALID_CHECKPOINT_DICT),
+            patch(
+                "ml.auto_edit.PathConfig.best_model_path",
+                new_callable=lambda: property(lambda self: checkpoint_path),
+            ),
+        ):
+            result = auto_edit(
+                video_path=video_path,
+                setup=doubles_setup,
+                corners=corners,
+                output_dir=tmp_path,
+                checkpoint_path=checkpoint_path,
+            )
+
+        extract.assert_not_called()  # no venv -> never launched
         audio.assert_called_once_with(video_path)
         fused.assert_not_called()
-        assert result.predicted_rally_count == 5
+        assert result.fusion_unavailable_reason is not None
+        assert ".venv-motion" in result.fusion_unavailable_reason
+
+    def test_extraction_failure_sets_reason_and_uses_audio(
+        self,
+        tmp_path: Path,
+        video_path: Path,
+        checkpoint_path: Path,
+        corners: list[tuple[int, int]],
+        doubles_setup: AutoEditSetup,
+    ) -> None:
+        fake_info = _make_video_info(video_path)
+        cache = tmp_path / "absent.npz"  # extractor "fails" -> never created
+        fused = MagicMock(return_value=_FAKE_INTERVALS_5)
+        audio = MagicMock(return_value=_FAKE_INTERVALS_5)
+        extract = MagicMock(return_value=False)
+
+        with (
+            patch("ml.auto_edit._motion_feature_path", return_value=cache),
+            patch("ml.motion.extract_runner.motion_venv_python", return_value=Path("/fake/py")),
+            patch("ml.motion.extract_runner.extract_features_subprocess", extract),
+            patch("ml.motion.predict_fused.predict_fused", fused),
+            patch("ml.auto_edit.predict_video", audio),
+            patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
+            patch("ml.auto_edit.probe_video", return_value=fake_info),
+            patch("src.output.kdenlive_generator.probe_video", return_value=fake_info),
+            patch("ml.auto_edit.torch.load", return_value=_VALID_CHECKPOINT_DICT),
+            patch(
+                "ml.auto_edit.PathConfig.best_model_path",
+                new_callable=lambda: property(lambda self: checkpoint_path),
+            ),
+        ):
+            result = auto_edit(
+                video_path=video_path,
+                setup=doubles_setup,
+                corners=corners,
+                output_dir=tmp_path,
+                checkpoint_path=checkpoint_path,
+            )
+
+        extract.assert_called_once()
+        audio.assert_called_once_with(video_path)
+        fused.assert_not_called()
+        assert result.fusion_unavailable_reason is not None
+
+    def test_cancel_during_extraction_raises(
+        self,
+        tmp_path: Path,
+        video_path: Path,
+        checkpoint_path: Path,
+        corners: list[tuple[int, int]],
+        doubles_setup: AutoEditSetup,
+    ) -> None:
+        fake_info = _make_video_info(video_path)
+        cache = tmp_path / "absent.npz"
+        extract = MagicMock(return_value=False)  # simulate terminated child
+
+        with (
+            patch("ml.auto_edit._motion_feature_path", return_value=cache),
+            patch("ml.motion.extract_runner.motion_venv_python", return_value=Path("/fake/py")),
+            patch("ml.motion.extract_runner.extract_features_subprocess", extract),
+            patch("ml.auto_edit.predict_video", return_value=_FAKE_INTERVALS_5),
+            patch("ml.auto_edit.probe_video", return_value=fake_info),
+            patch("ml.auto_edit.torch.load", return_value=_VALID_CHECKPOINT_DICT),
+            patch(
+                "ml.auto_edit.PathConfig.best_model_path",
+                new_callable=lambda: property(lambda self: checkpoint_path),
+            ),
+            pytest.raises(ml.auto_edit.AutoEditCancelled),
+        ):
+            auto_edit(
+                video_path=video_path,
+                setup=doubles_setup,
+                corners=corners,
+                output_dir=tmp_path,
+                checkpoint_path=checkpoint_path,
+                cancel_check=lambda: True,
+            )

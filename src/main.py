@@ -144,6 +144,10 @@ def main() -> int:
     # Create application-level export manager (survives MainWindow lifecycle)
     export_manager = ExportManager()
 
+    # Shown once per session if auto-edit ever falls back to audio-only because
+    # motion fusion was unavailable (no .venv-motion / no usable GPU).
+    fusion_notice_shown = False
+
     # Main application loop - allows returning to menu
     while True:
         # Show setup dialog with app settings
@@ -224,6 +228,21 @@ def main() -> int:
             if auto_result is None:
                 logger.info("Auto-edit returned no result; returning to setup dialog.")
                 continue
+
+            # If motion fusion was expected but unavailable, tell the user once
+            # this session, then continue with the audio-only result.
+            fusion_reason = getattr(auto_result, "fusion_unavailable_reason", None)
+            if fusion_reason and not fusion_notice_shown:
+                fusion_notice_shown = True
+                from PyQt6.QtWidgets import QMessageBox
+
+                notice = QMessageBox()
+                notice.setIcon(QMessageBox.Icon.Information)
+                notice.setWindowTitle("Motion fusion unavailable")
+                notice.setText("Auto-processing used audio-only rally detection.")
+                notice.setInformativeText(fusion_reason)
+                notice.setStandardButtons(QMessageBox.StandardButton.Ok)
+                notice.exec()
 
             logger.info(
                 "Auto-edit complete: %d rallies, low-confidence indices: %s",

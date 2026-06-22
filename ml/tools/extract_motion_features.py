@@ -55,6 +55,57 @@ def _default_out_dir() -> Path:
     return PathConfig().cache_dir / "motion"
 
 
+def _extract_one(video_path: Path, corners: list[tuple[int, int]],
+                 out_dir: Path, args: argparse.Namespace) -> int:
+    """Extract + cache one video's raw-detection series. Returns 0 on success.
+
+    Honours the ``--overwrite`` / cache-hit semantics of the batch path so the
+    single-video (GUI) mode behaves identically.
+    """
+    out_path = out_dir / f"{video_path.stem}.npz"
+    if out_path.exists() and not args.overwrite:
+        print(f"[cache hit] {video_path.stem}.npz", file=sys.stderr)
+        return 0
+
+    from ml.motion.detector import MotionDetector  # noqa: PLC0415 — heavy, lazy
+    from ml.motion.features import flatten_detections, save_feature_series  # noqa: PLC0415
+
+    detector = MotionDetector(
+        model_name=args.model,
+        conf=args.conf,
+        imgsz=args.imgsz,
+        device=args.device,
+        max_extract_dim=args.max_extract_dim,
+        weights_dir=args.weights_dir,
+    )
+    try:
+        print(f"[detect] {video_path.name} @ {args.fps} fps ...", file=sys.stderr)
+        vd = detector.detect_video(video_path, corners, fps_out=args.fps)
+        raw = flatten_detections(
+            vd.frames,
+            scaled_corners=vd.scaled_corners,
+            extract_size=vd.extract_size,
+            fps_out=args.fps,
+            video_path=video_path,
+        )
+        save_feature_series(out_path, raw)
+        print(f"[ok] {out_path.name} ({len(vd.frames)} frames)", file=sys.stderr)
+        return 0
+    except Exception as exc:  # noqa: BLE001 — surface as a non-zero exit
+        print(f"[FAIL] {video_path.name}: {exc}", file=sys.stderr)
+        return 1
+
+
+def _parse_corners_json(raw_json: str) -> list[tuple[int, int]] | None:
+    """Parse a ``--corners-json`` value into four (x, y) tuples, or None if bad."""
+    try:
+        parsed = json.loads(raw_json)
+        corners = [(int(p[0]), int(p[1])) for p in parsed]
+    except (ValueError, TypeError, IndexError, KeyError):
+        return None
+    return corners if len(corners) == 4 else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="extract_motion_features",
@@ -86,9 +137,36 @@ def main(argv: list[str] | None = None) -> int:
                         help="Torch device (default: ultralytics auto-select).")
     parser.add_argument("--overwrite", action="store_true",
                         help="Recompute even if a cache file already exists.")
+    parser.add_argument("--video", type=Path, default=None,
+                        help="Single raw video file to process (use together with "
+                             "--corners-json). Bypasses the .training.json scan; "
+                             "used by the GUI's transparent one-click extraction.")
+    parser.add_argument("--corners-json", type=str, default=None,
+                        help="JSON array of four [x, y] court corners in source-"
+                             "video pixel space, applied to --video. "
+                             "e.g. '[[121,784],[1813,807],[1137,474],[790,472]]'.")
     args = parser.parse_args(argv)
 
     out_dir = (args.out_dir or _default_out_dir()).expanduser().resolve()
+
+    # Single-video explicit-corners mode (used by the GUI's transparent
+    # one-click extraction). --video and --corners-json must be given together.
+    if args.video is not None or args.corners_json is not None:
+        if args.video is None or args.corners_json is None:
+            print("[extract_motion_features] ERROR: --video and --corners-json "
+                  "must be supplied together.", file=sys.stderr)
+            return 2
+        corners = _parse_corners_json(args.corners_json)
+        if corners is None:
+            print("[extract_motion_features] ERROR: --corners-json must be a JSON "
+                  "array of four [x, y] points.", file=sys.stderr)
+            return 2
+        video_path = args.video.expanduser().resolve()
+        if not video_path.exists():
+            print(f"[extract_motion_features] ERROR: video not found: {video_path}",
+                  file=sys.stderr)
+            return 2
+        return _extract_one(video_path, corners, out_dir, args)
 
     # Collect candidate JSON paths.
     candidates: list[Path] = [p.expanduser().resolve() for p in (args.paths or [])]
