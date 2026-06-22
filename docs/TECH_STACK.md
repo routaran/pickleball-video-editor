@@ -22,6 +22,7 @@
 | ML Framework | PyTorch (CNN + ResNet-18) | >=2.0.0 |
 | Audio Loading | torchaudio, soundfile | >=2.0.0 / >=0.12.0 |
 | Numerics | NumPy, scikit-learn | >=1.24.0 / >=1.3.0 |
+| Person detection (motion fusion, optional) | Ultralytics YOLOv8n + ByteTrack — offline, isolated `.venv-motion` | >=8.0.0 |
 | Platform | Manjaro Linux (Arch-based) | - |
 | Qt Platform Plugin | XCB (X11) | Forced |
 
@@ -80,6 +81,34 @@ decord>=0.6.0
 opencv-python-headless>=4.8.0
 soundfile>=0.12.0
 ```
+
+Offline motion detector (motion-fusion rally segmentation — installed in a
+**separate** `.venv-motion`, source `ml/requirements-motion.txt`):
+
+```
+ultralytics>=8.0.0      # AGPL-3.0 — local, non-distributed personal use only
+                        # plus torch + torchvision (CUDA-matched, installed separately)
+```
+
+**Why a separate environment.** `ultralytics` hard-depends on the full
+`opencv-python` (Qt/GL build), whose bundled Qt/GL/ffmpeg libraries interpose on
+the system libraries the GUI's mpv video output needs — exactly the
+in-process-video-libs segfault the GUI avoids by pinning `opencv-python-headless`.
+Isolating the detector in `.venv-motion` lets it use whatever OpenCV ultralytics
+wants while the GUI stays headless.
+
+**Out-of-process by design.** The detector runs only as a subprocess
+(`ml/tools/extract_motion_features.py`, launched via `ml/motion/extract_runner.py`),
+never imported into the GUI process. It writes per-video features to
+`ml/cache/motion/*.npz`; the cheap fusion + evaluation path (`predict_fused`,
+`evaluate_fused`) reads those `.npz` files and needs only `ml/requirements.txt`
+(NumPy + the audio model + cached features) — it never imports ultralytics or cv2.
+
+**Installed binary.** The frozen app can't locate the source-tree venv, so set
+`PICKLEBALL_MOTION_VENV` to the `.venv-motion` directory (or its `bin/python`) to
+enable fusion from `~/.local/bin/pickleball-editor`; without it (or with no GPU),
+Auto Process falls back to audio-only with a one-time notice. `make run` finds the
+venv automatically.
 
 ---
 
@@ -726,6 +755,7 @@ pyinstaller --onefile \
 
 ---
 
-*Document Version: 1.1*
+*Document Version: 1.2*
 *Created: 2026-01-14*
 *Updated: 2026-01-14 - Added platform-specific requirements (X11/XCB forcing, locale handling, keyboard input), deferred MPV creation, ASS subtitle format*
+*Updated: 2026-06-21 - Added offline motion-fusion detector stack (Ultralytics YOLOv8n + ByteTrack in isolated .venv-motion; out-of-process; PICKLEBALL_MOTION_VENV for the installed binary)*
