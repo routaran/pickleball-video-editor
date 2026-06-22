@@ -32,12 +32,23 @@ from ml.motion.visual_features import VISUAL_FEATURE_KEYS, robust_visual_feature
 
 __all__ = [
     "COMBINER_FEATURE_NAMES",
+    "DEFAULT_EDGE_THRESHOLD",
     "combiner_feature_matrix",
+    "hysteresis_intervals",
     "JointCombiner",
     "default_combiner_path",
     "predict_joint_intervals",
     "predict_joint",
 ]
+
+# Dual-threshold (hysteresis) boundary extension: detect each rally *core* at the
+# normal decision threshold, then extend its edges outward while the probability
+# stays above this lower threshold.  This corrects the slight inward erosion that
+# median smoothing imposes on boundaries (the model otherwise predicts rallies
+# ~0.5 s too narrow), and on the corpus lifts interval F1 0.738->0.753 / precision
+# 0.666->0.683 / over-seg 67->52.  Boundary MAE itself is label-limited (~1.2 s)
+# and does not improve.  Set equal to the decision threshold to disable.
+DEFAULT_EDGE_THRESHOLD = 0.40
 
 # Feature order is part of the persisted contract: p_audio, the visual features,
 # then the validity flag.  Visual columns are zero-imputed where invalid so the
@@ -68,6 +79,60 @@ def combiner_feature_matrix(
         cols.append(col)
     cols.append(valid.astype(np.float64))
     return np.column_stack(cols)
+
+
+def hysteresis_intervals(
+    prob: np.ndarray,
+    center_times: np.ndarray,
+    inference_config: InferenceConfig,
+    edge_threshold: float = DEFAULT_EDGE_THRESHOLD,
+) -> list[tuple[float, float]]:
+    """Form rally intervals with dual-threshold (hysteresis) boundary extension.
+
+    Detect each rally *core* where the median-smoothed probability clears
+    ``inference_config.threshold``, then extend its edges outward while the
+    probability stays above ``edge_threshold`` (capped at the decision threshold,
+    so ``edge_threshold >= threshold`` recovers plain thresholding).  Finally
+    apply the usual ``merge_gap`` and ``min_rally`` rules.
+    """
+    from ml.predict import smooth_predictions  # noqa: PLC0415 — pulls torch via ml.predict
+
+    ps = smooth_predictions(np.asarray(prob, dtype=np.float64), inference_config.smooth_kernel)
+    t = np.asarray(center_times, dtype=np.float64)
+    if ps.size == 0:
+        return []
+    high = float(inference_config.threshold)
+    low = min(float(edge_threshold), high)
+    core = ps >= high
+    ext = ps >= low
+
+    segs: list[list[float]] = []
+    j, n = 0, ps.size
+    while j < n:
+        if ext[j]:
+            k = j
+            while k < n and ext[k]:
+                k += 1
+            if core[j:k].any():  # keep an extended region only if it has a core
+                segs.append([float(t[j]), float(t[k - 1])])
+            j = k
+        else:
+            j += 1
+    if not segs:
+        return []
+
+    merged = [segs[0]]
+    for s, e in segs[1:]:
+        if s - merged[-1][1] <= inference_config.merge_gap_seconds:
+            merged[-1][1] = e
+        else:
+            merged.append([s, e])
+
+    return [
+        (round(s, 3), round(e, 3))
+        for s, e in merged
+        if e - s >= inference_config.min_rally_seconds
+    ]
 
 
 class JointCombiner:
@@ -163,6 +228,7 @@ def predict_joint_intervals(
     inference_config: InferenceConfig | None = None,
     combiner: JointCombiner | None = None,
     combiner_path: str | Path | None = None,
+    edge_threshold: float = DEFAULT_EDGE_THRESHOLD,
     dilation: float = DEFAULT_DILATION,
     half_window_s: float = 1.0,
     detector=None,
@@ -175,7 +241,7 @@ def predict_joint_intervals(
     motion features are available or the combiner cannot be loaded.
     """
     from ml.motion.predict_fused import audio_window_probs  # noqa: PLC0415 — pulls torch
-    from ml.predict import predictions_to_rallies, smooth_predictions  # noqa: PLC0415
+    from ml.predict import predictions_to_rallies  # noqa: PLC0415
 
     video_path = Path(video_path)
     inference_config = inference_config or InferenceConfig()
@@ -205,9 +271,7 @@ def predict_joint_intervals(
         raw, center_times, dilation=dilation, half_window_s=half_window_s
     )
     p_joint = combiner.predict_proba(combiner_feature_matrix(probs, visual, valid))
-    p_joint = smooth_predictions(p_joint, inference_config.smooth_kernel)
-    rallies = predictions_to_rallies(p_joint, center_times, inference_config)
-    return [(r["start_seconds"], r["end_seconds"]) for r in rallies]
+    return hysteresis_intervals(p_joint, center_times, inference_config, edge_threshold)
 
 
 def predict_joint(video_path: str | Path, **kwargs) -> list[dict[str, float]]:

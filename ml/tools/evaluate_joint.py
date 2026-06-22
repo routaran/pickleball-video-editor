@@ -27,7 +27,12 @@ import numpy as np
 from ml.config import InferenceConfig, PathConfig
 from ml.evaluation.event_metrics import aggregate_video_metrics, interval_detection_metrics
 from ml.motion.joint_dataset import build_window_table, group_id_for
-from ml.motion.joint_fusion import JointCombiner, combiner_feature_matrix
+from ml.motion.joint_fusion import (
+    DEFAULT_EDGE_THRESHOLD,
+    JointCombiner,
+    combiner_feature_matrix,
+    hysteresis_intervals,
+)
 from ml.motion.visual_features import VISUAL_FEATURE_KEYS
 
 __all__ = ["main"]
@@ -128,7 +133,11 @@ def main(argv: list[str] | None = None) -> int:
     for i, t in enumerate(tables):
         gt = _gt_intervals(t["json"])
         am = interval_detection_metrics(_to_intervals(t["p_audio"], t["t"], inf, threshold), gt, 0.5)
-        cm = interval_detection_metrics(_to_intervals(comb_prob[i], t["t"], inf, threshold), gt, 0.5)
+        cm_intervals = hysteresis_intervals(
+            comb_prob[i], t["t"], dataclasses.replace(inf, threshold=threshold),
+            DEFAULT_EDGE_THRESHOLD,
+        )
+        cm = interval_detection_metrics(cm_intervals, gt, 0.5)
         a_per.append(am); c_per.append(cm)
         by_group.setdefault(str(t["group"]), ([], []))
         by_group[str(t["group"])][0].append(am)

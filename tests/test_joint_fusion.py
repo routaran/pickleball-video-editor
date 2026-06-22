@@ -10,6 +10,7 @@ from ml.motion.joint_fusion import (
     COMBINER_FEATURE_NAMES,
     JointCombiner,
     combiner_feature_matrix,
+    hysteresis_intervals,
     predict_joint_intervals,
 )
 from ml.motion.visual_features import VISUAL_FEATURE_KEYS
@@ -63,6 +64,32 @@ def test_combiner_fit_and_save_load_roundtrip(tmp_path):
     comb2 = JointCombiner.load(path)
     assert np.allclose(comb.predict_proba(X), comb2.predict_proba(X))
     assert comb2.feature_names == COMBINER_FEATURE_NAMES
+
+
+def test_hysteresis_extends_edges_below_core():
+    """A 0.45 shoulder around a 0.9 core is captured at edge_threshold 0.4 but not 0.5."""
+    t = np.arange(0.0, 22.0, 0.25)
+    prob = np.zeros(t.size)
+    prob[(t >= 3) & (t < 6)] = 0.45     # shoulders (below the 0.5 core threshold)
+    prob[(t >= 6) & (t < 12)] = 0.9     # core
+    prob[(t >= 12) & (t < 15)] = 0.45
+    inf = InferenceConfig()
+
+    plain = hysteresis_intervals(prob, t, inf, edge_threshold=0.5)   # == thresholding
+    ext = hysteresis_intervals(prob, t, inf, edge_threshold=0.4)
+    assert len(plain) == 1 and len(ext) == 1
+    # Extension widens the interval outward on both sides.
+    assert ext[0][0] < plain[0][0]
+    assert ext[0][1] > plain[0][1]
+
+
+def test_hysteresis_drops_coreless_region():
+    """A region that never reaches the core threshold yields no interval."""
+    t = np.arange(0.0, 20.0, 0.25)
+    prob = np.zeros(t.size)
+    prob[(t >= 5) & (t < 12)] = 0.45    # only ever in the extension band, no core
+    inf = InferenceConfig()
+    assert hysteresis_intervals(prob, t, inf, edge_threshold=0.4) == []
 
 
 def test_predict_joint_falls_back_to_audio_only(monkeypatch, tmp_path):
