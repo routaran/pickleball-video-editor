@@ -12,6 +12,7 @@ This package contains reusable dialog windows for:
 - Player names: PlayerNamesDialog
 - New game: NewGameConfirmDialog
 - Auto-edit pipeline progress: AutoEditProgressDialog
+- Human-in-the-loop retraining: RetrainProgressDialog, RetrainResultDialog
 """
 
 from src.ui.dialogs.game_over import GameOverDialog, GameOverResult
@@ -41,6 +42,12 @@ from src.ui.dialogs.new_game_confirm import (
 from src.ui.dialogs.auto_edit_progress import (
     AutoEditProgressDialog,
     AutoEditWorker,
+)
+from src.ui.dialogs.retrain_dialog import (
+    RetrainProgressDialog,
+    RetrainResultDialog,
+    decide_default_apply,
+    format_result_text,
 )
 
 __all__ = [
@@ -85,4 +92,9 @@ __all__ = [
     # Auto-Edit Progress Dialog
     "AutoEditProgressDialog",
     "AutoEditWorker",
+    # Retrain Rally Detector Dialog
+    "RetrainProgressDialog",
+    "RetrainResultDialog",
+    "decide_default_apply",
+    "format_result_text",
 ]

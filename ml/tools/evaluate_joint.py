@@ -32,6 +32,7 @@ from ml.motion.joint_fusion import (
     JointCombiner,
     combiner_feature_matrix,
     hysteresis_intervals,
+    loso_interval_f1,
 )
 from ml.motion.visual_features import VISUAL_FEATURE_KEYS
 
@@ -149,7 +150,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {g}: audio F1 {a['f1']:.3f} -> combiner F1 {c['f1']:.3f}  "
               f"(P {a['precision']:.3f}->{c['precision']:.3f}, R {a['recall']:.3f}->{c['recall']:.3f})")
 
-    A = aggregate_video_metrics(a_per); C = aggregate_video_metrics(c_per)
+    A = aggregate_video_metrics(a_per)
+    # Pooled combiner result via the shared LOSO helper (verifies same numbers as c_per loop).
+    C = loso_interval_f1(tables, threshold=threshold)
     print(f"\n=== POOLED (visual-eligible stratum, {len(tables)} videos) ===")
     print(_fmt("audio-only", A))
     print(_fmt("audio+visual combiner", C))

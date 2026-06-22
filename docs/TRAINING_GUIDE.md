@@ -283,6 +283,104 @@ Three CLIs support the data → train → evaluate workflow (all `python -m ml.t
 
 ---
 
+## Human-in-the-loop combiner retraining
+
+The rally detector uses a two-stage pipeline:
+
+1. **Frozen audio CNN** (`ml/checkpoints/best_model.pt`) — proposes a per-window
+   rally probability from mel spectrograms.  This is never retrained here.
+2. **Logistic combiner** (`ml/checkpoints/joint_combiner.json`) — a small
+   standardiser + class-balanced logistic regression over `[p_audio + 14 visual
+   features]` that lifts held-out interval F1 from ~0.60 to ~0.75.  This is what
+   the CLI below refits.
+
+### Retraining workflow
+
+```
+Auto Process video                    (ml auto-edit, or GUI Auto-Process button)
+  ↓
+Review & fix rally cuts in the GUI    (add/remove/adjust segments)
+  ↓
+Generate → {video}.training.json      (GUI "Generate" action; marked generated_by absent / "manual")
+  ↓
+python -m ml.tools.retrain_rally_combiner --dir ~/Videos/pickleball
+  ↓
+Review before→after held-out F1 in the printed JSON line
+  ↓
+python -m ml.tools.retrain_rally_combiner --apply   ← only if F1 improved
+```
+
+### CLI reference
+
+```sh
+# Generate mode — computes LOSO A/B validation, writes candidate (does NOT touch live combiner)
+python -m ml.tools.retrain_rally_combiner [--dir DIR ...] [--combiner PATH]
+
+# Apply mode — swap candidate into the live combiner after reviewing the JSON
+python -m ml.tools.retrain_rally_combiner --apply [--combiner PATH]
+
+# Multiple search directories
+python -m ml.tools.retrain_rally_combiner --dir ~/Videos/pickleball --dir /mnt/nas/more
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dir DIR` | `~/Videos/pickleball` | Directory to search for `*.training.json` (repeatable) |
+| `--combiner PATH` | `ml/checkpoints/joint_combiner.json` | Path to the live combiner |
+| `--apply` | off | Swap the candidate into place |
+
+### Output (generate mode)
+
+Progress is written to **stderr**; exactly **one JSON line** is written to **stdout**:
+
+```json
+{
+  "status": "ok",
+  "eligible": 42,
+  "skipped": [{"path": "...", "reason": "missing motion .npz"}, ...],
+  "before_loso_f1": 0.742,
+  "after_loso_f1": 0.761,
+  "delta": 0.019,
+  "candidate": "/abs/path/joint_combiner.candidate.json",
+  "manifest": "/abs/path/joint_combiner.candidate.manifest.json"
+}
+```
+
+`before_loso_f1` and `delta` are `null` when there is no prior manifest or when
+no training files are newer than the last manifest (single-number mode).
+
+The candidate manifest (`joint_combiner.candidate.manifest.json`) records
+`created_at`, `source_audio_model`, `training_file_count`, the `skipped` list,
+and the LOSO validation numbers so the decision is auditable.
+
+### Skipped videos
+
+A video is **combiner-eligible** only if:
+- The `*.training.json` is not `generated_by: "auto_edit"` (files from an
+  unreviewed auto-edit pass are excluded silently).
+- The video file exists on disk.
+- `video.court_corners` has exactly 4 corners.
+- A cached motion `.npz` exists under `ml/cache/motion/`.
+
+Ineligible files (except `auto_edit`) appear in the `skipped` list with one of
+these reasons: `"video missing"`, `"missing/!=4 corners"`, `"missing motion .npz"`.
+They are never silently dropped.
+
+To add missing motion caches run:
+
+```sh
+python -m ml.tools.extract_motion_features --dir ~/Videos/pickleball
+```
+
+### What gets retrained
+
+Only the logistic combiner is updated.  The audio CNN (`best_model.pt`) is
+**not** touched.  The combiner learns to weight `p_audio` against 14 on-court
+visual features; since it is tiny (~16 parameters) a full refit takes seconds
+even on CPU.
+
+---
+
 ## See also
 
 - `docs/auto-editor-plan/training-data.md` — schema migration, augmentation policy, class-balance rationale.
@@ -292,3 +390,4 @@ Three CLIs support the data → train → evaluate workflow (all `python -m ml.t
 - `ml/winner_model.py` — `WinnerClassifier` architecture and `load_winner_classifier`.
 - `ml/tools/calibrate_existing.py` — court-corner calibration tool.
 - `ml/tools/backfill_winner_labels.py` — `winning_team` backfill tool.
+- `ml/tools/retrain_rally_combiner.py` — combiner retraining CLI (human-in-the-loop).

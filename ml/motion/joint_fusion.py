@@ -35,6 +35,7 @@ __all__ = [
     "DEFAULT_EDGE_THRESHOLD",
     "combiner_feature_matrix",
     "hysteresis_intervals",
+    "loso_interval_f1",
     "JointCombiner",
     "default_combiner_path",
     "predict_joint_intervals",
@@ -133,6 +134,95 @@ def hysteresis_intervals(
         for s, e in merged
         if e - s >= inference_config.min_rally_seconds
     ]
+
+
+def loso_interval_f1(
+    tables: list[dict],
+    *,
+    threshold: float | None = None,
+) -> dict:
+    """Leave-one-session-out interval F1 for the audio+visual combiner.
+
+    For each unique ``group`` in *tables* the combiner is re-fit on the
+    remaining groups and evaluated on the held-out group, so no video is ever
+    scored on its own training data.  Ground-truth rally intervals are read
+    from ``t["json"]`` (path to the ``.training.json`` file for that video).
+
+    Each element of *tables* must be a dict as returned by
+    :func:`ml.motion.joint_dataset.build_window_table` augmented with a
+    ``"json"`` key containing the path to the source ``.training.json`` file.
+
+    Args:
+        tables: Per-video window-table dicts.  Each must carry keys: ``t``,
+            ``p_audio``, ``label``, ``valid``, every key in
+            :data:`ml.motion.visual_features.VISUAL_FEATURE_KEYS`, ``group``,
+            and ``json``.
+        threshold: Decision threshold forwarded to
+            :func:`hysteresis_intervals`.  Defaults to
+            ``InferenceConfig().threshold`` (0.5).
+
+    Returns:
+        Aggregated detection metrics dict — same shape as
+        :func:`ml.evaluation.event_metrics.aggregate_video_metrics` — with at
+        least ``"f1"``, ``"precision"``, ``"recall"``, and ``"n_videos"``
+        keys.  Returns zero metrics when *tables* is empty or when LOSO
+        cannot produce any held-out predictions (e.g. only one session).
+    """
+    import json as _json  # noqa: PLC0415
+
+    from ml.evaluation.event_metrics import (  # noqa: PLC0415
+        aggregate_video_metrics,
+        interval_detection_metrics,
+    )
+
+    if not tables:
+        return {"f1": 0.0, "precision": 0.0, "recall": 0.0, "n_videos": 0}
+
+    inf = InferenceConfig()
+    if threshold is not None:
+        import dataclasses as _dc  # noqa: PLC0415
+        inf = _dc.replace(inf, threshold=float(threshold))
+
+    groups = sorted({str(t["group"]) for t in tables})
+
+    def _feat(t: dict) -> np.ndarray:
+        vis = {k: t[k] for k in VISUAL_FEATURE_KEYS}
+        return combiner_feature_matrix(t["p_audio"], vis, t["valid"])
+
+    def _gt_intervals(jp: str) -> list[tuple[float, float]]:
+        d = _json.loads(Path(jp).read_text(encoding="utf-8"))
+        out: list[tuple[float, float]] = []
+        for r in d.get("rallies", []):
+            if r.get("is_post_game"):
+                continue
+            ts = r.get("raw") or r.get("padded")
+            if ts and ts["end_seconds"] > ts["start_seconds"]:
+                out.append((float(ts["start_seconds"]), float(ts["end_seconds"])))
+        return out
+
+    # LOSO: for each session, fit combiner on all other sessions, score held-out
+    comb_prob: dict[int, np.ndarray] = {}
+    for held in groups:
+        tr = [t for t in tables if str(t["group"]) != held]
+        if not tr:
+            continue  # single-group corpus: skip (no training data for this fold)
+        X = np.vstack([_feat(t) for t in tr])
+        y = np.concatenate([t["label"] for t in tr])
+        model = JointCombiner.fit(X, y)
+        for i, t in enumerate(tables):
+            if str(t["group"]) == held:
+                comb_prob[i] = model.predict_proba(_feat(t))
+
+    per_video: list[dict] = []
+    for i, t in enumerate(tables):
+        if i not in comb_prob:
+            continue
+        gt = _gt_intervals(str(t["json"]))
+        intervals = hysteresis_intervals(comb_prob[i], t["t"], inf, DEFAULT_EDGE_THRESHOLD)
+        m = interval_detection_metrics(intervals, gt, 0.5)
+        per_video.append(m)
+
+    return aggregate_video_metrics(per_video)
 
 
 class JointCombiner:

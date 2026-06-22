@@ -26,11 +26,12 @@ All actions trigger score state updates and rally manager tracking.
 """
 
 import base64
+import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QByteArray, QTimer, QUrl, pyqtSignal, pyqtSlot
 from src.ui.responsive import LayoutMode, ResponsiveManager
-from PyQt6.QtGui import QCloseEvent, QDesktopServices, QGuiApplication, QKeySequence, QResizeEvent, QShowEvent, QShortcut
+from PyQt6.QtGui import QAction, QCloseEvent, QDesktopServices, QGuiApplication, QKeySequence, QResizeEvent, QShowEvent, QShortcut
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -70,6 +71,8 @@ from src.ui.dialogs import (
     PlayerNamesDialog,
     UnsavedWarningDialog,
     UnsavedWarningResult,
+    RetrainProgressDialog,
+    RetrainResultDialog,
 )
 from src.ui.review_mode import ReviewModeWidget
 from src.ui.setup_dialog import GameConfig
@@ -492,6 +495,9 @@ class MainWindow(QMainWindow):
         # this chain covers rally controls → toolbar).
         self._setup_tab_order()
 
+        # Menu bar (Tools menu with ML retraining action)
+        self._setup_menu_bar()
+
         # Apply global stylesheet
         self._apply_styles()
 
@@ -730,6 +736,41 @@ class MainWindow(QMainWindow):
         panel.setMinimumHeight(56)
 
         return panel
+
+    def _setup_menu_bar(self) -> None:
+        """Create the Tools menu bar with the retrain action.
+
+        The "Retrain rally detector from corrections…" action runs the
+        ``ml.tools.retrain_rally_combiner`` engine out-of-process so all
+        heavy ML stays out of the Qt process (no torch / sklearn in-process).
+
+        Frozen-mode: when running as a PyInstaller bundle (``sys.frozen``),
+        the action is disabled because there is no standalone Python interpreter
+        to spawn the subprocess with.  The tooltip explains how to access the
+        feature.
+        """
+        menu_bar = self.menuBar()
+        tools_menu = menu_bar.addMenu("&Tools")
+
+        self._action_retrain = QAction(
+            "Retrain rally detector from corrections…", self
+        )
+        self._action_retrain.setObjectName("retrainAction")
+
+        if getattr(sys, "frozen", False):
+            # PyInstaller bundle: sys.executable is the app binary, not Python.
+            # Spawning "sys.executable -m ml.tools..." would not work.
+            self._action_retrain.setEnabled(False)
+            self._action_retrain.setToolTip(
+                "Available when running from source (make run)"
+            )
+        else:
+            self._action_retrain.setToolTip(
+                "Retrain the rally combiner using your corrected video sessions"
+            )
+            self._action_retrain.triggered.connect(self._on_retrain_requested)
+
+        tools_menu.addAction(self._action_retrain)
 
     def _apply_styles(self) -> None:
         """Apply QSS stylesheet to the window."""
@@ -1734,6 +1775,60 @@ class MainWindow(QMainWindow):
         )
 
         self.video_widget.show_osd(f"Time Expired! {winner_name} wins", duration=5.0)
+
+    @pyqtSlot()
+    @pyqtSlot()
+    def _on_retrain_requested(self) -> None:
+        """Handle "Retrain rally detector from corrections…" menu action.
+
+        Flow:
+        1. Confirm dialog (non-destructive, user may cancel).
+        2. ``RetrainProgressDialog`` — runs the engine generate phase in a
+           background subprocess; indeterminate progress bar.
+        3. ``RetrainResultDialog`` — shows F1 summary; user chooses Apply or Keep.
+           On Apply, a second ``RetrainProgressDialog`` runs ``--apply``.
+
+        The ML engine runs entirely out-of-process; this slot only launches
+        subprocesses, reads one JSON line, emits Qt signals, and shows dialogs.
+        No torch / sklearn / cv2 / ultralytics are ever imported here.
+        """
+        confirm = QMessageBox.question(
+            self,
+            "Retrain Rally Detector",
+            "This retrains the rally model from your corrected videos "
+            "in the background.\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        interpreter = sys.executable
+        # Repo root: src/ui/main_window.py → parents[2] = project root
+        repo_root = Path(__file__).resolve().parents[2]
+
+        # Generate phase — runs the engine without --apply
+        progress_dialog = RetrainProgressDialog(
+            interpreter=interpreter,
+            repo_root=repo_root,
+            apply=False,
+            parent=self,
+        )
+        progress_dialog.exec()
+        summary = progress_dialog.get_summary()
+
+        if summary is None:
+            # Cancelled or failed — user already saw the error message box.
+            return
+
+        # Result phase — show F1 summary and let the user decide
+        result_dialog = RetrainResultDialog(
+            summary=summary,
+            interpreter=interpreter,
+            repo_root=repo_root,
+            parent=self,
+        )
+        result_dialog.exec()
 
     @pyqtSlot()
     def _on_return_to_menu(self) -> None:
