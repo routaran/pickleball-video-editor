@@ -28,7 +28,7 @@ The test suite is located in the `tests/` directory and covers the core business
    - Cumulative output timeline (not source frames)
    - File writing with parent directory creation
 
-The suite has since grown to 50 test files covering UI widgets, dialogs, video,
+The suite has since grown to 63 test files covering UI widgets, dialogs, video,
 ML, and tooling (see `tests/` for the current inventory).
 
 ## Running Tests
