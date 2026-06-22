@@ -186,6 +186,17 @@ def _validate_winner_checkpoint(checkpoint_path: Path) -> None:
         )
 
 
+def _motion_feature_path(video_path: Path) -> Path:
+    """Path to the offline-extracted motion-feature cache for ``video_path``.
+
+    Stage 1 applies motion fusion only when this ``.npz`` exists.  It is
+    produced out-of-process by ``ml.tools.extract_motion_features`` in the
+    isolated ``.venv-motion`` (YOLO/ByteTrack); the GUI process only ever reads
+    it.  See ml/motion/DILATION_TRACKING_SPEC.md (Integration).
+    """
+    return PathConfig().cache_dir / "motion" / f"{video_path.stem}.npz"
+
+
 def auto_edit(
     video_path: Path,
     setup: AutoEditSetup,
@@ -285,11 +296,28 @@ def auto_edit(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
-    # Stage 1: Audio rally detection
+    # Stage 1: Audio rally detection (+ optional motion fusion)
     # ------------------------------------------------------------------
     logger.info("Stage 1: detecting rallies in %s", video_path.name)
 
-    raw_rallies: list[dict[str, float]] = predict_video(video_path)
+    # Motion fusion is used only when an offline-extracted feature cache exists
+    # for this video; otherwise we degrade gracefully to the tuned audio-only
+    # path.  The cache is produced out-of-process in .venv-motion (YOLO/
+    # ByteTrack) — the GUI must never run that detector in-process (mpv
+    # invariant).  See ml/motion/DILATION_TRACKING_SPEC.md (Integration).
+    feature_path = _motion_feature_path(video_path)
+    raw_rallies: list[dict[str, float]]
+    if corners and feature_path.exists():
+        # Local import: pulls in only headless cv2 + numpy (ultralytics stays
+        # offline), keeping the heavy detector out of the GUI process.
+        from ml.motion.predict_fused import predict_fused
+
+        raw_rallies = predict_fused(
+            video_path, corners=corners, feature_path=feature_path
+        )
+        logger.info("Stage 1: motion fusion applied (cache: %s)", feature_path.name)
+    else:
+        raw_rallies = predict_video(video_path)
     rally_intervals: list[tuple[float, float]] = [
         (r["start_seconds"], r["end_seconds"]) for r in raw_rallies
     ]

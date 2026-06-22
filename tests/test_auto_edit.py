@@ -1241,3 +1241,99 @@ class TestThresholdUnification:
         assert 2 in result.low_confidence_rally_indices, (
             "All scored rallies are flagged regardless of the explicit threshold=0.70"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test – Stage 1 motion fusion gating (graceful fallback)
+#
+# Fusion is applied only when an offline-extracted feature cache exists for the
+# video; otherwise Stage 1 degrades to the tuned audio-only ``predict_video``.
+# ``predict_fused`` is imported lazily inside ``auto_edit`` from
+# ``ml.motion.predict_fused``, so it is patched at its source module.
+# ``_motion_feature_path`` is patched so the branch is exercised deterministically
+# without touching the real ml/cache/motion directory.
+# ---------------------------------------------------------------------------
+
+
+class TestStage1MotionFusion:
+    """Stage 1 uses fusion iff a motion-feature cache exists, else audio-only."""
+
+    def test_fusion_used_when_cache_present(
+        self,
+        tmp_path: Path,
+        video_path: Path,
+        checkpoint_path: Path,
+        corners: list[tuple[int, int]],
+        doubles_setup: AutoEditSetup,
+    ) -> None:
+        fake_info = _make_video_info(video_path)
+        cache = tmp_path / "game.npz"
+        cache.touch()  # exists -> fusion branch
+        fused = MagicMock(return_value=_FAKE_INTERVALS_5)
+        audio = MagicMock(return_value=_FAKE_INTERVALS_5)
+
+        with (
+            patch("ml.auto_edit._motion_feature_path", return_value=cache),
+            patch("ml.motion.predict_fused.predict_fused", fused),
+            patch("ml.auto_edit.predict_video", audio),
+            patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
+            patch("ml.auto_edit.probe_video", return_value=fake_info),
+            patch("src.output.kdenlive_generator.probe_video", return_value=fake_info),
+            patch("ml.auto_edit.torch.load", return_value=_VALID_CHECKPOINT_DICT),
+            patch(
+                "ml.auto_edit.PathConfig.best_model_path",
+                new_callable=lambda: property(lambda self: checkpoint_path),
+            ),
+        ):
+            result = auto_edit(
+                video_path=video_path,
+                setup=doubles_setup,
+                corners=corners,
+                output_dir=tmp_path,
+                checkpoint_path=checkpoint_path,
+            )
+
+        fused.assert_called_once()
+        audio.assert_not_called()
+        # Fusion is passed the corners and the resolved cache path.
+        assert fused.call_args.kwargs["corners"] == corners
+        assert fused.call_args.kwargs["feature_path"] == cache
+        assert result.predicted_rally_count == 5
+
+    def test_falls_back_to_audio_when_no_cache(
+        self,
+        tmp_path: Path,
+        video_path: Path,
+        checkpoint_path: Path,
+        corners: list[tuple[int, int]],
+        doubles_setup: AutoEditSetup,
+    ) -> None:
+        fake_info = _make_video_info(video_path)
+        cache = tmp_path / "absent.npz"  # never created -> audio fallback
+        fused = MagicMock(return_value=_FAKE_INTERVALS_5)
+        audio = MagicMock(return_value=_FAKE_INTERVALS_5)
+
+        with (
+            patch("ml.auto_edit._motion_feature_path", return_value=cache),
+            patch("ml.motion.predict_fused.predict_fused", fused),
+            patch("ml.auto_edit.predict_video", audio),
+            patch("ml.auto_edit.predict_winners", return_value=_FAKE_WINNERS_5),
+            patch("ml.auto_edit.probe_video", return_value=fake_info),
+            patch("src.output.kdenlive_generator.probe_video", return_value=fake_info),
+            patch("ml.auto_edit.torch.load", return_value=_VALID_CHECKPOINT_DICT),
+            patch(
+                "ml.auto_edit.PathConfig.best_model_path",
+                new_callable=lambda: property(lambda self: checkpoint_path),
+            ),
+        ):
+            result = auto_edit(
+                video_path=video_path,
+                setup=doubles_setup,
+                corners=corners,
+                output_dir=tmp_path,
+                checkpoint_path=checkpoint_path,
+            )
+
+        audio.assert_called_once_with(video_path)
+        fused.assert_not_called()
+        assert result.predicted_rally_count == 5

@@ -175,13 +175,20 @@ Cost: detector change + one GPU re-extraction (do it together with Change 0).
    once. **Fusion beats audio-only on test (F1 60.0→62.5).** (Per-track displacement
    gate left OFF — its prior failure mode is resolved by tracking, but it was not
    needed to win; revisit only if precision needs more.)
-4. ⏳ **Wire `predict_fused` into `ml/auto_edit.py:292`** — the remaining step (below).
+4. ✅ **Wire `predict_fused` into `ml/auto_edit.py`** — DONE (graceful fallback, see below).
 
-## Integration (USER-GATED — not done autonomously)
+## Integration — DONE (graceful fallback)
 
-The Stage-1 seam is `raw_rallies = predict_video(video_path)` (`ml/auto_edit.py:292`).
-Fusion beat audio-only on test, so wiring it is worthwhile — but it is **not a transparent
-drop-in**, for one architectural reason:
+Stage 1 of `ml/auto_edit.py` now selects fusion vs audio-only per video:
+`_motion_feature_path(video_path)` resolves `ml/cache/motion/<stem>.npz`; when it exists
+(and corners are present) Stage 1 calls `predict_fused(video_path, corners=corners,
+feature_path=...)` (bare `FusionConfig()`/`InferenceConfig()` = the test-validated config),
+else it falls back to tuned-audio `predict_video`. The `predict_fused` import is
+**function-local** so importing `ml.auto_edit` adds no cv2 at module load; on the fused
+branch it pulls in only **headless cv2 + numpy** (ultralytics stays offline) — verified.
+Unit tests cover both branches (`tests/test_auto_edit.py::TestStage1MotionFusion`).
+
+Architectural note that shaped the wiring:
 
 - **Fusion needs an offline motion-feature cache.** `predict_fused` reads `<stem>.npz`
   produced by `extract_motion_features` in **`.venv-motion`** (YOLO/ByteTrack). The GUI
