@@ -259,6 +259,10 @@ class MainWindow(QMainWindow):
         self._ravi_touches: int = 0
         self._partner_touches: int = 0
 
+        # Ultrawide editing mode keeps secondary actions in a collapsible
+        # bottom drawer so the mpv viewport remains the dominant surface.
+        self._secondary_drawer_open = False
+
         # Active export dialog tracking (for non-blocking FFmpeg export)
         self._active_export_dialog: ExportProgressDialog | None = None
 
@@ -455,13 +459,12 @@ class MainWindow(QMainWindow):
         # own layout) and added here as a direct child of main_layout.
         main_layout.addWidget(self.clip_timeline)
 
-        # ── Two prebuilt panel-parent containers ────────────────────────────
-        # Only the PANEL WIDGETS (rally_controls_panel, toolbar_panel) are
-        # re-homed between these containers when the layout mode changes.
-        # _video_container is NEVER touched here.
+        # ── Bottom panel containers ────────────────────────────────────────
+        # Editing controls stay in the bottom deck so the mpv video viewport
+        # remains the dominant surface.  _video_container is NEVER touched here.
 
-        # Container #1 — stacked (normal / compact / ultra-compact modes).
-        # Both panels live here initially.
+        # Container #1 — bottom stacked controls.  Both panels live here by
+        # default; ultrawide mode collapses toolbar_panel behind More.
         self._stacked_panels = QWidget()
         self._stacked_panels.setObjectName("stacked_panels")
         _sp_layout = QVBoxLayout(self._stacked_panels)
@@ -470,8 +473,8 @@ class MainWindow(QMainWindow):
         _sp_layout.addWidget(self.rally_controls_panel)
         _sp_layout.addWidget(self.toolbar_panel)
 
-        # Container #2 — ultrawide right column (~520 logical px).
-        # Hidden until LayoutMode.ULTRAWIDE is active.
+        # Container #2 — legacy ultrawide right column.  Kept hidden so older
+        # sessions/layout transitions can be normalized without touching mpv.
         self._ultrawide_right = QWidget()
         self._ultrawide_right.setObjectName("ultrawide_right_panels")
         self._ultrawide_right.setFixedWidth(520)
@@ -480,7 +483,8 @@ class MainWindow(QMainWindow):
         _ur_layout.setSpacing(SPACE_MD)
         self._ultrawide_right.hide()
 
-        # Panels row — horizontal wrapper so the two containers sit side-by-side.
+        # Panels row — bottom wrapper. The right-rail container remains hidden
+        # in the current ultrawide design.
         self._panels_row = QWidget()
         self._panels_row.setObjectName("panels_row")
         _pr_layout = QHBoxLayout(self._panels_row)
@@ -518,8 +522,9 @@ class MainWindow(QMainWindow):
         QWidget.setTabOrder(self.btn_rally_start, self.btn_server_wins)
         QWidget.setTabOrder(self.btn_server_wins, self.btn_receiver_wins)
         QWidget.setTabOrder(self.btn_receiver_wins, self.btn_undo)
+        QWidget.setTabOrder(self.btn_undo, self.btn_more_controls)
         # Intervention toolbar
-        QWidget.setTabOrder(self.btn_undo, self.btn_edit_score)
+        QWidget.setTabOrder(self.btn_more_controls, self.btn_edit_score)
         QWidget.setTabOrder(self.btn_edit_score, self.btn_force_sideout)
         QWidget.setTabOrder(self.btn_force_sideout, self.btn_add_comment)
         QWidget.setTabOrder(self.btn_add_comment, self.btn_time_expired)
@@ -585,6 +590,13 @@ class MainWindow(QMainWindow):
         self.btn_receiver_wins = RallyButton("RECEIVER WINS", BUTTON_TYPE_RECEIVER_WINS)
         self.btn_mark_end = RallyButton("MARK END", BUTTON_TYPE_SERVER_WINS)
         self.btn_undo = RallyButton("UNDO", BUTTON_TYPE_UNDO)
+        self.btn_more_controls = QPushButton("More")
+        self.btn_more_controls.setObjectName("toolbar_button")
+        self.btn_more_controls.setFont(Fonts.button_other())
+        self.btn_more_controls.setCheckable(True)
+        self.btn_more_controls.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.btn_more_controls.setToolTip("Show secondary controls")
+        self.btn_more_controls.hide()
 
         # StrongFocus enables Tab navigation; Space/Enter on a focused button
         # fires the button normally.  Window-level QShortcuts (C/S/R/U/K/Space)
@@ -619,8 +631,9 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.btn_server_wins)
         button_layout.addWidget(self.btn_receiver_wins)
         button_layout.addWidget(self.btn_mark_end)
-        button_layout.addStretch()
         button_layout.addWidget(self.btn_undo)
+        button_layout.addWidget(self.btn_more_controls)
+        button_layout.addStretch()
 
         # Set initial button visibility based on mode
         if self._is_highlights_mode:
@@ -836,6 +849,7 @@ class MainWindow(QMainWindow):
         self.btn_receiver_wins.clicked.connect(self.on_receiver_wins)
         self.btn_mark_end.clicked.connect(self.on_mark_end)
         self.btn_undo.clicked.connect(self.on_undo)
+        self.btn_more_controls.toggled.connect(self._on_more_controls_toggled)
 
         # Playback controls
         self.playback_controls.skip_back_5s.connect(lambda: self.video_widget.seek(-5.0, absolute=False))
@@ -3072,9 +3086,9 @@ class MainWindow(QMainWindow):
         panel containers so theme.qss ``[density="compact"]`` rules take effect
         without any per-widget font loops.
 
-        Panel re-homing (stacked ↔ ultrawide) is silently skipped while
-        ``_in_review_mode`` is True and deferred to the
-        ``exit_review_mode → _on_layout_mode_changed`` call instead.
+        Layout changes are skipped while ``_in_review_mode`` is True and
+        deferred to the ``exit_review_mode → _on_layout_mode_changed`` call
+        instead so the embedded mpv native window is not disturbed.
 
         Args:
             mode: New layout mode from ResponsiveManager.
@@ -3088,6 +3102,8 @@ class MainWindow(QMainWindow):
             self.style().unpolish(container)
             self.style().polish(container)
 
+        self._apply_secondary_drawer_state(mode)
+
         # Drive status overlay via the existing public API.
         self.status_overlay.set_compact_mode(is_compact)
 
@@ -3100,22 +3116,57 @@ class MainWindow(QMainWindow):
         else:
             self._arrange_stacked(mode)
 
-    def _arrange_ultrawide(self) -> None:
-        """Move rally and toolbar panels into the ultrawide right column.
+    @pyqtSlot(bool)
+    def _on_more_controls_toggled(self, checked: bool) -> None:
+        """Show or hide the ultrawide secondary-controls drawer."""
+        self._secondary_drawer_open = checked
+        mode = self._responsive_manager.current_mode or LayoutMode.NORMAL
+        self._apply_secondary_drawer_state(mode)
 
-        Safe to call repeatedly; parent-identity checks make it idempotent.
-        ``_video_container`` is never touched here.
+    def _apply_secondary_drawer_state(self, mode: LayoutMode) -> None:
+        """Collapse secondary controls in ultrawide editing mode.
+
+        The primary rally actions remain visible along the bottom. Secondary
+        intervention/session controls are hidden behind ``More`` on ultrawide
+        displays to preserve vertical space for the mpv viewport.
+        """
+        is_ultrawide = mode is LayoutMode.ULTRAWIDE
+        self.btn_more_controls.setVisible(is_ultrawide)
+
+        if is_ultrawide:
+            self.toolbar_panel.setVisible(self._secondary_drawer_open)
+            self.btn_more_controls.setChecked(self._secondary_drawer_open)
+            if self._secondary_drawer_open:
+                self.btn_more_controls.setText("Hide")
+                self.btn_more_controls.setToolTip("Hide secondary controls")
+            else:
+                self.btn_more_controls.setText("More")
+                self.btn_more_controls.setToolTip("Show secondary controls")
+        else:
+            self.toolbar_panel.show()
+            self.btn_more_controls.setChecked(False)
+            self.btn_more_controls.setText("More")
+            self.btn_more_controls.setToolTip("Show secondary controls")
+
+    def _arrange_ultrawide(self) -> None:
+        """Keep editing controls in a bottom deck for ultrawide displays.
+
+        The previous right-rail layout squeezed secondary buttons into a narrow
+        column. Ultrawide mode now keeps the existing bottom panel container and
+        collapses secondary controls behind ``More`` instead. ``_video_container``
+        is never touched here.
         """
         sp_layout = self._stacked_panels.layout()
         ur_layout = self._ultrawide_right.layout()
 
         for panel in (self.rally_controls_panel, self.toolbar_panel):
-            if panel.parent() is self._stacked_panels:
-                sp_layout.removeWidget(panel)
-                ur_layout.addWidget(panel)  # addWidget reparents to _ultrawide_right
+            if panel.parent() is self._ultrawide_right:
+                ur_layout.removeWidget(panel)
+                sp_layout.addWidget(panel)
 
-        self._stacked_panels.hide()
-        self._ultrawide_right.show()
+        self._ultrawide_right.hide()
+        self._stacked_panels.show()
+        self._stacked_panels.setMaximumWidth(16_777_215)  # QWIDGETSIZE_MAX
 
     def _arrange_stacked(self, mode: LayoutMode) -> None:
         """Move rally and toolbar panels into the stacked (normal) container.

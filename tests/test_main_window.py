@@ -32,8 +32,14 @@ import pytest
 # ---------------------------------------------------------------------------
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QSize
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QApplication, QDialog, QWidget
+from PyQt6.QtWidgets import (
+    QApplication,
+    QBoxLayout,
+    QDialog,
+    QWidget,
+)
 
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path so absolute imports resolve.
@@ -57,6 +63,7 @@ if "ml.auto_edit" not in sys.modules:
     _auto_edit_stub.AutoEditSetup = MagicMock  # type: ignore[attr-defined]
     sys.modules["ml.auto_edit"] = _auto_edit_stub  # type: ignore[assignment]
 
+from src.ui.responsive import LayoutMode
 from src.ui.setup_dialog import GameConfig
 from src.ui.main_window import MainWindow
 
@@ -180,7 +187,78 @@ class TestMarkCornerButtonWiring:
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — pixmap is None branch (warning toast, no dialog)
+# Test 2 — ultrawide bottom drawer layout
+# ---------------------------------------------------------------------------
+
+
+class TestUltrawideBottomDrawerLayout:
+    """Ultrawide editing mode keeps video dominant with a bottom drawer."""
+
+    def test_ultrawide_collapses_secondary_controls_by_default(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """A 3440×1440 window keeps panels at the bottom and hides the drawer."""
+        config = _make_config(tmp_path)
+        window = _make_window(qapp, config)
+
+        mode = window._responsive_manager.evaluate(QSize(3440, 1440))
+        qapp.processEvents()
+
+        assert mode is LayoutMode.ULTRAWIDE
+        assert window.rally_controls_panel.parent() is window._stacked_panels
+        assert window.toolbar_panel.parent() is window._stacked_panels
+        assert window._ultrawide_right.isHidden()
+        assert not window.btn_more_controls.isHidden()
+        assert window.toolbar_panel.isHidden()
+        assert (
+            window.toolbar_panel.layout().direction()
+            == QBoxLayout.Direction.LeftToRight
+        )
+
+    def test_more_button_toggles_secondary_drawer(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """The More button reveals and hides secondary toolbar actions."""
+        config = _make_config(tmp_path)
+        window = _make_window(qapp, config)
+
+        window._responsive_manager.evaluate(QSize(3440, 1440))
+        qapp.processEvents()
+
+        window.btn_more_controls.click()
+        qapp.processEvents()
+
+        assert window._secondary_drawer_open
+        assert not window.toolbar_panel.isHidden()
+        assert window.btn_more_controls.text() == "Hide"
+
+        window.btn_more_controls.click()
+        qapp.processEvents()
+
+        assert not window._secondary_drawer_open
+        assert window.toolbar_panel.isHidden()
+        assert window.btn_more_controls.text() == "More"
+
+    def test_leaving_ultrawide_restores_secondary_controls(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """Non-ultrawide modes show the regular toolbar and hide More."""
+        config = _make_config(tmp_path)
+        window = _make_window(qapp, config)
+
+        window._responsive_manager.evaluate(QSize(3440, 1440))
+        window.btn_more_controls.click()
+        window._responsive_manager.evaluate(QSize(1600, 1100))
+        qapp.processEvents()
+
+        assert window.toolbar_panel.parent() is window._stacked_panels
+        assert not window.toolbar_panel.isHidden()
+        assert window.btn_more_controls.isHidden()
+        assert window.btn_more_controls.text() == "More"
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — pixmap is None branch (warning toast, no dialog)
 # ---------------------------------------------------------------------------
 
 
