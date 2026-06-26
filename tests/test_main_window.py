@@ -63,6 +63,7 @@ if "ml.auto_edit" not in sys.modules:
     _auto_edit_stub.AutoEditSetup = MagicMock  # type: ignore[attr-defined]
     sys.modules["ml.auto_edit"] = _auto_edit_stub  # type: ignore[assignment]
 
+from src.core.app_config import AppSettings, ShortcutConfig
 from src.ui.responsive import LayoutMode
 from src.ui.setup_dialog import GameConfig
 from src.ui.main_window import MainWindow
@@ -107,7 +108,11 @@ def _make_config(tmp_path: Path) -> GameConfig:
     )
 
 
-def _make_window(qapp: QApplication, config: GameConfig) -> MainWindow:
+def _make_window(
+    qapp: QApplication,
+    config: GameConfig,
+    app_settings: AppSettings | None = None,
+) -> MainWindow:
     """Construct a MainWindow without spawning a real MPV player.
 
     ``VideoWidget._create_player`` is patched to a no-op so that the window
@@ -123,7 +128,7 @@ def _make_window(qapp: QApplication, config: GameConfig) -> MainWindow:
         Fully constructed MainWindow with MPV creation suppressed.
     """
     with patch("src.video.player.VideoWidget._create_player"):
-        window = MainWindow(config)
+        window = MainWindow(config, app_settings=app_settings)
     qapp.processEvents()
     return window
 
@@ -187,7 +192,37 @@ class TestMarkCornerButtonWiring:
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — ultrawide bottom drawer layout
+# Test 2 — touch counter shortcut wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTouchCounterShortcutWiring:
+    """Manual touch-counter shortcuts must stay reachable."""
+
+    def test_r_alias_created_when_receiver_wins_does_not_use_r(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """R increments the Me/Ravi counter when R is otherwise free."""
+        config = _make_config(tmp_path)
+        settings = AppSettings(
+            shortcuts=ShortcutConfig(
+                rally_start="A",
+                server_wins="S",
+                receiver_wins="D",
+                undo="U",
+                ravi_touch="J",
+                partner_touch="E",
+            )
+        )
+
+        window = _make_window(qapp, config, app_settings=settings)
+
+        assert window._shortcut_ravi_touch_r_alias is not None
+        assert window._shortcut_undo_ravi_touch_r_alias is not None
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — ultrawide bottom drawer layout
 # ---------------------------------------------------------------------------
 
 

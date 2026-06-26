@@ -947,19 +947,38 @@ class MainWindow(QMainWindow):
 
         self._shortcut_ravi_touch = QShortcut(QKeySequence(self._key_from_char(shortcuts.ravi_touch)), self)
         self._shortcut_ravi_touch.activated.connect(self._on_shortcut_ravi_touch)
+        self._shortcut_ravi_touch.activatedAmbiguously.connect(self._on_shortcut_ravi_touch)
 
         self._shortcut_partner_touch = QShortcut(QKeySequence(self._key_from_char(shortcuts.partner_touch)), self)
         self._shortcut_partner_touch.activated.connect(self._on_shortcut_partner_touch)
+        self._shortcut_partner_touch.activatedAmbiguously.connect(self._on_shortcut_partner_touch)
 
         self._shortcut_undo_ravi_touch = QShortcut(
             QKeySequence(f"Shift+{shortcuts.ravi_touch.upper()}"), self
         )
         self._shortcut_undo_ravi_touch.activated.connect(self._on_shortcut_undo_ravi_touch)
+        self._shortcut_undo_ravi_touch.activatedAmbiguously.connect(self._on_shortcut_undo_ravi_touch)
 
         self._shortcut_undo_partner_touch = QShortcut(
             QKeySequence(f"Shift+{shortcuts.partner_touch.upper()}"), self
         )
         self._shortcut_undo_partner_touch.activated.connect(self._on_shortcut_undo_partner_touch)
+        self._shortcut_undo_partner_touch.activatedAmbiguously.connect(self._on_shortcut_undo_partner_touch)
+
+        self._shortcut_ravi_touch_r_alias: QShortcut | None = None
+        self._shortcut_undo_ravi_touch_r_alias: QShortcut | None = None
+        used_shortcuts = {
+            shortcuts.rally_start.upper(),
+            shortcuts.server_wins.upper(),
+            shortcuts.receiver_wins.upper(),
+            shortcuts.undo.upper(),
+            shortcuts.partner_touch.upper(),
+        }
+        if shortcuts.ravi_touch.upper() != "R" and "R" not in used_shortcuts:
+            self._shortcut_ravi_touch_r_alias = QShortcut(QKeySequence(Qt.Key.Key_R), self)
+            self._shortcut_ravi_touch_r_alias.activated.connect(self._on_shortcut_ravi_touch)
+            self._shortcut_undo_ravi_touch_r_alias = QShortcut(QKeySequence("Shift+R"), self)
+            self._shortcut_undo_ravi_touch_r_alias.activated.connect(self._on_shortcut_undo_ravi_touch)
 
     def _on_shortcut_pause(self) -> None:
         """Handle Space shortcut for pause/unpause."""

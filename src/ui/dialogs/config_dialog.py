@@ -269,6 +269,41 @@ class ConfigDialog(QDialog):
         undo_default.setObjectName("default_label")
         grid.addWidget(undo_default, 3, 2)
 
+        # Player touch counters
+        ravi_touch_label = QLabel("Me Touch:")
+        ravi_touch_label.setFont(Fonts.label())
+        grid.addWidget(ravi_touch_label, 4, 0)
+
+        self.ravi_touch_input = QLineEdit()
+        self.ravi_touch_input.setFont(Fonts.input_text())
+        self.ravi_touch_input.setMaxLength(1)
+        self.ravi_touch_input.setPlaceholderText("J")
+        self.ravi_touch_input.setObjectName("shortcut_input")
+        self.ravi_touch_input.setToolTip("Increment your manual touch counter")
+        grid.addWidget(self.ravi_touch_input, 4, 1)
+
+        ravi_touch_default = QLabel("Default: J")
+        ravi_touch_default.setFont(Fonts.secondary())
+        ravi_touch_default.setObjectName("default_label")
+        grid.addWidget(ravi_touch_default, 4, 2)
+
+        partner_touch_label = QLabel("Teammate Touch:")
+        partner_touch_label.setFont(Fonts.label())
+        grid.addWidget(partner_touch_label, 5, 0)
+
+        self.partner_touch_input = QLineEdit()
+        self.partner_touch_input.setFont(Fonts.input_text())
+        self.partner_touch_input.setMaxLength(1)
+        self.partner_touch_input.setPlaceholderText("E")
+        self.partner_touch_input.setObjectName("shortcut_input")
+        self.partner_touch_input.setToolTip("Increment teammate manual touch counter")
+        grid.addWidget(self.partner_touch_input, 5, 1)
+
+        partner_touch_default = QLabel("Default: E")
+        partner_touch_default.setFont(Fonts.secondary())
+        partner_touch_default.setObjectName("default_label")
+        grid.addWidget(partner_touch_default, 5, 2)
+
         layout.addLayout(grid)
 
         # Separator
@@ -758,6 +793,8 @@ class ConfigDialog(QDialog):
         self.server_wins_input.textChanged.connect(self._validate_shortcuts)
         self.receiver_wins_input.textChanged.connect(self._validate_shortcuts)
         self.undo_input.textChanged.connect(self._validate_shortcuts)
+        self.ravi_touch_input.textChanged.connect(self._validate_shortcuts)
+        self.partner_touch_input.textChanged.connect(self._validate_shortcuts)
 
         # Dialog buttons
         self.cancel_button.clicked.connect(self.reject)
@@ -770,6 +807,8 @@ class ConfigDialog(QDialog):
         self.server_wins_input.setText(self.current_settings.shortcuts.server_wins)
         self.receiver_wins_input.setText(self.current_settings.shortcuts.receiver_wins)
         self.undo_input.setText(self.current_settings.shortcuts.undo)
+        self.ravi_touch_input.setText(self.current_settings.shortcuts.ravi_touch)
+        self.partner_touch_input.setText(self.current_settings.shortcuts.partner_touch)
 
         # Skip Durations - Playback buttons
         self.small_backward_spin.setValue(self.current_settings.skip_durations.small_backward)
@@ -833,6 +872,8 @@ class ConfigDialog(QDialog):
             "Server Wins": self.server_wins_input.text().strip(),
             "Receiver Wins": self.receiver_wins_input.text().strip(),
             "Undo": self.undo_input.text().strip(),
+            "Me Touch": self.ravi_touch_input.text().strip(),
+            "Teammate Touch": self.partner_touch_input.text().strip(),
         }
 
         errors: list[str] = []
@@ -883,6 +924,8 @@ class ConfigDialog(QDialog):
         self.server_wins_input.setText(defaults.server_wins)
         self.receiver_wins_input.setText(defaults.receiver_wins)
         self.undo_input.setText(defaults.undo)
+        self.ravi_touch_input.setText(defaults.ravi_touch)
+        self.partner_touch_input.setText(defaults.partner_touch)
 
     def _on_unlimited_max_changed(self, state: int) -> None:
         """Handle unlimited maximum checkbox state change.
@@ -914,6 +957,8 @@ class ConfigDialog(QDialog):
             server_wins=self.server_wins_input.text().strip(),
             receiver_wins=self.receiver_wins_input.text().strip(),
             undo=self.undo_input.text().strip(),
+            ravi_touch=self.ravi_touch_input.text().strip(),
+            partner_touch=self.partner_touch_input.text().strip(),
         )
 
         # Collect skip duration settings

@@ -9,12 +9,28 @@ The dialog validates inputs in real-time and prevents invalid configurations
 from being applied.
 """
 
+import sys
+import types
+from unittest.mock import MagicMock
+
 import pytest
 from PyQt6.QtWidgets import QApplication, QLineEdit, QDoubleSpinBox, QSpinBox, QCheckBox
 from PyQt6.QtTest import QTest
 from PyQt6.QtCore import Qt
 
 from src.core.app_config import AppSettings, ShortcutConfig, SkipDurationConfig, WindowSizeConfig
+
+if "torch" not in sys.modules:
+    sys.modules["torch"] = types.ModuleType("torch")  # type: ignore[assignment]
+
+if "ml.predict" not in sys.modules:
+    sys.modules["ml.predict"] = types.ModuleType("ml.predict")  # type: ignore[assignment]
+
+if "ml.auto_edit" not in sys.modules:
+    _auto_edit_stub = types.ModuleType("ml.auto_edit")
+    _auto_edit_stub.AutoEditSetup = MagicMock  # type: ignore[attr-defined]
+    sys.modules["ml.auto_edit"] = _auto_edit_stub  # type: ignore[assignment]
+
 from src.ui.dialogs.config_dialog import ConfigDialog, ConfigDialogResult
 
 
@@ -42,6 +58,8 @@ def custom_settings():
             server_wins="Y",
             receiver_wins="Z",
             undo="Q",
+            ravi_touch="R",
+            partner_touch="T",
         ),
         skip_durations=SkipDurationConfig(
             small_backward=2.0,
@@ -73,12 +91,13 @@ class TestBasicDialog:
         assert dialog.isModal()
 
     def test_dialog_has_tabs(self, qapp, default_settings):
-        """Dialog has 3 tabs (Shortcuts, Skip Durations, Window Size)."""
+        """Dialog has expected settings tabs."""
         dialog = ConfigDialog(default_settings)
-        assert dialog.tab_widget.count() == 3
+        assert dialog.tab_widget.count() == 4
         assert dialog.tab_widget.tabText(0) == "Shortcuts"
         assert dialog.tab_widget.tabText(1) == "Skip Durations"
         assert dialog.tab_widget.tabText(2) == "Window Size"
+        assert dialog.tab_widget.tabText(3) == "Display"
 
     def test_dialog_displays_current_config(self, qapp, custom_settings):
         """Shows current settings values."""
@@ -89,6 +108,8 @@ class TestBasicDialog:
         assert dialog.server_wins_input.text() == "Y"
         assert dialog.receiver_wins_input.text() == "Z"
         assert dialog.undo_input.text() == "Q"
+        assert dialog.ravi_touch_input.text() == "R"
+        assert dialog.partner_touch_input.text() == "T"
 
         # Check skip durations (playback buttons)
         assert dialog.small_backward_spin.value() == 2.0
@@ -121,6 +142,8 @@ class TestShortcutsTab:
         assert dialog.server_wins_input.text() == "S"
         assert dialog.receiver_wins_input.text() == "R"
         assert dialog.undo_input.text() == "U"
+        assert dialog.ravi_touch_input.text() == "J"
+        assert dialog.partner_touch_input.text() == "E"
 
     def test_shortcuts_tab_shows_custom_values(self, qapp, custom_settings):
         """Custom shortcuts displayed."""
@@ -131,6 +154,8 @@ class TestShortcutsTab:
         assert dialog.server_wins_input.text() == "Y"
         assert dialog.receiver_wins_input.text() == "Z"
         assert dialog.undo_input.text() == "Q"
+        assert dialog.ravi_touch_input.text() == "R"
+        assert dialog.partner_touch_input.text() == "T"
 
     def test_duplicate_shortcut_validation(self, qapp, default_settings):
         """Error shown for duplicates."""
@@ -167,6 +192,24 @@ class TestShortcutsTab:
         assert not dialog.error_label.isHidden()
         assert not dialog.apply_button.isEnabled()
         assert "Duplicate" in dialog.error_label.text()
+
+    def test_touch_shortcuts_participate_in_duplicate_validation(
+        self, qapp, default_settings
+    ):
+        """Touch-counter shortcuts cannot duplicate rally shortcuts."""
+        dialog = ConfigDialog(default_settings)
+        dialog.tab_widget.setCurrentIndex(0)  # Shortcuts tab
+
+        dialog.receiver_wins_input.clear()
+        QTest.keyClicks(dialog.receiver_wins_input, "D")
+        dialog.ravi_touch_input.clear()
+        QTest.keyClicks(dialog.ravi_touch_input, "D")
+
+        assert len(dialog.validation_errors) > 0
+        assert not dialog.error_label.isHidden()
+        assert not dialog.apply_button.isEnabled()
+        assert "Duplicate" in dialog.error_label.text()
+        assert "Me Touch" in dialog.error_label.text()
 
     def test_invalid_shortcut_validation(self, qapp, default_settings):
         """Error shown for invalid chars."""
@@ -215,6 +258,12 @@ class TestShortcutsTab:
         dialog.undo_input.clear()
         QTest.keyClicks(dialog.undo_input, "D")
 
+        dialog.ravi_touch_input.clear()
+        QTest.keyClicks(dialog.ravi_touch_input, "F")
+
+        dialog.partner_touch_input.clear()
+        QTest.keyClicks(dialog.partner_touch_input, "G")
+
         # Validation should pass
         assert len(dialog.validation_errors) == 0
         assert dialog.error_label.isHidden()
@@ -242,6 +291,8 @@ class TestShortcutsTab:
         assert dialog.server_wins_input.text() == "S"
         assert dialog.receiver_wins_input.text() == "R"
         assert dialog.undo_input.text() == "U"
+        assert dialog.ravi_touch_input.text() == "J"
+        assert dialog.partner_touch_input.text() == "E"
 
 
 class TestSkipDurationsTab:
@@ -461,6 +512,10 @@ class TestDialogBehavior:
         QTest.keyClicks(dialog.receiver_wins_input, "C")
         dialog.undo_input.clear()
         QTest.keyClicks(dialog.undo_input, "D")
+        dialog.ravi_touch_input.clear()
+        QTest.keyClicks(dialog.ravi_touch_input, "F")
+        dialog.partner_touch_input.clear()
+        QTest.keyClicks(dialog.partner_touch_input, "G")
 
         # Modify skip durations
         dialog.small_backward_spin.setValue(2.5)
@@ -486,6 +541,8 @@ class TestDialogBehavior:
         assert result.settings.shortcuts.server_wins == "B"
         assert result.settings.shortcuts.receiver_wins == "C"
         assert result.settings.shortcuts.undo == "D"
+        assert result.settings.shortcuts.ravi_touch == "F"
+        assert result.settings.shortcuts.partner_touch == "G"
 
         # Verify skip durations
         assert result.settings.skip_durations.small_backward == 2.5
@@ -526,6 +583,10 @@ class TestDialogBehavior:
         QTest.keyClicks(dialog.receiver_wins_input, "C")
         dialog.undo_input.clear()
         QTest.keyClicks(dialog.undo_input, "D")
+        dialog.ravi_touch_input.clear()
+        QTest.keyClicks(dialog.ravi_touch_input, "F")
+        dialog.partner_touch_input.clear()
+        QTest.keyClicks(dialog.partner_touch_input, "G")
 
         # Apply button should be enabled
         assert dialog.apply_button.isEnabled()
