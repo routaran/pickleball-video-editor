@@ -97,6 +97,15 @@ class Rally:
         winner_overridden: True once the user has explicitly set/flipped the
             winner; cascades must never recompute winner from predicted_team
             for an overridden rally
+        server_team: Human-labelled serving team (0 or 1) for this rally, or None
+            if not yet labelled.  Independent ground truth for the service-state
+            vision work (does not feed the score cascade).
+        server_player_index: Which player within ``server_team`` served (0 or 1),
+            or None.  Resolves to ``player_names[server_team][server_player_index]``.
+        server_pixel: ``(x, y)`` location the user clicked for the server in the
+            pre-serve frame, in **original source-video pixel coordinates**, or
+            None.  Maps through the court homography to a court-plane position —
+            the direct supervision for the server-detection model.
 
     Note:
         winning_team (0 or 1) is NOT stored on the Rally; it is derived at
@@ -118,6 +127,9 @@ class Rally:
     predicted_team: int | None = None
     prediction_confidence: float | None = None
     winner_overridden: bool = False
+    server_team: int | None = None
+    server_player_index: int | None = None
+    server_pixel: tuple[int, int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for JSON export.
@@ -133,6 +145,11 @@ class Rally:
             "comment": self.comment,
             "is_post_game": self.is_post_game,
         }
+        if self.server_team is not None:
+            d["server_team"] = self.server_team
+            d["server_player_index"] = self.server_player_index
+        if self.server_pixel is not None:
+            d["server_pixel"] = [int(self.server_pixel[0]), int(self.server_pixel[1])]
         if self.raw_start_seconds is not None:
             d["raw_start_seconds"] = self.raw_start_seconds
             d["raw_end_seconds"] = self.raw_end_seconds
@@ -179,6 +196,13 @@ class Rally:
             predicted_team=data.get("predicted_team"),
             prediction_confidence=data.get("prediction_confidence"),
             winner_overridden=data.get("winner_overridden", False),
+            server_team=data.get("server_team"),
+            server_player_index=data.get("server_player_index"),
+            server_pixel=(
+                tuple(data["server_pixel"])
+                if isinstance(data.get("server_pixel"), (list, tuple))
+                else None
+            ),
         )
 
 

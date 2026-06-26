@@ -136,6 +136,24 @@ class TrainingDataGenerator:
             else:
                 label["raw"] = None
 
+            # Human-labelled server (optional; ground truth for service-state vision).
+            server_team = getattr(rally, "server_team", None)
+            if server_team is not None:
+                player_idx = getattr(rally, "server_player_index", None)
+                roster = team1_players if server_team == 0 else team2_players
+                player_name: str | None = None
+                if player_idx is not None and 0 <= player_idx < len(roster):
+                    player_name = roster[player_idx]
+                server_block: dict[str, Any] = {
+                    "team": server_team,
+                    "player_index": player_idx,
+                    "player_name": player_name,
+                }
+                pixel = getattr(rally, "server_pixel", None)
+                if pixel is not None:
+                    server_block["pixel"] = [int(pixel[0]), int(pixel[1])]
+                label["server"] = server_block
+
             rally_labels.append(label)
 
         return {
