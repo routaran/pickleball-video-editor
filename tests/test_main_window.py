@@ -354,6 +354,61 @@ def _run_accept_flow(
                 qapp.processEvents()
 
 
+class TestReviewStateAnchorPostGame:
+    """Regression coverage for converting PG cuts through Apply to Rally."""
+
+    def test_apply_to_pg_rally_clears_post_game_and_updates_score(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """A valid state anchor turns the selected PG cut back into a scored rally."""
+        config = _make_config(tmp_path)
+        window = _make_window(qapp, config)
+        assert window.score_state is not None
+
+        snapshot = window.score_state.save_snapshot()
+        window.rally_manager.start_rally(10.0, snapshot)
+        rally = window.rally_manager.end_rally(15.0, "", "", snapshot)
+        rally.is_post_game = True
+
+        with patch("src.ui.main_window.ToastManager.show_success") as mock_success:
+            with patch("src.ui.main_window.ToastManager.show_error") as mock_error:
+                window._on_review_state_anchor_set(0, 0, "3-2")
+                qapp.processEvents()
+
+        assert rally.is_post_game is False
+        assert rally.score_at_start == "3-2"
+        assert rally.score_snapshot_at_start is not None
+        assert rally.score_snapshot_at_start.score == (3, 2)
+        assert rally.score_snapshot_at_start.serving_team == 0
+        assert window._dirty is True
+        mock_success.assert_called_once()
+        mock_error.assert_not_called()
+
+    def test_invalid_state_anchor_does_not_clear_post_game_flag(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """Invalid Apply to Rally input must not convert a PG cut."""
+        config = _make_config(tmp_path)
+        window = _make_window(qapp, config)
+        assert window.score_state is not None
+
+        snapshot = window.score_state.save_snapshot()
+        window.rally_manager.start_rally(10.0, snapshot)
+        rally = window.rally_manager.end_rally(15.0, "", "", snapshot)
+        rally.is_post_game = True
+
+        with patch("src.ui.main_window.ToastManager.show_success") as mock_success:
+            with patch("src.ui.main_window.ToastManager.show_error") as mock_error:
+                window._on_review_state_anchor_set(0, 0, "not-a-score")
+                qapp.processEvents()
+
+        assert rally.is_post_game is True
+        assert rally.score_at_start == ""
+        assert window._dirty is False
+        mock_success.assert_not_called()
+        mock_error.assert_called_once()
+
+
 class TestMarkCornersAcceptPath:
     """When the user accepts the calibrator dialog, corners and dirty flag are set."""
 

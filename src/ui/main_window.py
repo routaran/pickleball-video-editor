@@ -2377,10 +2377,14 @@ class MainWindow(QMainWindow):
         if self.score_state is None:
             return
 
+        rally = self.rally_manager.get_rally(index)
+
         try:
             changed_indices = self.rally_manager.cascade_scores_from(
                 index, self.score_state, new_score=score, serving_team=serving_team
             )
+            if rally.is_post_game:
+                rally.is_post_game = False
 
             # Update review widget with new rally data
             if self._review_widget is not None:

@@ -242,6 +242,27 @@ class TestRallyManager:
         assert segments[0]["score"] == "0-0-2"
         assert segments[1]["score"] == ""
 
+    def test_to_segments_reflects_cleared_post_game_flag_with_score_and_frames(self):
+        """A converted PG rally exports as a normal scored segment."""
+        manager = RallyManager(fps=60.0)
+        snapshot = ScoreSnapshot(score=(0, 0), serving_team=0, server_number=2)
+
+        manager.start_rally(20.0, snapshot)
+        rally = manager.end_rally(25.0, "", "", snapshot)
+        rally.is_post_game = True
+
+        # Mirrors Apply to Rally after validation: add score text and clear PG flag.
+        rally.score_at_start = "3-2-1"
+        rally.is_post_game = False
+
+        segments = manager.to_segments()
+
+        assert len(segments) == 1
+        assert segments[0]["in"] == 1170
+        assert segments[0]["out"] == 1560
+        assert segments[0]["score"] == "3-2-1"
+        assert segments[0]["is_post_game"] is False
+
     def test_to_segments_multiple(self):
         """Test segment export with multiple rallies."""
         manager = RallyManager(fps=60.0)
