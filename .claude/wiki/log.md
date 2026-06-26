@@ -14,6 +14,17 @@ Append-only record of every wiki operation — `init`, `ingest`, `update`, `lint
 
 ---
 
+## [2026-06-26] ingest | staleness-driven
+
+- Pages checked: 11
+- Pages stale (genuine): 1 — `domains/ml.md`. Source `docs/TRAINING_GUIDE.md` changed @ `8db238e` (2026-06-22, "feat(ml): human-in-the-loop combiner retraining from corrections"), newer than the page's 2026-06-21 compile.
+- Recompiled (DAG: single domain page):
+  - `domains/ml.md` — folded in the human-in-the-loop rally-detector combiner retraining workflow: `ml.tools.retrain_rally_combiner`, candidate/manifest generation, LOSO before/after F1 review, explicit `--apply`, manual/non-`auto_edit` eligibility, required video/corners/motion cache, and skip-reason reporting. `last_compiled` 2026-06-21 → 2026-06-26; page remains under hard_max 200.
+- Skipped (up-to-date): 10 — `domains/{core,ui,video,output,tests}`, `architecture/{tech-stack,auto-edit-pipeline,session-lifecycle}`, `gotchas/{pickleball-scoring,auto-edit-pitfalls}`.
+- Same-day-boundary false positives ignored: source commits already absorbed by prior 2026-06-21/2026-06-14 ingests still appear under bare date-based `--since` checks for `output`, `tests`, and `tech-stack`; no source commits after those ingest dates were found for those pages.
+- Catalog updates: `index.md` and `source-map.md` dates bumped to 2026-06-26. Cross-references and line budgets verified.
+- Status: complete
+
 ## [2026-06-21] ingest | staleness-driven (tech-stack source edit)
 
 - Pages checked: 11
